@@ -22,7 +22,13 @@ sources are a planned addition (see ARCHITECTURE.md → Data layer).
 
 ## 2. Current status (2026-07)
 
-The code **works** but has grown organically. Key realities to know before touching anything:
+> **Refactor underway.** A greenfield [`quant/`](quant/) package now implements the target
+> architecture as an end-to-end vertical slice (data → vectorized signals → numba engine →
+> analytics → viz → optimize), validated at **exact numerical parity** vs the legacy engine and
+> ~1000× faster. The legacy code below is untouched and still runs. New work goes in `quant/`.
+> See §11 for the quickstart and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the roadmap.
+
+The legacy code **works** but has grown organically. Key realities to know before touching anything:
 
 - **Not a git repository.** Versioning is done by hand-copying files (`data-Copy1.py`,
   `simulator - Copy (2).py`, `Main_Simulation-Copy3.ipynb`, …). There are **24** such
@@ -193,7 +199,52 @@ res = run_simulation(df, strat, SimConfig(initial_cash=10_000, fee_bps=10))
 print(res.stats)
 ```
 
-## 10. Working agreements for AI sessions
+## 10. The new `quant/` package (Phase 1 — vertical slice)
+
+```
+quant/
+├── config.py            # Settings + .env loading (secrets from env only)
+├── logging_utils.py     # structured logger + tqdm helper
+├── data/                # source-agnostic OHLCV access
+│   ├── base.py          #   DataSource protocol + OHLCV contract
+│   ├── binance.py       #   Binance source (wraps proven data.py incremental fetch)
+│   ├── store.py         #   Parquet load w/ column projection + date pushdown (polars)
+│   └── loader.py        #   get_ohlcv(...) — fast path (cache) or incremental fetch
+├── indicators/overlays.py   # vectorized ema/sma (compute only, no plotting)
+├── signals/primitives.py    # vectorized boolean predicates (cross_up, consecutive_green, ...)
+├── engine/
+│   ├── kernel.py        #   @njit position/PnL core (SL/TP/sizing/fees/slippage/multi-pos)
+│   ├── config.py        #   BacktestConfig + Signals
+│   └── run.py           #   run_backtest(df, signals, cfg) -> SimResult
+├── strategies/          # plug-and-play: base.Strategy + ema_ribbon.EmaRibbon
+├── analytics/metrics.py # stats incl Sharpe/Sortino/Calmar/recovery/profit-factor
+├── viz/charts.py        # plotly price+trades, equity+drawdown
+└── optimize/grid.py     # bounded-parallel parameter sweeps (n_jobs = cpu-2)
+```
+
+**Quickstart** (from repo root; `PYTHONPATH=.` or `pip install -e .`):
+
+```python
+from quant.data import get_ohlcv
+from quant.strategies import EmaRibbon
+from quant.engine import BacktestConfig
+
+df  = get_ohlcv("PAXGUSDT", "1m", start="2025-06-01", end="2026-05-31", tz="UTC")
+cfg = BacktestConfig(initial_cash=10_000, fee_bps=8, slippage_bps=1.5, exit_enabled=True,
+                     sl_mode="entry_pct", sl_value=0.6, tp_mode="rr", tp_value=2.0,
+                     sizing_mode="risk_pct_equity", sizing_value=1.0)
+res = EmaRibbon(fast=50, slow=200, confirm_n=5).backtest(df, cfg)
+print(res.stats)
+```
+
+**Add a new strategy** = one dataclass in `quant/strategies/` with `prepare(df)` (add indicator
+columns) and `build_signals(df)` (return `Signals`). Sweep it with `quant.optimize.run_grid`.
+
+**Full demo & benchmark:** `python examples/gold_ema_demo.py`. **Tests:** `python -m pytest tests/`
+(includes numerical parity vs the legacy engine). What's parity-validated & what's still to port
+is listed in `quant/engine/kernel.py` and docs/ARCHITECTURE.md.
+
+## 11. Working agreements for AI sessions
 
 - **Do not commit or print secrets.** If you touch `config.py`, move secrets to env and flag it.
 - **Preserve the incremental-download cache** (`data.py` + `data/.partials/`) — it's proven.
