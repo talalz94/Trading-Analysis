@@ -1,8 +1,12 @@
 # Proposed Architecture & Refactor Roadmap
 
-> Status: **PROPOSAL — pending user decisions** (see §9). This document describes the *target*
-> design. The current system is documented in [`../CLAUDE.md`](../CLAUDE.md). Update this file as
-> decisions are made and phases land.
+> Status: **APPROVED — implementation underway.** Decisions in §9 are settled. This document
+> describes the *target* design; the legacy system is documented in [`../CLAUDE.md`](../CLAUDE.md).
+>
+> **Progress:**
+> - ✅ Phase 0 — foundations: git init, `.gitignore`/`.gitattributes`, secrets → `.env`, `pyproject.toml` + pinned `requirements.txt`.
+> - ✅ Phase 1 — end-to-end vertical slice: the `quant/` package (data → signals → numba engine → analytics → viz → optimize) with an `EmaRibbon` gold strategy, **validated at exact numerical parity** vs the legacy engine and ~1000× faster. See `examples/gold_ema_demo.py` and `tests/`.
+> - ⏭ Next — engine feature completion (partial/laddered TPs, trailing/stop-movement, `ref_col` structure stops, multi-timeframe alignment), then port remaining strategies and retire notebooks.
 
 ---
 
@@ -179,11 +183,27 @@ Notebooks become **thin**: load config → call `quant` functions → show chart
    identical stats on the same data before deprecating notebooks.
 4. Once parity holds, migrate remaining strategies and retire the `Copy`/duplicate files.
 
-## 7. Rough performance target
-- Single 1-year 1m backtest: from seconds → **low tens of milliseconds** (signals vectorized + JIT
-  sim after warmup).
-- 100k-combo sweep on one asset-year: hours → **minutes** on a multi-core laptop with bounded workers.
-- Memory: bounded by column-projected, date-sliced loads; sweeps reuse one cached feature frame.
+## 7. Performance — target vs measured
+
+Measured on the cached full year of PAXGUSDT 1m (**524,161 bars**), warm (post JIT-compile),
+on this dev laptop:
+
+| Operation | Legacy | New (`quant`) | Speedup |
+|---|---|---|---|
+| Position kernel only | — | **~16–25 ms** | — |
+| Full single backtest (kernel + trades + stats + equity curve) | ~30 s (extrapolated) | **~65–150 ms** | ~200–400× |
+| Per-backtest in a sweep (fast array-native stats) | ~2.5 s (43k-bar month) | **~65 ms serial / ~93 ms per combo across 6 workers** | — |
+| Data load (pushdown, warm cache) | — | **~1.4 s** for the full year | — |
+
+Numerical parity vs the legacy engine is **exact** (per-trade PnL diff `0.0`; see `tests/`).
+
+Projected sweep throughput (full-year 1m): ~100k combos in ~2.5 h across 6 workers; shorter windows
+or coarser timeframes scale down proportionally. **Path to faster** (for the "millions" goal):
+(a) cache shared signal sub-components across combos, (b) optionally JIT-compile a strategy's whole
+signal→sim→stats pipeline into one numba function, (c) loky/process parallelism over memmapped arrays
+to escape the GIL that currently caps threaded signal-building. These are deferred, not blockers.
+
+Memory: bounded by column-projected, date-sliced loads; sweeps reuse one shared feature frame.
 
 ## 8. What we explicitly keep (already good)
 - Incremental download + durable partial checkpoints (`data.py`).
@@ -192,12 +212,9 @@ Notebooks become **thin**: load config → call `quant` functions → show chart
 - Structured logging + tqdm progress.
 - Parquet on-disk format (evolved to partitioned).
 
-## 9. Open decisions (need user input)
-1. **Engine:** custom numba kernel (recommended — exact parity, full control) vs adopt vectorbt
-   (faster to stand up, but complex exit semantics may not map cleanly) vs both (numba core +
-   vectorbt cross-check).
-2. **Rebuild vs evolve:** greenfield `quant/` package with staged migration (recommended) vs
-   incremental in-place refactor of existing files.
-3. **First milestone** to implement after this proposal is approved (e.g. data+storage layer, or the
-   engine+signals core, or an end-to-end vertical slice for one EMA strategy on gold).
-4. **Package name** for the new namespace (`quant/`, `platform/`, other).
+## 9. Decisions (settled)
+1. **Engine:** ✅ custom numba kernel (exact parity, full control). vectorbt kept available as an
+   optional cross-check path.
+2. **Rebuild vs evolve:** ✅ greenfield `quant/` package with staged migration; legacy code untouched.
+3. **First milestone:** ✅ end-to-end vertical slice for one EMA strategy on gold — done.
+4. **Package name:** ✅ `quant/`.
