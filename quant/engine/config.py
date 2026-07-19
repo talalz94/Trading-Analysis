@@ -63,11 +63,69 @@ class TakeProfit:
 
 @dataclass
 class BacktestConfig:
+    """Execution configuration for a backtest. Every field is documented below.
+
+    ── Account ────────────────────────────────────────────────────────────────
+    initial_cash        Starting balance/equity (account currency).
+    cash_per_trade      Fixed notional per trade for sizing_mode='cash'. None ->
+                        initial_cash / max_open_trades.
+    max_open_trades     Max concurrent open positions (>1 allows pyramiding / multi-position).
+    allow_short         If True (and the strategy emits short signals), shorts are taken.
+
+    ── Costs (Exness-style: total cost = spread + commission [+ slippage]) ──────
+    spread              Bid/ask spread in PRICE units (e.g. gold 0.20 = 20 cents). Buys fill at
+                        ask (+half-spread), sells at bid (-half-spread). Per-instrument.
+    spread_per_lot      Extra spread (price units) added PER LOT traded, so the effective spread
+                        widens with volume: eff_spread = spread + spread_per_lot * lots.
+    commission_per_lot  Commission per lot, PER SIDE, in account currency (Exness: often 0).
+    fee_bps             Percentage commission in basis points, per side (8 = 0.08%).
+    slippage_bps        Execution slippage in basis points, applied to every fill.
+
+    ── Exit / risk module (only active when exit_enabled=True) ─────────────────
+    exit_enabled        Master switch for SL / TP / trailing / partials / risk sizing.
+    sl_mode             'none' | 'entry_pct' (%% from entry) | 'price_abs' ($ from entry) |
+                        'ref_col' (structure level from a column, e.g. swing low/high).
+    sl_value            Meaning depends on sl_mode: percent (entry_pct) or price distance (price_abs).
+    sl_buffer_pct       ref_col only: buffer beyond the structure level (%%).
+    sl_max_ref_risk_pct ref_col only: if the structure stop risks more than this %%, use the fallback.
+    sl_fallback_mode    ref_col only: 'entry_pct' | 'price_abs' fallback when the level is unusable.
+    sl_fallback_value   Fallback stop value.
+    sl_ref_long_col     Column holding the long stop level (e.g. 'swing_last_low').
+    sl_ref_short_col    Column holding the short stop level (e.g. 'swing_last_high').
+
+    trail_mode          Trailing stop: 'none' | 'pct' | 'price_abs'. Ratchets on the high-water mark.
+    trail_value         Trailing distance (percent for 'pct', price for 'price_abs').
+
+    take_profits        Tuple[TakeProfit] laddered levels (each with close_pct + optional stop-move).
+    tp_mode / tp_value  Convenience single TP if take_profits is empty:
+                        'none' | 'entry_pct' | 'price_abs' | 'rr' (R multiple of the stop distance).
+
+    ── Sizing ──────────────────────────────────────────────────────────────────
+    sizing_mode         'cash' (fixed notional) | 'risk_pct_equity' (risk sizing_value%% of equity;
+                        compounds) | 'risk_amount' (risk fixed $) | 'lots' (sizing_value lots).
+    sizing_value        Meaning depends on sizing_mode (see above).
+    max_notional_pct    Cap on notional as %% of equity (non-margin path).
+    allow_leverage      Non-margin path: if False, notional is capped to available cash.
+
+    ── Margin / leverage (Exness-style; opt-in via margin_enabled) ─────────────
+    margin_enabled      Turn on used/free-margin accounting + stop-out liquidation.
+    leverage            Leverage ratio (e.g. 100 = 1:100). Required margin = notional / leverage.
+    contract_size       Units per lot (gold XAUUSD = 100 oz/lot; crypto spot = 1).
+    stop_out_level      Margin level %% at which open positions are liquidated ('margin_call').
+    margin_call_level   Informational margin-call level %% (not enforced).
+
+    ── Fills ─────────────────────────────────────────────────────────────────
+    allow_rule_close    If False, strategy exit signals don't close (only SL/TP/trailing do).
+    intrabar_priority   'stop_first' | 'take_profit_first' when a bar hits both SL and TP.
+    """
     initial_cash: float = 10_000.0
     cash_per_trade: Optional[float] = None
     max_open_trades: int = 1
     fee_bps: float = 0.0
     slippage_bps: float = 0.0
+    spread: float = 0.0
+    spread_per_lot: float = 0.0
+    commission_per_lot: float = 0.0
     allow_short: bool = False
 
     # Exit / risk module
@@ -145,6 +203,9 @@ class BacktestConfig:
             cash_per_trade=self.resolved_cash_per_trade(),
             fee_bps=float(self.fee_bps),
             slippage_bps=float(self.slippage_bps),
+            spread=float(self.spread),
+            spread_per_lot=float(self.spread_per_lot),
+            commission_per_lot=float(self.commission_per_lot),
             max_open_trades=int(self.max_open_trades),
             allow_short=1 if self.allow_short else 0,
             exit_enabled=1 if self.exit_enabled else 0,

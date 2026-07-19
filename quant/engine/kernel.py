@@ -139,6 +139,26 @@ def _calc_tp(entry_px, stop, side, mode, value):
 
 
 @njit(cache=True)
+def _eff_spread(spread, spread_per_lot, q, contract_size):
+    # bid/ask spread (price units) that widens with traded volume (lots).
+    return spread + spread_per_lot * (q / contract_size)
+
+
+@njit(cache=True)
+def _fill_px(base, side, slip, esp, is_entry):
+    # buy fills at ask (+half-spread), sell fills at bid (-half-spread), plus slippage.
+    if is_entry == 1:
+        return base * (1.0 + side * slip) + side * esp * 0.5
+    return base * (1.0 - side * slip) - side * esp * 0.5
+
+
+@njit(cache=True)
+def _costs(fill_px, q, fee, comm_per_lot, contract_size):
+    # commission = %% of notional (fee) + fixed per-lot (per side).
+    return fill_px * q * fee + comm_per_lot * (q / contract_size)
+
+
+@njit(cache=True)
 def run_kernel(
     open_, high, low, close,
     entry_long, exit_long, entry_short, exit_short,
@@ -150,6 +170,7 @@ def run_kernel(
     trail_mode, trail_value,
     sizing_mode, sizing_value, max_notional_pct, allow_leverage,
     margin_enabled, leverage, contract_size, stop_out_level,
+    spread, spread_per_lot, commission_per_lot,
     allow_rule_close, intrabar_stop_first,
 ):
     n = close.shape[0]
@@ -214,10 +235,10 @@ def run_kernel(
                 equity <= (stop_out_level / 100.0) * used_margin:
             for j in range(o_cnt):
                 side = o_side[j]
-                exit_px = px * (1.0 - side * slip)
                 q = o_qty[j]
+                exit_px = _fill_px(px, side, slip, _eff_spread(spread, spread_per_lot, q, contract_size), 0)
                 gross = side * (exit_px - o_entry_px[j]) * q
-                ef = exit_px * q * fee
+                ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
                 cash += gross - ef
                 k = o_tr[j]
                 t_gross[k] += gross
@@ -269,10 +290,10 @@ def run_kernel(
                 closed = False
 
                 if sl_hit and ((not tp_any) or intrabar_stop_first == 1):
-                    exit_px = stop * (1.0 - side * slip)
                     q = o_qty[j]
+                    exit_px = _fill_px(stop, side, slip, _eff_spread(spread, spread_per_lot, q, contract_size), 0)
                     gross = side * (exit_px - o_entry_px[j]) * q
-                    ef = exit_px * q * fee
+                    ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
                     cash += gross - ef
                     t_gross[k] += gross
                     t_exit_fee[k] += ef
@@ -293,7 +314,6 @@ def run_kernel(
                         hit = (hi >= tpx) if side == 1 else (lo <= tpx)
                         if not hit:
                             continue
-                        exit_px = tpx * (1.0 - side * slip)
                         cf = tp_close_pcts[kk] / 100.0
                         if cf > 1.0:
                             cf = 1.0
@@ -303,8 +323,9 @@ def run_kernel(
                         o_tp_done[j] |= (1 << kk)
                         if qc <= _TINY:
                             continue
+                        exit_px = _fill_px(tpx, side, slip, _eff_spread(spread, spread_per_lot, qc, contract_size), 0)
                         gross = side * (exit_px - o_entry_px[j]) * qc
-                        ef = exit_px * qc * fee
+                        ef = _costs(exit_px, qc, fee, commission_per_lot, contract_size)
                         cash += gross - ef
                         t_gross[k] += gross
                         t_exit_fee[k] += ef
@@ -340,10 +361,10 @@ def run_kernel(
                         stop2 = o_stop[j]
                         still = (not np.isnan(stop2)) and ((lo <= stop2) if side == 1 else (hi >= stop2))
                         if still:
-                            exit_px = stop2 * (1.0 - side * slip)
                             q = o_qty[j]
+                            exit_px = _fill_px(stop2, side, slip, _eff_spread(spread, spread_per_lot, q, contract_size), 0)
                             gross = side * (exit_px - o_entry_px[j]) * q
-                            ef = exit_px * q * fee
+                            ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
                             cash += gross - ef
                             t_gross[k] += gross
                             t_exit_fee[k] += ef
@@ -373,10 +394,10 @@ def run_kernel(
                 side = o_side[j]
                 sig = exit_long[i] if side == 1 else exit_short[i]
                 if sig == 1:
-                    exit_px = px * (1.0 - side * slip)
                     q = o_qty[j]
+                    exit_px = _fill_px(px, side, slip, _eff_spread(spread, spread_per_lot, q, contract_size), 0)
                     gross = side * (exit_px - o_entry_px[j]) * q
-                    ef = exit_px * q * fee
+                    ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
                     cash += gross - ef
                     k = o_tr[j]
                     t_gross[k] += gross
@@ -409,7 +430,8 @@ def run_kernel(
                 side = -1
 
             if side != 0:
-                entry_px = px * (1.0 + side * slip)
+                # base-spread reference used for stop/tp/sizing; final fill (below) adds volume spread
+                entry_px = _fill_px(px, side, slip, spread, 1)
 
                 stop = np.nan
                 if exit_enabled == 1 and sl_mode != 0:
@@ -449,7 +471,9 @@ def run_kernel(
                                     qty = cap
 
                 if qty > 0.0:
-                    entry_fee = entry_px * qty * fee
+                    esp = _eff_spread(spread, spread_per_lot, qty, contract_size)
+                    entry_px = _fill_px(px, side, slip, esp, 1)   # final fill incl volume-dependent spread
+                    entry_fee = _costs(entry_px, qty, fee, commission_per_lot, contract_size)
                     can_open = cash > 0.0 and entry_fee <= cash
                     if can_open and margin_enabled == 1:
                         # affordability check: free margin must cover this position's margin
@@ -502,10 +526,10 @@ def run_kernel(
 
     for j in range(o_cnt):
         side = o_side[j]
-        exit_px = last_px * (1.0 - side * slip)
         q = o_qty[j]
+        exit_px = _fill_px(last_px, side, slip, _eff_spread(spread, spread_per_lot, q, contract_size), 0)
         gross = side * (exit_px - o_entry_px[j]) * q
-        ef = exit_px * q * fee
+        ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
         cash += gross - ef
         k = o_tr[j]
         t_gross[k] += gross
