@@ -95,7 +95,8 @@ pip install -e .            # installs the package + dependencies from pyproject
 # or: pip install -r requirements.txt
 
 # 4. (optional) extras
-pip install optuna          # Bayesian parameter search
+pip install "quant[data]"   # Dukascopy provider (free spot XAU/USD + FX)
+pip install "quant[optimize]"   # Optuna Bayesian parameter search
 ```
 
 **Secrets (optional).** Historical data uses Binance's *public* API — no keys needed. If you later
@@ -162,9 +163,14 @@ quant report   --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy supertren
       --params '{"period":10,"multiplier":3.0}' --out reports/supertrend.html
 ```
 
-### Notebook
-Open `notebooks/01_research_template.ipynb` — a guided workflow: load → backtest → responsive
-chart → attribution → parameter sweep → HTML report → build-your-own-strategy.
+### Notebooks
+- [`notebooks/01_research_cycle.ipynb`](notebooks/01_research_cycle.ipynb) — full cycle: ticker+source →
+  timeframe/dates → indicators → strategy (built-in **or** custom open/close rules) → SL/TP/cost/
+  leverage config → simulate + stats → stat plots → interactive price+trades chart (toggle via
+  legend) → save results.
+- [`notebooks/02_inference_experiments.ipynb`](notebooks/02_inference_experiments.ipynb) — inference:
+  define an idea → search (progress bar) → interpret the ranked table → pick a robust winner →
+  validate out-of-sample.
 
 ### Selecting a market / asset
 Set the `symbol` (and `market`) in `get_ohlcv` / the CLI. Cached gold proxies:
@@ -187,7 +193,7 @@ works. Crypto/FX/stocks/indices become available as their data providers are add
 | **Symbol / ticker** | `symbol="PAXGUSDT"` (any Binance symbol) |
 | **Timeframe** | `tf="1m"` (also `5m`, `15m`, `1h`, …) |
 | **Date range** | `start`/`end` (ISO strings). Only candles in range are returned; only *missing* ones are downloaded. |
-| **Provider** | `source="binance"` (implemented). The `DataSource` interface (`quant/data/base.py`) is built for more — see roadmap. |
+| **Provider** | `source="binance"` (crypto/gold proxies) or `source="dukascopy"` (**true spot XAU/USD** + FX, free, from 2003 — `pip install quant[data]`). More via the `DataSource` interface. |
 | **Display timezone** | `tz="UTC"` → adds a tz-aware `t` column used by charts, the sim, and time filters. |
 | **Force refresh** | `refresh=True` re-checks the source for new candles. |
 
@@ -200,10 +206,18 @@ after, and internal gaps), downloads only those, saves each API page immediately
 consolidates. Reads use **column projection + date-range pushdown** (polars) so a run only loads
 what it needs — low memory even with millions of rows cached.
 
-**Adding a data provider (roadmap).** Implement the `DataSource` protocol
-(`fetch(symbol, interval, start, end) -> OHLCV DataFrame`) in `quant/data/`, register it in
-`quant/data/binance.py`'s source registry, and select it via `source="..."`. Planned providers:
-real spot gold, OANDA (FX/metals), metals APIs, CSV/TradingView import.
+**Data sources.** `binance` and `dukascopy` are implemented. Dukascopy gives **free, true spot
+XAU/USD** (and FX) 1-minute history back to 2003 with no account:
+```bash
+pip install "quant[data]"            # installs dukascopy-python
+```
+```python
+df = get_ohlcv("XAUUSD", "1m", start="2020-01-01", end="2024-12-31", source="dukascopy")
+```
+It caches incrementally just like Binance. **Adding another provider:** implement the `DataSource`
+protocol (`fetch(symbol, interval, start, end) -> OHLCV`) in `quant/data/`, register it in
+`get_source`, and route range fetches through `quant.data.cache.incremental_fetch`. Planned:
+OANDA (practice API), metals APIs, CSV/TradingView import.
 
 ---
 
@@ -390,15 +404,19 @@ cfg = BacktestConfig(exit_enabled=True, sl_mode="entry_pct", sl_value=0.6,
 | Concept | Field(s) | Notes |
 |---|---|---|
 | **Account balance** | `initial_cash` | starting equity |
-| **Risk per trade** | `sizing_mode="risk_pct_equity", sizing_value=1.0` | risk 1% of equity per trade (needs a stop). Also `"risk_amount"` (fixed $) or `"cash"` (fixed notional) |
+| **Risk per trade** | `sizing_mode="risk_pct_equity", sizing_value=1.0` | risk 1% of equity per trade (needs a stop). Also `"risk_amount"` (fixed $), `"cash"` (fixed notional), or `"lots"` (fixed lots) |
 | **Compounding** | (automatic) | risk-based sizing uses *current* equity, so wins compound |
-| **Commission** | `fee_bps` | per-side, in basis points (8 = 0.08%) |
-| **Slippage / spread** | `slippage_bps` | applied to every fill; also your spread proxy |
-| **Leverage** | `allow_leverage=True`, `max_notional_pct` | notional cap as % of equity (cap model, not full margin/liquidation) |
+| **Spread (Exness-style)** | `spread`, `spread_per_lot` | bid/ask in **price units**: buy at ask, sell at bid. `spread_per_lot` widens the spread with volume. Different instruments → different `spread`. |
+| **Commission** | `commission_per_lot`, `fee_bps` | per-lot per-side (Exness: usually 0) **and/or** % in bps |
+| **Slippage** | `slippage_bps` | execution slippage on every fill |
+| **Leverage / margin** | `margin_enabled=True, leverage=500, contract_size=100, stop_out_level=50` | real margin: used/free margin, free-margin gate on entry, **stop-out liquidation** (`margin_call`). `contract_size`=100 for gold (1 lot=100oz) |
+| **Lot size** | `sizing_mode="lots", sizing_value=0.1` | trade 0.1 lots; qty = lots × contract_size |
 | **Multiple open positions** | `max_open_trades` | >1 allows concurrent trades |
 | **Long / short** | `allow_short=True` + strategy short signals | |
 | **Intrabar priority** | `intrabar_priority="stop_first"` | when a bar hits both SL and TP |
-| **Lot size** | via sizing | crypto uses fractional quantity; position size comes from the sizing mode |
+
+> Every `BacktestConfig` field is documented in its docstring (`help(BacktestConfig)`).
+> Non-margin runs (`margin_enabled=False`) use the simpler `allow_leverage`/`max_notional_pct` cap model.
 
 The result (`SimResult`) has `.trades` (per-trade DataFrame), `.equity_curve`
 (per-bar equity + drawdown), and `.stats` — total return, win/loss, profit factor, expectancy,
@@ -509,7 +527,9 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 - [`CLAUDE.md`](CLAUDE.md) — architecture orientation for contributors / AI sessions
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — design + roadmap
 - [`docs/INDICATOR_GUIDE.md`](docs/INDICATOR_GUIDE.md) — indicator & signal reference
-- [`notebooks/01_research_template.ipynb`](notebooks/01_research_template.ipynb) — guided workflow
+- [`docs/EXPERIMENT_GUIDE.md`](docs/EXPERIMENT_GUIDE.md) — experiment design & execution method
+- [`experiments/README.md`](experiments/README.md) — inference layer how-to
+- [`notebooks/`](notebooks/) — `01_research_cycle` + `02_inference_experiments`
 
 ## License
 Add your license of choice (e.g. MIT) as `LICENSE`.

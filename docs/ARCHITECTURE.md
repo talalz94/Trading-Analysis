@@ -6,10 +6,9 @@
 > **Progress:**
 > - ✅ Phase 0 — foundations: git, secrets → `.env`, packaging.
 > - ✅ Phase 1 — vertical slice: `quant/` (data → signals → numba engine → analytics → viz → optimize), exact parity + ~1000× faster.
-> - ✅ Phase 2 — full exit model (partial/laddered TPs, trailing, stop-movement, `ref_col` stops), multi-timeframe alignment; indicator library (RSI/MACD/Stochastic/ATR/Supertrend/Heikin-Ashi/swings/pivots) + strategy templates for every type; responsive viz (plotly-resampler, millions of points); **legacy code removed — clean quant-only repo**.
-> - ⏭ In progress — optimization scale-up (optuna, resumable checkpoints), analytics attribution (hour/weekday/session/regime), reporting + CLI, more data providers (real spot gold / OANDA), Jupyter research notebook, README.
->
-> Note: §3's target layout lists modules not all built yet (e.g. `sources/oanda.py`, `reporting/`, `cli.py`, `optimize/search.py`) — those are the remaining roadmap.
+> - ✅ Phase 2 — full exit model (partial/laddered TPs, trailing, stop-movement, `ref_col` stops), MTF alignment; indicator library + strategy templates for every type; responsive viz (millions of points); analytics attribution + reporting + CLI + optuna; **legacy removed — clean quant-only repo**.
+> - ✅ Phase 3 — **Dukascopy provider** (true spot XAU/USD, `source="dukascopy"`); **Exness-style leverage/margin** (lots, used/free margin, stop-out) + **cost model** (spread + volume-spread + per-lot commission); **experiments/ inference layer** + `EXPERIMENT_GUIDE`; two starter notebooks; faster-sweep hoisting + honest scaling guidance.
+> - ⏭ Next — more providers (OANDA practice, CSV/TradingView import), walk-forward / out-of-sample tooling, and (if needed) per-strategy fused-numba signal generation for very large sweeps.
 
 ---
 
