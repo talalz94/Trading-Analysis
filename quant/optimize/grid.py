@@ -24,7 +24,8 @@ import pandas as pd
 
 from ..analytics.fast import fast_stats, periods_per_year
 from ..engine import BacktestConfig
-from ..engine.run import invoke_kernel
+from ..engine.kernel import run_kernel
+from ..engine.run import _ref_arr
 from ..logging_utils import get_logger, maybe_tqdm
 from ..strategies.base import Strategy
 
@@ -63,6 +64,7 @@ def run_grid(
     valid_fn: Optional[Callable[[dict], bool]] = None,
     keep_stats: Optional[Sequence[str]] = None,
     n_jobs: Optional[int] = None,
+    backend: str = "threading",
     time_col: str = "t",
     price_col: str = "close",
     progress: bool = True,
@@ -85,13 +87,21 @@ def run_grid(
     ppy = periods_per_year(prepared[time_col])
     ic = float(cfg.initial_cash)
 
+    # Hoist cfg-derived kernel args OUT of the per-combo loop (cfg is fixed across a sweep) —
+    # avoids reallocating the ref arrays + rebuilding the arg tuple for every combo.
+    n_tp, tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values = cfg.tp_arrays()
+    sl_ref_long = _ref_arr(prepared, cfg.sl_ref_long_col, n)
+    sl_ref_short = _ref_arr(prepared, cfg.sl_ref_short_col, n)
+    ka = cfg.scalar_args()
+
     _log.info("sweep: %d combos | n_jobs=%d | bars=%d", len(combos), n_jobs, n)
 
     def _one(combo: dict) -> dict:
         # Fast path: kernel + array-native stats, no per-combo DataFrame construction.
         signals = strategy_cls(**combo).signals(prepared)
         el, xl, es, xs = signals.as_u8(n)
-        out = invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg, df=prepared)
+        out = run_kernel(open_, high, low, close, el, xl, es, xs, sl_ref_long, sl_ref_short,
+                         tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp, **ka)
         stats = fast_stats(out[0], out[9], out[11],
                           initial_cash=ic, final_cash=out[13], ppy=ppy)
         if keep_stats is not None:
@@ -113,7 +123,12 @@ def run_grid(
             bar.close()
     else:
         from joblib import Parallel, delayed
-        rows = Parallel(n_jobs=n_jobs, backend="threading", batch_size="auto")(
+        # 'threading' (default) shares the prepared frame in-process; the numpy signal ops and the
+        #   numba kernel release the GIL, so it scales without any pickling — the right choice here.
+        # 'loky' spawns processes that must PICKLE the (large) prepared frame per worker; benchmarks
+        #   show it is typically SLOWER for these sweeps. The real speed levers are: search a shorter
+        #   window / coarser timeframe first (subset-then-refine), and use Optuna instead of brute grid.
+        rows = Parallel(n_jobs=n_jobs, backend=backend, batch_size="auto")(
             delayed(_one)(combo) for combo in combos
         )
     elapsed = time.perf_counter() - t0
