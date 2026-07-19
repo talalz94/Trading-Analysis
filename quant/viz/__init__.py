@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from .charts import equity_and_drawdown, price_and_trades
 from .responsive import ResearchChart, equity_chart, price_chart, _HAVE_RESAMPLER
+from .heatmaps import hour_weekday_heatmap, monthly_returns_heatmap, sweep_heatmap
 
 __all__ = [
     "ResearchChart", "price_chart", "equity_chart",
     "price_and_trades", "equity_and_drawdown", "_HAVE_RESAMPLER",
+    "monthly_returns_heatmap", "hour_weekday_heatmap", "sweep_heatmap",
 ]
