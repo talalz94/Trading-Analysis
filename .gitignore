@@ -1,0 +1,39 @@
+# ---- Secrets ----
+.env
+*.key
+secrets/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- Data & caches (large / regenerable) ----
+data/
+!data/.gitkeep
+*.parquet
+*.feather
+*.pkl
+.cache/
+quant_cache/
+
+# ---- Experiment outputs ----
+optimization_results_*.csv
+experiments/**/outputs/
+reports/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

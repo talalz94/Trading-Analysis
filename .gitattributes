@@ -1,0 +1,7 @@
+# Normalize line endings; avoid CRLF/LF churn across machines.
+* text=auto eol=lf
+*.ipynb text eol=lf
+*.png binary
+*.parquet binary
+*.feather binary
+*.pkl binary
