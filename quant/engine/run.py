@@ -17,6 +17,29 @@ _log = get_logger("quant.engine")
 REASON_NAMES = {0: "signal", 1: "stop_loss", 2: "take_profit", 3: "forced_close_end"}
 
 
+def _ref_arr(df, col, n):
+    if col is not None and df is not None and col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce").to_numpy(np.float64)
+    return np.full(n, np.nan, dtype=np.float64)
+
+
+def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, df=None):
+    """Assemble all kernel inputs from a config (+df for ref_col stops) and run it.
+
+    Shared by run_backtest and the sweep runner so both go through one code path.
+    """
+    n = close.shape[0]
+    n_tp, tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values = cfg.tp_arrays()
+    sl_ref_long = _ref_arr(df, cfg.sl_ref_long_col, n)
+    sl_ref_short = _ref_arr(df, cfg.sl_ref_short_col, n)
+    return run_kernel(
+        open_, high, low, close, el, xl, es, xs,
+        sl_ref_long, sl_ref_short,
+        tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp,
+        **cfg.scalar_args(),
+    )
+
+
 @dataclass
 class SimResult:
     trades: pd.DataFrame
@@ -50,8 +73,8 @@ def run_backtest(
     t0 = time.perf_counter()
     (t_side, t_entry_i, t_exit_i, t_entry_px, t_exit_px, t_qty,
      t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason,
-     equity_curve, pos_count, final_cash) = run_kernel(
-        open_, high, low, close, el, xl, es, xs, **cfg.kernel_args()
+     equity_curve, pos_count, final_cash) = invoke_kernel(
+        open_, high, low, close, el, xl, es, xs, cfg, df=df
     )
     elapsed = time.perf_counter() - t0
 
