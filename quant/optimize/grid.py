@@ -89,7 +89,7 @@ def run_grid(
 
     def _one(combo: dict) -> dict:
         # Fast path: kernel + array-native stats, no per-combo DataFrame construction.
-        signals = strategy_cls(**combo).build_signals(prepared)
+        signals = strategy_cls(**combo).signals(prepared)
         el, xl, es, xs = signals.as_u8(n)
         out = invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg, df=prepared)
         stats = fast_stats(out[0], out[9], out[11],
