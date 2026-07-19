@@ -39,9 +39,17 @@ quant/
 ├── strategies/          # base.Strategy + ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level
 ├── analytics/           # metrics.py (full stats) + fast.py (array-native sweep stats)
 ├── viz/                 # responsive.py (plotly-resampler, millions of pts) + charts.py (static)
-└── optimize/            # grid.py (bounded-parallel sweeps)
-examples/gold_ema_demo.py · tests/ · docs/ · data/ (parquet cache, gitignored)
+└── optimize/            # grid.py (bounded-parallel sweeps) + search.py (optional optuna)
+examples/gold_ema_demo.py · notebooks/ · experiments/ · tests/ · docs/ · data/ (parquet cache, gitignored)
 ```
+
+`experiments/` is a SEPARATE inference layer that composes core APIs to find best settings for an
+idea (best MTF EMA combo, best session, best stop-loss). **Never put experiment-specific logic in
+`quant/`** — experiments import and orchestrate the core; the core stays generic.
+
+Leverage/margin: `BacktestConfig(margin_enabled=True, leverage=…, contract_size=…,
+sizing_mode="lots", stop_out_level=…)` — Exness-style used/free margin + stop-out liquidation
+(reason `margin_call`). Opt-in; the non-margin path is unchanged (golden tests).
 
 ## 3. Key conventions & invariants (do not break)
 

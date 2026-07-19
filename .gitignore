@@ -29,6 +29,7 @@ quant_cache/
 
 # ---- Experiment outputs ----
 optimization_results_*.csv
+experiments/results/
 experiments/**/outputs/
 reports/
 

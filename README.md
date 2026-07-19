@@ -436,6 +436,27 @@ study.best_params
 
 ---
 
+## Experiments / inference
+
+Beyond raw sweeps, the **`experiments/` layer** answers *"what are the best settings for this
+idea?"* — it composes the core APIs and **never modifies `quant/`**. Each experiment declares a
+search space + objective + a plain-English description, ranks the trials, and writes
+`experiments/results/<name>/` (`results.csv`, `best.json`, and a `report.md` documenting what it
+tested, the winning settings, and a reproduce snippet).
+
+```bash
+python -m experiments.ema_mtf          # best multi-timeframe EMA combination
+python -m experiments.session_timing   # best market session / time of day
+python -m experiments.exit_design      # best stop-loss % and take-profit R
+```
+```python
+from experiments.exit_design import build
+ranked = build().run()          # ranked DataFrame + writes the results folder
+```
+`strategy_space` varies strategy fields (EMA periods, session, hours…); `cfg_space` varies
+execution-config fields (stop-loss, take-profit, trailing, leverage…). Write your own in a few
+lines — see [`experiments/README.md`](experiments/README.md).
+
 ## Visualization
 
 **Responsive research chart (Jupyter)** — smooth at millions of candles via viewport resampling
