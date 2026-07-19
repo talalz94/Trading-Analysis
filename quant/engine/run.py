@@ -14,7 +14,7 @@ from .kernel import run_kernel
 
 _log = get_logger("quant.engine")
 
-REASON_NAMES = {0: "signal", 1: "stop_loss", 2: "take_profit", 3: "forced_close_end"}
+REASON_NAMES = {0: "signal", 1: "stop_loss", 2: "take_profit", 3: "forced_close_end", 4: "margin_call"}
 
 
 def _ref_arr(df, col, n):

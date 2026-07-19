@@ -14,7 +14,7 @@ import numpy as np
 
 _SL_MODES = {"none": 0, "entry_pct": 1, "price_abs": 2, "ref_col": 3}
 _TP_MODES = {"entry_pct": 1, "price_abs": 2, "rr": 3}
-_SIZING_MODES = {"cash": 0, "risk_pct_equity": 1, "risk_amount": 2}
+_SIZING_MODES = {"cash": 0, "risk_pct_equity": 1, "risk_amount": 2, "lots": 3}
 _MOVE_MODES = {"none": 0, "breakeven": 1, "entry_pct": 2, "price_abs": 3}
 _TRAIL_MODES = {"none": 0, "pct": 1, "price_abs": 2}
 _FALLBACK_MODES = {"entry_pct": 1, "price_abs": 2}
@@ -94,10 +94,17 @@ class BacktestConfig:
     tp_value: float = 0.0
 
     # --- sizing ---
-    sizing_mode: str = "cash"       # cash | risk_pct_equity | risk_amount
+    sizing_mode: str = "cash"       # cash | risk_pct_equity | risk_amount | lots
     sizing_value: float = 1.0
     max_notional_pct: float = 100.0
     allow_leverage: bool = False
+
+    # --- margin / leverage (Exness-style; opt-in) ---
+    margin_enabled: bool = False    # when True: margin accounting + stop-out liquidation
+    leverage: float = 1.0           # e.g. 100 for 1:100, 500 for 1:500
+    contract_size: float = 1.0      # units per lot (gold XAUUSD = 100 oz/lot; crypto spot = 1)
+    stop_out_level: float = 0.0     # margin level %% at which open positions are liquidated
+    margin_call_level: float = 0.0  # informational; margin level %% flagged in equity stats
 
     allow_rule_close: bool = True
     intrabar_priority: str = "stop_first"   # stop_first | take_profit_first
@@ -153,6 +160,10 @@ class BacktestConfig:
             sizing_value=float(self.sizing_value),
             max_notional_pct=float(self.max_notional_pct),
             allow_leverage=1 if self.allow_leverage else 0,
+            margin_enabled=1 if self.margin_enabled else 0,
+            leverage=float(self.leverage) if self.leverage and self.leverage > 0 else 1.0,
+            contract_size=float(self.contract_size) if self.contract_size and self.contract_size > 0 else 1.0,
+            stop_out_level=float(self.stop_out_level),
             allow_rule_close=1 if self.allow_rule_close else 0,
             intrabar_stop_first=1 if self.intrabar_priority == "stop_first" else 0,
         )

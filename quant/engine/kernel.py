@@ -42,6 +42,7 @@ R_SIGNAL = 0
 R_STOP = 1
 R_TAKE_PROFIT = 2
 R_FORCED = 3
+R_MARGIN = 4
 
 _TINY = 1e-12
 
@@ -148,6 +149,7 @@ def run_kernel(
     sl_mode, sl_value, sl_buffer_pct, sl_max_ref_risk_pct, sl_fallback_mode, sl_fallback_value,
     trail_mode, trail_value,
     sizing_mode, sizing_value, max_notional_pct, allow_leverage,
+    margin_enabled, leverage, contract_size, stop_out_level,
     allow_rule_close, intrabar_stop_first,
 ):
     n = close.shape[0]
@@ -196,12 +198,37 @@ def run_kernel(
         if np.isnan(lo):
             lo = px
 
-        # 1) mark-to-market (pre-exit)
+        # 1) mark-to-market (pre-exit) + used margin
         open_pnl = 0.0
+        used_margin = 0.0
         for j in range(o_cnt):
             open_pnl += o_side[j] * (px - o_entry_px[j]) * o_qty[j]
+            if margin_enabled == 1:
+                used_margin += (o_entry_px[j] * o_qty[j]) / leverage
         equity = cash + open_pnl
         equity_curve[i] = equity
+
+        # 1.5) margin stop-out: broker liquidates open positions when equity falls to the
+        # stop-out fraction of used margin (Exness-style). Conservative: liquidate all at market.
+        if margin_enabled == 1 and o_cnt > 0 and used_margin > 0.0 and \
+                equity <= (stop_out_level / 100.0) * used_margin:
+            for j in range(o_cnt):
+                side = o_side[j]
+                exit_px = px * (1.0 - side * slip)
+                q = o_qty[j]
+                gross = side * (exit_px - o_entry_px[j]) * q
+                ef = exit_px * q * fee
+                cash += gross - ef
+                k = o_tr[j]
+                t_gross[k] += gross
+                t_exit_fee[k] += ef
+                t_exit_i[k] = i
+                t_exit_px[k] = exit_px
+                t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                t_reason[k] = R_MARGIN
+            o_cnt = 0
+            pos_count[i] = 0
+            continue
 
         # 2) risk exits
         if exit_enabled == 1:
@@ -392,9 +419,12 @@ def run_kernel(
                                       sl_fallback_mode, sl_fallback_value)
 
                 qty = 0.0
-                if (exit_enabled == 0) or (sizing_mode == 0):
+                if sizing_mode == 3:
+                    # lots: qty = lots * contract_size (e.g. gold 1 lot = 100 oz)
+                    qty = sizing_value * contract_size
+                elif (exit_enabled == 0) or (sizing_mode == 0):
                     notional = cash_per_trade
-                    if exit_enabled == 1:
+                    if exit_enabled == 1 and margin_enabled == 0:
                         max_notional = equity * (max_notional_pct / 100.0)
                         if allow_leverage == 0 and max_notional > cash:
                             max_notional = cash
@@ -410,16 +440,28 @@ def run_kernel(
                             else:
                                 risk_amount = sizing_value
                             qty = risk_amount / rpu
-                            max_notional = equity * (max_notional_pct / 100.0)
-                            if allow_leverage == 0 and max_notional > cash:
-                                max_notional = cash
-                            cap = max_notional / entry_px
-                            if qty > cap:
-                                qty = cap
+                            if margin_enabled == 0:
+                                max_notional = equity * (max_notional_pct / 100.0)
+                                if allow_leverage == 0 and max_notional > cash:
+                                    max_notional = cash
+                                cap = max_notional / entry_px
+                                if qty > cap:
+                                    qty = cap
 
                 if qty > 0.0:
                     entry_fee = entry_px * qty * fee
-                    if cash > 0.0 and entry_fee <= cash:
+                    can_open = cash > 0.0 and entry_fee <= cash
+                    if can_open and margin_enabled == 1:
+                        # affordability check: free margin must cover this position's margin
+                        cur_open_pnl = 0.0
+                        cur_used = 0.0
+                        for jj in range(o_cnt):
+                            cur_open_pnl += o_side[jj] * (px - o_entry_px[jj]) * o_qty[jj]
+                            cur_used += (o_entry_px[jj] * o_qty[jj]) / leverage
+                        free_margin = (cash + cur_open_pnl) - cur_used
+                        if (entry_px * qty) / leverage > free_margin:
+                            can_open = False
+                    if can_open:
                         cash -= entry_fee
                         k = n_tr
                         t_side[k] = side
