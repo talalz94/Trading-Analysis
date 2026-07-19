@@ -41,16 +41,18 @@ def test_commission_per_lot_exact():
     assert abs(res.trades.iloc[0]["pnl"] - (-14.0)) < 1e-9
 
 
-def test_volume_widens_spread():
-    df = _flat()
-    def pnl(spl):
-        cfg = BacktestConfig(initial_cash=1_000_000, fee_bps=0, slippage_bps=0, spread=0.2,
-                             spread_per_lot=spl, exit_enabled=True, sizing_mode="lots",
-                             sizing_value=5.0, contract_size=100, leverage=100, margin_enabled=True,
+def test_spread_cost_scales_with_lots():
+    # EUR/USD-style: spread 1.2 pips = 0.00012 price; cost = spread * units.
+    # 1 std lot (100k units) -> $12 ; 0.1 lot (10k units) -> $1.20 (constant spread width).
+    df = _flat(price=1.10)  # price level doesn't affect the spread cost
+    def cost(lots):
+        cfg = BacktestConfig(initial_cash=1_000_000, fee_bps=0, slippage_bps=0, spread=0.00012,
+                             exit_enabled=True, sizing_mode="lots", sizing_value=lots,
+                             contract_size=100_000, leverage=100, margin_enabled=True,
                              allow_rule_close=True)
         return run_backtest(df, _enter_then_exit(len(df)), cfg).trades.iloc[0]["pnl"]
-    # more spread-per-lot -> more cost -> lower (more negative) pnl
-    assert pnl(0.1) < pnl(0.0)
+    assert abs(cost(1.0) - (-12.0)) < 1e-6
+    assert abs(cost(0.1) - (-1.20)) < 1e-6
 
 
 def test_zero_costs_no_effect():

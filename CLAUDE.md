@@ -51,9 +51,9 @@ Leverage/margin: `BacktestConfig(margin_enabled=True, leverage=…, contract_siz
 sizing_mode="lots", stop_out_level=…)` — Exness-style used/free margin + stop-out liquidation
 (reason `margin_call`). Opt-in; the non-margin path is unchanged (golden tests).
 
-Costs (Exness-style): `spread` (price-unit bid/ask; buy at ask, sell at bid), `spread_per_lot`
-(widens with volume), `commission_per_lot` (per side), plus `fee_bps`/`slippage_bps`. Zero-cost
-defaults keep golden parity. Every `BacktestConfig` field is documented in its docstring.
+Costs (Exness-style): `spread` (fixed bid/ask WIDTH in price units; buy at ask, sell at bid — cost
+scales with qty automatically), `commission_per_lot` (per side), plus `fee_bps`/`slippage_bps`.
+Zero-cost defaults keep golden parity. Every `BacktestConfig` field is documented in its docstring.
 
 Notebooks: `notebooks/01_research_cycle.ipynb` (full cycle) + `02_inference_experiments.ipynb`
 (inference). Experiment method: `docs/EXPERIMENT_GUIDE.md`.

@@ -73,10 +73,12 @@ class BacktestConfig:
     allow_short         If True (and the strategy emits short signals), shorts are taken.
 
     ── Costs (Exness-style: total cost = spread + commission [+ slippage]) ──────
-    spread              Bid/ask spread in PRICE units (e.g. gold 0.20 = 20 cents). Buys fill at
-                        ask (+half-spread), sells at bid (-half-spread). Per-instrument.
-    spread_per_lot      Extra spread (price units) added PER LOT traded, so the effective spread
-                        widens with volume: eff_spread = spread + spread_per_lot * lots.
+    spread              Bid/ask spread WIDTH in PRICE units (constant, per-instrument). Buys fill at
+                        ask (+half-spread), sells at bid (-half-spread). The monetary cost scales
+                        with volume automatically (cost = spread x qty = spread x contract_size x
+                        lots), because the half-spread is charged per unit — no separate per-lot
+                        term needed. E.g. EUR/USD 1.2 pips -> spread=0.00012 -> 1 lot (100k units)
+                        costs 0.00012 x 100000 = $12; 0.1 lot costs $1.20. Gold ~0.20 = 20 cents.
     commission_per_lot  Commission per lot, PER SIDE, in account currency (Exness: often 0).
     fee_bps             Percentage commission in basis points, per side (8 = 0.08%).
     slippage_bps        Execution slippage in basis points, applied to every fill.
@@ -124,7 +126,6 @@ class BacktestConfig:
     fee_bps: float = 0.0
     slippage_bps: float = 0.0
     spread: float = 0.0
-    spread_per_lot: float = 0.0
     commission_per_lot: float = 0.0
     allow_short: bool = False
 
@@ -204,7 +205,6 @@ class BacktestConfig:
             fee_bps=float(self.fee_bps),
             slippage_bps=float(self.slippage_bps),
             spread=float(self.spread),
-            spread_per_lot=float(self.spread_per_lot),
             commission_per_lot=float(self.commission_per_lot),
             max_open_trades=int(self.max_open_trades),
             allow_short=1 if self.allow_short else 0,
