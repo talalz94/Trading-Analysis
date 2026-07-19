@@ -1,0 +1,12 @@
+{
+  "metric": "sharpe",
+  "direction": "max",
+  "best_value": -0.02296070016049723,
+  "best_params": {
+    "fast": 100.0,
+    "slow": 200.0,
+    "confirm_n": 1.0,
+    "sl_value": 1.0,
+    "tp_value": 3.0
+  }
+}
