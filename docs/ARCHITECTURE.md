@@ -4,9 +4,12 @@
 > describes the *target* design; the legacy system is documented in [`../CLAUDE.md`](../CLAUDE.md).
 >
 > **Progress:**
-> - ✅ Phase 0 — foundations: git init, `.gitignore`/`.gitattributes`, secrets → `.env`, `pyproject.toml` + pinned `requirements.txt`.
-> - ✅ Phase 1 — end-to-end vertical slice: the `quant/` package (data → signals → numba engine → analytics → viz → optimize) with an `EmaRibbon` gold strategy, **validated at exact numerical parity** vs the legacy engine and ~1000× faster. See `examples/gold_ema_demo.py` and `tests/`.
-> - ⏭ Next — engine feature completion (partial/laddered TPs, trailing/stop-movement, `ref_col` structure stops, multi-timeframe alignment), then port remaining strategies and retire notebooks.
+> - ✅ Phase 0 — foundations: git, secrets → `.env`, packaging.
+> - ✅ Phase 1 — vertical slice: `quant/` (data → signals → numba engine → analytics → viz → optimize), exact parity + ~1000× faster.
+> - ✅ Phase 2 — full exit model (partial/laddered TPs, trailing, stop-movement, `ref_col` stops), multi-timeframe alignment; indicator library (RSI/MACD/Stochastic/ATR/Supertrend/Heikin-Ashi/swings/pivots) + strategy templates for every type; responsive viz (plotly-resampler, millions of points); **legacy code removed — clean quant-only repo**.
+> - ⏭ In progress — optimization scale-up (optuna, resumable checkpoints), analytics attribution (hour/weekday/session/regime), reporting + CLI, more data providers (real spot gold / OANDA), Jupyter research notebook, README.
+>
+> Note: §3's target layout lists modules not all built yet (e.g. `sources/oanda.py`, `reporting/`, `cli.py`, `optimize/search.py`) — those are the remaining roadmap.
 
 ---
 
