@@ -31,8 +31,8 @@ Package layout:
 quant/
 ├── config.py            # Settings + .env loading (secrets from env only)
 ├── logging_utils.py     # logger + tqdm helpers
-├── data/                # get_ohlcv, sources (binance.py + _binance_fetch.py), store.py (pushdown),
-│                        #   timeframe.py (resample + anti-lookahead MTF align)
+├── data/                # get_ohlcv, sources (binance.py+_binance_fetch.py, dukascopy.py=true spot
+│                        #   XAU/USD), store.py (pushdown), cache.py (generic incremental), timeframe.py
 ├── indicators/          # vectorized compute (overlays, oscillators, candles/HA, volatility, structure)
 ├── signals/             # primitives.py (numpy boolean predicates) + time_filters.py
 ├── engine/              # kernel.py (@njit), config.py (BacktestConfig/TakeProfit/Signals), run.py
@@ -50,6 +50,13 @@ idea (best MTF EMA combo, best session, best stop-loss). **Never put experiment-
 Leverage/margin: `BacktestConfig(margin_enabled=True, leverage=…, contract_size=…,
 sizing_mode="lots", stop_out_level=…)` — Exness-style used/free margin + stop-out liquidation
 (reason `margin_call`). Opt-in; the non-margin path is unchanged (golden tests).
+
+Costs (Exness-style): `spread` (price-unit bid/ask; buy at ask, sell at bid), `spread_per_lot`
+(widens with volume), `commission_per_lot` (per side), plus `fee_bps`/`slippage_bps`. Zero-cost
+defaults keep golden parity. Every `BacktestConfig` field is documented in its docstring.
+
+Notebooks: `notebooks/01_research_cycle.ipynb` (full cycle) + `02_inference_experiments.ipynb`
+(inference). Experiment method: `docs/EXPERIMENT_GUIDE.md`.
 
 ## 3. Key conventions & invariants (do not break)
 
