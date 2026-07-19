@@ -406,7 +406,7 @@ cfg = BacktestConfig(exit_enabled=True, sl_mode="entry_pct", sl_value=0.6,
 | **Account balance** | `initial_cash` | starting equity |
 | **Risk per trade** | `sizing_mode="risk_pct_equity", sizing_value=1.0` | risk 1% of equity per trade (needs a stop). Also `"risk_amount"` (fixed $), `"cash"` (fixed notional), or `"lots"` (fixed lots) |
 | **Compounding** | (automatic) | risk-based sizing uses *current* equity, so wins compound |
-| **Spread (Exness-style)** | `spread`, `spread_per_lot` | bid/ask in **price units**: buy at ask, sell at bid. `spread_per_lot` widens the spread with volume. Different instruments → different `spread`. |
+| **Spread (Exness-style)** | `spread` | fixed bid/ask **width** in price units: buy at ask, sell at bid. Cost = `spread × qty` (= spread × contract_size × lots), so it scales with volume automatically. E.g. EUR/USD 1.2 pips → `spread=0.00012` → $12/std lot. Per-instrument. |
 | **Commission** | `commission_per_lot`, `fee_bps` | per-lot per-side (Exness: usually 0) **and/or** % in bps |
 | **Slippage** | `slippage_bps` | execution slippage on every fill |
 | **Leverage / margin** | `margin_enabled=True, leverage=500, contract_size=100, stop_out_level=50` | real margin: used/free margin, free-margin gate on entry, **stop-out liquidation** (`margin_call`). `contract_size`=100 for gold (1 lot=100oz) |
