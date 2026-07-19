@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 optimize = ["optuna>=3.6"]
+data = ["dukascopy-python>=4.0"]     # free spot XAU/USD (and FX) history; source="dukascopy"
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
 [project.scripts]
