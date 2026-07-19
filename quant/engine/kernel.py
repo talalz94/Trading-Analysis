@@ -1,24 +1,25 @@
 """
 Numba-JIT position/PnL kernel — the hot core of the backtester.
 
-Consumes numpy arrays (OHLC + precomputed entry/exit signal bools) and walks the bars
-once in compiled machine code, producing trade records + an equity curve. Designed to
-reproduce the legacy `simulation.simulator.run_simulation` semantics exactly for the
-supported feature subset, so results can be validated numerically (see tests/).
+Consumes numpy arrays (OHLC + precomputed entry/exit signals + exit config) and walks the
+bars once in compiled machine code, producing trade records + an equity curve. Reproduces
+the legacy `simulation.simulator` semantics for the supported feature set.
 
 Per-bar order of operations (matches legacy):
   1. mark-to-market equity is recorded (pre-exit),
-  2. risk exits: stop-loss / take-profit (intrabar priority configurable),
+  2. risk exits: trailing update -> stop-loss / take-profits (intrabar priority configurable),
   3. rule-based close (exit signals),
   4. open a new position (long first, then short) if a slot is free.
 
+Exit model:
+  - Stop loss: entry_pct | price_abs | ref_col (structure level w/ buffer, max-risk cap, fallback).
+  - Trailing stop: pct | price_abs (ratchets on the high-water mark).
+  - Take profits: up to MAX_TP laddered levels, each closing `close_pct` of the remaining
+    position, with optional post-TP stop movement (breakeven | entry_pct | price_abs).
+  - Sizing: cash | risk_pct_equity | risk_amount. Fees (bps), slippage (bps), multi-position.
+
 PnL model (matches legacy): margin/CFD-style. Cash reflects fees + realized PnL only
 (entry notional is NOT deducted); equity = cash + unrealized PnL.
-
-Supported subset (v1): SL entry_pct/price_abs; single TP entry_pct/price_abs/rr closing
-100%; sizing cash / risk_pct_equity; fees, slippage, multi-position, force-close at end.
-Partial/laddered TPs, trailing/stop-movement, and ref_col structure stops are planned
-follow-ups (see docs/ARCHITECTURE.md).
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ import numpy as np
 try:
     from numba import njit
     _HAVE_NUMBA = True
-except Exception:  # pragma: no cover - numba should be installed
+except Exception:  # pragma: no cover
     _HAVE_NUMBA = False
 
     def njit(*args, **kwargs):  # type: ignore
@@ -42,14 +43,16 @@ R_STOP = 1
 R_TAKE_PROFIT = 2
 R_FORCED = 3
 
+_TINY = 1e-12
+
 
 @njit(cache=True)
 def equity_stats(equity):
     """Single compiled pass over the equity curve -> drawdown + return moments.
 
-    Returns (max_dd, sum_r, sum_r2, sum_dr, sum_dr2, n_r, n_dr) where r are per-bar
-    simple returns and dr are the negative (downside) subset. Lets callers compute
-    Sharpe/Sortino/max-drawdown without multiple numpy passes over ~500k bars.
+    Returns (max_dd, sum_r, sum_r2, sum_dr, sum_dr2, n_r, n_dr) where r are per-bar simple
+    returns and dr are the negative (downside) subset. Lets callers compute Sharpe/Sortino/
+    max-drawdown without multiple numpy passes over ~500k bars.
     """
     n = equity.shape[0]
     peak = -np.inf
@@ -63,7 +66,7 @@ def equity_stats(equity):
     prev = np.nan
     for i in range(n):
         e = equity[i]
-        if e != e:  # NaN
+        if e != e:
             continue
         if e > peak:
             peak = e
@@ -84,26 +87,73 @@ def equity_stats(equity):
     return max_dd, sum_r, sum_r2, sum_dr, sum_dr2, n_r, n_dr
 
 
-@njit(cache=True, fastmath=False)
+@njit(cache=True)
+def _fixed_stop(entry_px, side, mode, value):
+    # mode: 1 entry_pct, 2 price_abs
+    if mode == 1:
+        pct = value / 100.0
+        return entry_px * (1.0 - side * pct)
+    return entry_px - side * value
+
+
+@njit(cache=True)
+def _calc_stop(entry_px, side, sl_mode, sl_value, ref, buffer_pct, max_ref_risk_pct,
+               fb_mode, fb_value):
+    if sl_mode == 0:
+        return np.nan
+    if sl_mode == 1 or sl_mode == 2:
+        return _fixed_stop(entry_px, side, sl_mode, sl_value)
+    # ref_col
+    if not (ref == ref) or ref <= 0.0:
+        return _fixed_stop(entry_px, side, fb_mode, fb_value)
+    buf = buffer_pct / 100.0
+    if side == 1:
+        stop = ref * (1.0 - buf)
+        if stop >= entry_px:
+            return _fixed_stop(entry_px, side, fb_mode, fb_value)
+        risk = (entry_px - stop) / entry_px * 100.0
+    else:
+        stop = ref * (1.0 + buf)
+        if stop <= entry_px:
+            return _fixed_stop(entry_px, side, fb_mode, fb_value)
+        risk = (stop - entry_px) / entry_px * 100.0
+    if max_ref_risk_pct > 0.0 and risk > max_ref_risk_pct:
+        return _fixed_stop(entry_px, side, fb_mode, fb_value)
+    return stop
+
+
+@njit(cache=True)
+def _calc_tp(entry_px, stop, side, mode, value):
+    # mode: 1 entry_pct, 2 price_abs, 3 rr
+    if mode == 1:
+        return entry_px * (1.0 + side * value / 100.0)
+    if mode == 2:
+        return entry_px + side * value
+    if mode == 3:
+        if not (stop == stop):  # rr needs a stop
+            return np.nan
+        risk = abs(entry_px - stop)
+        return entry_px + side * risk * value
+    return np.nan
+
+
+@njit(cache=True)
 def run_kernel(
-    open_, high, low, close,          # float64[:]
-    entry_long, exit_long,            # uint8[:]
-    entry_short, exit_short,          # uint8[:]
-    initial_cash, cash_per_trade,
-    fee_bps, slippage_bps,
-    max_open_trades, allow_short,
+    open_, high, low, close,
+    entry_long, exit_long, entry_short, exit_short,
+    sl_ref_long, sl_ref_short,
+    tp_modes, tp_values, tp_close_pcts, tp_move_modes, tp_move_values, n_tp,
+    initial_cash, cash_per_trade, fee_bps, slippage_bps, max_open_trades, allow_short,
     exit_enabled,
-    sl_mode, sl_value,                # 0 none, 1 entry_pct, 2 price_abs
-    tp_mode, tp_value,                # 0 none, 1 entry_pct, 2 price_abs, 3 rr
-    sizing_mode, sizing_value,        # 0 cash, 1 risk_pct_equity
-    max_notional_pct, allow_leverage,
+    sl_mode, sl_value, sl_buffer_pct, sl_max_ref_risk_pct, sl_fallback_mode, sl_fallback_value,
+    trail_mode, trail_value,
+    sizing_mode, sizing_value, max_notional_pct, allow_leverage,
     allow_rule_close, intrabar_stop_first,
 ):
     n = close.shape[0]
     fee = fee_bps / 10000.0
     slip = slippage_bps / 10000.0
 
-    # --- trade records (preallocated; at most 1 open per bar => <= n trades) ---
     t_side = np.zeros(n, np.int8)
     t_entry_i = np.zeros(n, np.int64)
     t_exit_i = np.full(n, -1, np.int64)
@@ -117,25 +167,26 @@ def run_kernel(
     t_reason = np.zeros(n, np.int8)
     n_tr = 0
 
-    # --- open positions (order-preserving compaction) ---
-    o_tr = np.zeros(max_open_trades, np.int64)
-    o_side = np.zeros(max_open_trades, np.int8)
-    o_entry_px = np.zeros(max_open_trades, np.float64)
-    o_qty = np.zeros(max_open_trades, np.float64)
-    o_stop = np.zeros(max_open_trades, np.float64)
-    o_tp = np.zeros(max_open_trades, np.float64)
+    mo = max_open_trades
+    o_tr = np.zeros(mo, np.int64)
+    o_side = np.zeros(mo, np.int8)
+    o_entry_px = np.zeros(mo, np.float64)
+    o_qty0 = np.zeros(mo, np.float64)
+    o_qty = np.zeros(mo, np.float64)
+    o_stop = np.zeros(mo, np.float64)
+    o_extreme = np.zeros(mo, np.float64)
+    o_tp_done = np.zeros(mo, np.int64)
+    o_tp_px = np.zeros((mo, tp_modes.shape[0]), np.float64)
     o_cnt = 0
 
     equity_curve = np.empty(n, np.float64)
     pos_count = np.zeros(n, np.int64)
-
     cash = initial_cash
 
     for i in range(n):
         px = close[i]
         hi = high[i]
         lo = low[i]
-
         if np.isnan(px):
             equity_curve[i] = cash
             pos_count[i] = o_cnt
@@ -145,59 +196,148 @@ def run_kernel(
         if np.isnan(lo):
             lo = px
 
-        # 1) mark-to-market equity (pre-exit)
+        # 1) mark-to-market (pre-exit)
         open_pnl = 0.0
         for j in range(o_cnt):
             open_pnl += o_side[j] * (px - o_entry_px[j]) * o_qty[j]
         equity = cash + open_pnl
         equity_curve[i] = equity
 
-        # 2) risk exits (SL / TP), order-preserving compaction
-        w = 0
-        for j in range(o_cnt):
-            side = o_side[j]
-            stop = o_stop[j]
-            tp = o_tp[j]
-
-            sl_hit = False
-            if not np.isnan(stop):
-                sl_hit = (lo <= stop) if side == 1 else (hi >= stop)
-            tp_hit = False
-            if not np.isnan(tp):
-                tp_hit = (hi >= tp) if side == 1 else (lo <= tp)
-
-            do_close = False
-            level = 0.0
-            reason = R_SIGNAL
-            if sl_hit and tp_hit:
-                if intrabar_stop_first == 1:
-                    do_close = True; level = stop; reason = R_STOP
-                else:
-                    do_close = True; level = tp; reason = R_TAKE_PROFIT
-            elif sl_hit:
-                do_close = True; level = stop; reason = R_STOP
-            elif tp_hit:
-                do_close = True; level = tp; reason = R_TAKE_PROFIT
-
-            if do_close:
-                exit_px = level * (1.0 - side * slip)
-                qty = o_qty[j]
-                gross = side * (exit_px - o_entry_px[j]) * qty
-                exit_fee = exit_px * qty * fee
-                cash += gross - exit_fee
+        # 2) risk exits
+        if exit_enabled == 1:
+            w = 0
+            for j in range(o_cnt):
+                side = o_side[j]
                 k = o_tr[j]
-                t_exit_i[k] = i
-                t_exit_px[k] = exit_px
-                t_gross[k] = gross
-                t_exit_fee[k] = exit_fee
-                t_pnl[k] = gross - t_entry_fee[k] - exit_fee
-                t_reason[k] = reason
-            else:
-                o_tr[w] = o_tr[j]; o_side[w] = o_side[j]
-                o_entry_px[w] = o_entry_px[j]; o_qty[w] = o_qty[j]
-                o_stop[w] = o_stop[j]; o_tp[w] = o_tp[j]
-                w += 1
-        o_cnt = w
+
+                # trailing update (ratchet)
+                if trail_mode != 0:
+                    if side == 1:
+                        if hi > o_extreme[j]:
+                            o_extreme[j] = hi
+                        cand = o_extreme[j] * (1.0 - trail_value / 100.0) if trail_mode == 1 else o_extreme[j] - trail_value
+                        if np.isnan(o_stop[j]) or cand > o_stop[j]:
+                            o_stop[j] = cand
+                    else:
+                        if lo < o_extreme[j]:
+                            o_extreme[j] = lo
+                        cand = o_extreme[j] * (1.0 + trail_value / 100.0) if trail_mode == 1 else o_extreme[j] + trail_value
+                        if np.isnan(o_stop[j]) or cand < o_stop[j]:
+                            o_stop[j] = cand
+
+                stop = o_stop[j]
+                sl_hit = (not np.isnan(stop)) and ((lo <= stop) if side == 1 else (hi >= stop))
+
+                tp_any = False
+                for kk in range(n_tp):
+                    if (o_tp_done[j] >> kk) & 1:
+                        continue
+                    tpx = o_tp_px[j, kk]
+                    if np.isnan(tpx):
+                        continue
+                    if (hi >= tpx) if side == 1 else (lo <= tpx):
+                        tp_any = True
+                        break
+
+                closed = False
+
+                if sl_hit and ((not tp_any) or intrabar_stop_first == 1):
+                    exit_px = stop * (1.0 - side * slip)
+                    q = o_qty[j]
+                    gross = side * (exit_px - o_entry_px[j]) * q
+                    ef = exit_px * q * fee
+                    cash += gross - ef
+                    t_gross[k] += gross
+                    t_exit_fee[k] += ef
+                    t_exit_i[k] = i
+                    t_exit_px[k] = exit_px
+                    t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                    t_reason[k] = R_STOP
+                    closed = True
+                else:
+                    for kk in range(n_tp):
+                        if o_qty[j] <= _TINY:
+                            break
+                        if (o_tp_done[j] >> kk) & 1:
+                            continue
+                        tpx = o_tp_px[j, kk]
+                        if np.isnan(tpx):
+                            continue
+                        hit = (hi >= tpx) if side == 1 else (lo <= tpx)
+                        if not hit:
+                            continue
+                        exit_px = tpx * (1.0 - side * slip)
+                        cf = tp_close_pcts[kk] / 100.0
+                        if cf > 1.0:
+                            cf = 1.0
+                        if cf < 0.0:
+                            cf = 0.0
+                        qc = o_qty[j] * cf
+                        o_tp_done[j] |= (1 << kk)
+                        if qc <= _TINY:
+                            continue
+                        gross = side * (exit_px - o_entry_px[j]) * qc
+                        ef = exit_px * qc * fee
+                        cash += gross - ef
+                        t_gross[k] += gross
+                        t_exit_fee[k] += ef
+                        o_qty[j] -= qc
+
+                        mvmode = tp_move_modes[kk]
+                        if mvmode != 0:
+                            if mvmode == 1:
+                                newstop = o_entry_px[j]
+                            elif mvmode == 2:
+                                newstop = o_entry_px[j] * (1.0 + side * tp_move_values[kk] / 100.0)
+                            else:
+                                newstop = o_entry_px[j] + side * tp_move_values[kk]
+                            if np.isnan(o_stop[j]):
+                                o_stop[j] = newstop
+                            elif side == 1:
+                                if newstop > o_stop[j]:
+                                    o_stop[j] = newstop
+                            else:
+                                if newstop < o_stop[j]:
+                                    o_stop[j] = newstop
+
+                        if o_qty[j] <= _TINY:
+                            t_exit_i[k] = i
+                            t_exit_px[k] = exit_px
+                            t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                            t_reason[k] = R_TAKE_PROFIT
+                            closed = True
+                            break
+
+                    # take_profit_first: re-check stop after TP/stop-move
+                    if (not closed) and sl_hit and intrabar_stop_first == 0:
+                        stop2 = o_stop[j]
+                        still = (not np.isnan(stop2)) and ((lo <= stop2) if side == 1 else (hi >= stop2))
+                        if still:
+                            exit_px = stop2 * (1.0 - side * slip)
+                            q = o_qty[j]
+                            gross = side * (exit_px - o_entry_px[j]) * q
+                            ef = exit_px * q * fee
+                            cash += gross - ef
+                            t_gross[k] += gross
+                            t_exit_fee[k] += ef
+                            t_exit_i[k] = i
+                            t_exit_px[k] = exit_px
+                            t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                            t_reason[k] = R_STOP
+                            closed = True
+
+                if not closed:
+                    o_tr[w] = o_tr[j]
+                    o_side[w] = o_side[j]
+                    o_entry_px[w] = o_entry_px[j]
+                    o_qty0[w] = o_qty0[j]
+                    o_qty[w] = o_qty[j]
+                    o_stop[w] = o_stop[j]
+                    o_extreme[w] = o_extreme[j]
+                    o_tp_done[w] = o_tp_done[j]
+                    o_tp_px[w, :] = o_tp_px[j, :]
+                    w += 1
+            o_cnt = w
 
         # 3) rule-based close (exit signals)
         if (exit_enabled == 0) or (allow_rule_close == 1):
@@ -207,21 +347,27 @@ def run_kernel(
                 sig = exit_long[i] if side == 1 else exit_short[i]
                 if sig == 1:
                     exit_px = px * (1.0 - side * slip)
-                    qty = o_qty[j]
-                    gross = side * (exit_px - o_entry_px[j]) * qty
-                    exit_fee = exit_px * qty * fee
-                    cash += gross - exit_fee
+                    q = o_qty[j]
+                    gross = side * (exit_px - o_entry_px[j]) * q
+                    ef = exit_px * q * fee
+                    cash += gross - ef
                     k = o_tr[j]
+                    t_gross[k] += gross
+                    t_exit_fee[k] += ef
                     t_exit_i[k] = i
                     t_exit_px[k] = exit_px
-                    t_gross[k] = gross
-                    t_exit_fee[k] = exit_fee
-                    t_pnl[k] = gross - t_entry_fee[k] - exit_fee
+                    t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
                     t_reason[k] = R_SIGNAL
                 else:
-                    o_tr[w] = o_tr[j]; o_side[w] = o_side[j]
-                    o_entry_px[w] = o_entry_px[j]; o_qty[w] = o_qty[j]
-                    o_stop[w] = o_stop[j]; o_tp[w] = o_tp[j]
+                    o_tr[w] = o_tr[j]
+                    o_side[w] = o_side[j]
+                    o_entry_px[w] = o_entry_px[j]
+                    o_qty0[w] = o_qty0[j]
+                    o_qty[w] = o_qty[j]
+                    o_stop[w] = o_stop[j]
+                    o_extreme[w] = o_extreme[j]
+                    o_tp_done[w] = o_tp_done[j]
+                    o_tp_px[w, :] = o_tp_px[j, :]
                     w += 1
             o_cnt = w
 
@@ -238,15 +384,13 @@ def run_kernel(
             if side != 0:
                 entry_px = px * (1.0 + side * slip)
 
-                # stop
                 stop = np.nan
                 if exit_enabled == 1 and sl_mode != 0:
-                    if sl_mode == 1:
-                        stop = entry_px * (1.0 - side * (sl_value / 100.0))
-                    elif sl_mode == 2:
-                        stop = entry_px - side * sl_value
+                    ref = sl_ref_long[i] if side == 1 else sl_ref_short[i]
+                    stop = _calc_stop(entry_px, side, sl_mode, sl_value, ref,
+                                      sl_buffer_pct, sl_max_ref_risk_pct,
+                                      sl_fallback_mode, sl_fallback_value)
 
-                # size
                 qty = 0.0
                 if (exit_enabled == 0) or (sizing_mode == 0):
                     notional = cash_per_trade
@@ -257,11 +401,14 @@ def run_kernel(
                         if notional > max_notional:
                             notional = max_notional
                     qty = notional / entry_px
-                elif sizing_mode == 1:
+                else:
                     if not np.isnan(stop):
                         rpu = abs(entry_px - stop)
                         if rpu > 0.0:
-                            risk_amount = equity * (sizing_value / 100.0)
+                            if sizing_mode == 1:
+                                risk_amount = equity * (sizing_value / 100.0)
+                            else:
+                                risk_amount = sizing_value
                             qty = risk_amount / rpu
                             max_notional = equity * (max_notional_pct / 100.0)
                             if allow_leverage == 0 and max_notional > cash:
@@ -273,17 +420,6 @@ def run_kernel(
                 if qty > 0.0:
                     entry_fee = entry_px * qty * fee
                     if cash > 0.0 and entry_fee <= cash:
-                        # tp (needs stop for rr)
-                        tp = np.nan
-                        if exit_enabled == 1 and tp_mode != 0:
-                            if tp_mode == 1:
-                                tp = entry_px * (1.0 + side * (tp_value / 100.0))
-                            elif tp_mode == 2:
-                                tp = entry_px + side * tp_value
-                            elif tp_mode == 3 and not np.isnan(stop):
-                                risk = abs(entry_px - stop)
-                                tp = entry_px + side * risk * tp_value
-
                         cash -= entry_fee
                         k = n_tr
                         t_side[k] = side
@@ -293,9 +429,21 @@ def run_kernel(
                         t_entry_fee[k] = entry_fee
                         n_tr += 1
 
-                        o_tr[o_cnt] = k; o_side[o_cnt] = side
-                        o_entry_px[o_cnt] = entry_px; o_qty[o_cnt] = qty
-                        o_stop[o_cnt] = stop; o_tp[o_cnt] = tp
+                        o_tr[o_cnt] = k
+                        o_side[o_cnt] = side
+                        o_entry_px[o_cnt] = entry_px
+                        o_qty0[o_cnt] = qty
+                        o_qty[o_cnt] = qty
+                        o_stop[o_cnt] = stop
+                        o_extreme[o_cnt] = entry_px
+                        o_tp_done[o_cnt] = 0
+                        if exit_enabled == 1:
+                            for kk in range(n_tp):
+                                o_tp_px[o_cnt, kk] = _calc_tp(entry_px, stop, side,
+                                                             tp_modes[kk], tp_values[kk])
+                        else:
+                            for kk in range(o_tp_px.shape[1]):
+                                o_tp_px[o_cnt, kk] = np.nan
                         o_cnt += 1
 
         pos_count[i] = o_cnt
@@ -313,16 +461,16 @@ def run_kernel(
     for j in range(o_cnt):
         side = o_side[j]
         exit_px = last_px * (1.0 - side * slip)
-        qty = o_qty[j]
-        gross = side * (exit_px - o_entry_px[j]) * qty
-        exit_fee = exit_px * qty * fee
-        cash += gross - exit_fee
+        q = o_qty[j]
+        gross = side * (exit_px - o_entry_px[j]) * q
+        ef = exit_px * q * fee
+        cash += gross - ef
         k = o_tr[j]
+        t_gross[k] += gross
+        t_exit_fee[k] += ef
         t_exit_i[k] = last_i
         t_exit_px[k] = exit_px
-        t_gross[k] = gross
-        t_exit_fee[k] = exit_fee
-        t_pnl[k] = gross - t_entry_fee[k] - exit_fee
+        t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
         t_reason[k] = R_FORCED
 
     return (

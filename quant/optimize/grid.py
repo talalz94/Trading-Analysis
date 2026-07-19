@@ -24,7 +24,7 @@ import pandas as pd
 
 from ..analytics.fast import fast_stats, periods_per_year
 from ..engine import BacktestConfig
-from ..engine.kernel import run_kernel
+from ..engine.run import invoke_kernel
 from ..logging_utils import get_logger, maybe_tqdm
 from ..strategies.base import Strategy
 
@@ -83,7 +83,6 @@ def run_grid(
     low = prepared["low"].to_numpy(np.float64) if "low" in prepared else close
     open_ = prepared["open"].to_numpy(np.float64) if "open" in prepared else close
     ppy = periods_per_year(prepared[time_col])
-    ka = cfg.kernel_args()
     ic = float(cfg.initial_cash)
 
     _log.info("sweep: %d combos | n_jobs=%d | bars=%d", len(combos), n_jobs, n)
@@ -92,7 +91,7 @@ def run_grid(
         # Fast path: kernel + array-native stats, no per-combo DataFrame construction.
         signals = strategy_cls(**combo).build_signals(prepared)
         el, xl, es, xs = signals.as_u8(n)
-        out = run_kernel(open_, high, low, close, el, xl, es, xs, **ka)
+        out = invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg, df=prepared)
         stats = fast_stats(out[0], out[9], out[11],
                           initial_cash=ic, final_cash=out[13], ppy=ppy)
         if keep_stats is not None:
