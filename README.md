@@ -532,4 +532,4 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 - [`notebooks/`](notebooks/) — `01_research_cycle` + `02_inference_experiments`
 
 ## License
-Add your license of choice (e.g. MIT) as `LICENSE`.
+This project is released under the MIT License.
