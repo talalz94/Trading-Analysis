@@ -19,8 +19,9 @@ env/
 .ipynb_checkpoints/
 
 # ---- Data & caches (large / regenerable) ----
-data/
-!data/.gitkeep
+# NOTE: root-anchored so it ONLY ignores the top-level parquet cache, NOT the quant/data/ package.
+/data/
+!/data/.gitkeep
 *.parquet
 *.feather
 *.pkl
