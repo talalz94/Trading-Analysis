@@ -184,6 +184,7 @@ def run_kernel(
     t_exit_fee = np.zeros(n, np.float64)
     t_pnl = np.zeros(n, np.float64)
     t_reason = np.zeros(n, np.int8)
+    t_stop = np.full(n, np.nan)      # initial stop price per trade (for charts / risk display)
     n_tr = 0
 
     mo = max_open_trades
@@ -486,6 +487,7 @@ def run_kernel(
                         t_entry_px[k] = entry_px
                         t_qty[k] = qty
                         t_entry_fee[k] = entry_fee
+                        t_stop[k] = stop
                         n_tr += 1
 
                         o_tr[o_cnt] = k
@@ -537,5 +539,5 @@ def run_kernel(
         t_entry_px[:n_tr], t_exit_px[:n_tr], t_qty[:n_tr],
         t_gross[:n_tr], t_entry_fee[:n_tr], t_exit_fee[:n_tr],
         t_pnl[:n_tr], t_reason[:n_tr],
-        equity_curve, pos_count, cash,
+        equity_curve, pos_count, cash, t_stop[:n_tr],
     )
