@@ -78,6 +78,8 @@ quant/
 │   └── run.py           #   run_backtest(df, signals, cfg) -> SimResult ; invoke_kernel helper
 ├── strategies/
 │   ├── base.py          #   Strategy ABC (prepare + build_signals; signals() adds time filters)
+│   ├── ema_cross.py     #   configurable price-vs-EMA (cross/close/full_candle, confirm_n, HA, HTF
+│   │                    #     bias, exit_mode opposite/none/ha_flip/below_ema) — the variant explorer
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)
 ├── analytics/
 │   ├── metrics.py       #   compute_stats (return, win/loss, PF, expectancy, Sharpe/Sortino/Calmar,
@@ -97,7 +99,8 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
-notebooks/               # 01_research_cycle.ipynb (full cycle) · 02_inference_experiments.ipynb
+notebooks/               # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study
+                         #   (Q1-Q9 EMA-cross variant sweeps) · 04_trend_runner_leverage
 examples/gold_ema_demo.py · tests/ (9 files) · docs/ · data/ (cache, git-ignored)
 ```
 

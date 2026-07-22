@@ -7,7 +7,7 @@ import pytest
 
 from quant.engine import BacktestConfig
 from quant.strategies import (
-    EmaRibbon, HeikinAshiTrend, KeyLevelBounce, MacdTrend, MtfTrend,
+    EmaCross, EmaRibbon, HeikinAshiTrend, KeyLevelBounce, MacdTrend, MtfTrend,
     RsiReversal, SupertrendFlip, REGISTRY,
 )
 
@@ -34,6 +34,8 @@ def _cfg():
 
 STRATS = [
     EmaRibbon(fast=20, slow=100, confirm_n=3),
+    EmaCross(ema_period=50, entry_mode="full_candle", confirm_n=2, exit_mode="below_ema", exit_ema=20),
+    EmaCross(ema_period=50, entry_mode="cross", use_heikin_ashi=True, exit_mode="ha_flip"),
     RsiReversal(period=14, oversold=30, long_consec=3),
     MacdTrend(),
     HeikinAshiTrend(n_consec=3),
@@ -54,7 +56,7 @@ def test_strategy_runs(gold_df, strat):
 
 def test_registry_complete():
     assert set(REGISTRY) == {
-        "ema_ribbon", "rsi_reversal", "macd_trend", "heikin_ashi",
+        "ema_ribbon", "ema_cross", "rsi_reversal", "macd_trend", "heikin_ashi",
         "supertrend", "mtf_trend", "key_level",
     }
 
