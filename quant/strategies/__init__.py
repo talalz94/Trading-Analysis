@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .base import Strategy
 from .ema_ribbon import EmaRibbon
+from .ema_cross import EmaCross
 from .rsi import RsiReversal
 from .macd import MacdTrend
 from .heikin_ashi import HeikinAshiTrend
@@ -13,6 +14,7 @@ from .key_level import KeyLevelBounce
 # Registry so strategies can be selected by name (e.g. from a config/CLI).
 REGISTRY: dict[str, type[Strategy]] = {
     EmaRibbon.name: EmaRibbon,
+    EmaCross.name: EmaCross,
     RsiReversal.name: RsiReversal,
     MacdTrend.name: MacdTrend,
     HeikinAshiTrend.name: HeikinAshiTrend,
@@ -22,6 +24,6 @@ REGISTRY: dict[str, type[Strategy]] = {
 }
 
 __all__ = [
-    "Strategy", "EmaRibbon", "RsiReversal", "MacdTrend", "HeikinAshiTrend",
+    "Strategy", "EmaRibbon", "EmaCross", "RsiReversal", "MacdTrend", "HeikinAshiTrend",
     "SupertrendFlip", "MtfTrend", "KeyLevelBounce", "REGISTRY",
 ]
