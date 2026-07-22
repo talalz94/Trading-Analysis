@@ -8,6 +8,7 @@
 > - ✅ Phase 1 — vertical slice: `quant/` (data → signals → numba engine → analytics → viz → optimize), exact parity + ~1000× faster.
 > - ✅ Phase 2 — full exit model (partial/laddered TPs, trailing, stop-movement, `ref_col` stops), MTF alignment; indicator library + strategy templates for every type; responsive viz (millions of points); analytics attribution + reporting + CLI + optuna; **legacy removed — clean quant-only repo**.
 > - ✅ Phase 3 — **Dukascopy provider** (true spot XAU/USD, `source="dukascopy"`); **Exness-style leverage/margin** (lots, used/free margin, stop-out) + **cost model** (spread + volume-spread + per-lot commission); **experiments/ inference layer** + `EXPERIMENT_GUIDE`; two starter notebooks; faster-sweep hoisting + honest scaling guidance.
+> - ✅ Phase 4 — **`EmaCross` variant-explorer** strategy (entry/exit/HTF/HA/side as params, period-encoded columns for sweep-safe caching); corrected **fixed-width spread** cost model (Exness gold 0.12); per-trade **`stop_price`** in `SimResult` + chart stop-loss / entry / exit overlays with rich hover; resumable **`scripts/fetch_gold_dukascopy.py`**; notebooks 03–05 (EMA-cross study Q1–Q9, trend-runner+leverage, simple 1m breakout); **40 tests**; [`docs/SESSION_NOTES.md`](SESSION_NOTES.md) handoff (research findings + gotchas).
 > - ⏭ Next — more providers (OANDA practice, CSV/TradingView import), walk-forward / out-of-sample tooling, and (if needed) per-strategy fused-numba signal generation for very large sweeps.
 
 ---

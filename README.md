@@ -113,7 +113,7 @@ jupyter lab      # then open notebooks/01_research_template.ipynb and pick the "
 
 ### Verify the install
 ```bash
-python -m pytest tests/     # ~26 tests: engine parity/golden, strategies, viz, analytics
+python -m pytest tests/     # 40 tests: engine parity/golden, strategies, costs, leverage, dukascopy, viz, analytics
 python examples/gold_ema_demo.py
 ```
 
@@ -171,6 +171,16 @@ quant report   --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy supertren
 - [`notebooks/02_inference_experiments.ipynb`](notebooks/02_inference_experiments.ipynb) — inference:
   define an idea → search (progress bar) → interpret the ranked table → pick a robust winner →
   validate out-of-sample.
+- [`notebooks/03_ema_cross_study.ipynb`](notebooks/03_ema_cross_study.ipynb) — EMA-cross variant study
+  (research questions Q1–Q9 via staged sweeps: timeframe, EMA period, entry filter, HTF bias, session, exits).
+- [`notebooks/04_trend_runner_leverage.ipynb`](notebooks/04_trend_runner_leverage.ipynb) — full-candle
+  trend runner with Exness-style leverage scaling.
+- [`notebooks/05_simple_1m_ema_breakout.ipynb`](notebooks/05_simple_1m_ema_breakout.ipynb) — long-only 1m
+  breakout: enter on a full candle above EMA200, exit on a full candle below EMA50, stop = previous swing
+  low; candle chart with toggleable entry/exit/stop layers + a per-trade table with close reasons.
+
+Fetch true-spot gold with [`scripts/fetch_gold_dukascopy.py`](scripts/fetch_gold_dukascopy.py) —
+resumable, auto-saving XAUUSD fetch across 1m/5m/15m/1h/4h.
 
 ### Selecting a market / asset
 Set the `symbol` (and `market`) in `get_ohlcv` / the CLI. Cached gold proxies:
@@ -529,7 +539,9 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 - [`docs/INDICATOR_GUIDE.md`](docs/INDICATOR_GUIDE.md) — indicator & signal reference
 - [`docs/EXPERIMENT_GUIDE.md`](docs/EXPERIMENT_GUIDE.md) — experiment design & execution method
 - [`experiments/README.md`](experiments/README.md) — inference layer how-to
-- [`notebooks/`](notebooks/) — `01_research_cycle` + `02_inference_experiments`
+- [`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md) — running context: research findings, gotchas, next steps
+- [`notebooks/`](notebooks/) — `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
+  `04_trend_runner_leverage` · `05_simple_1m_ema_breakout`
 
 ## License
 This project is released under the MIT License.

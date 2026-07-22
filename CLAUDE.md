@@ -4,7 +4,8 @@
 > conversation needed. Keep it current when the architecture changes.
 > **Companion docs:** [`README.md`](README.md) (user guide) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 > (design + roadmap) · [`docs/INDICATOR_GUIDE.md`](docs/INDICATOR_GUIDE.md) · [`docs/EXPERIMENT_GUIDE.md`](docs/EXPERIMENT_GUIDE.md)
-> · [`experiments/README.md`](experiments/README.md).
+> · [`experiments/README.md`](experiments/README.md) · **[`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md)
+> (research findings, gotchas, next steps — read this for running context).**
 
 ---
 
@@ -32,7 +33,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **38 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **40 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -99,8 +100,9 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
-notebooks/               # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study
-                         #   (Q1-Q9 EMA-cross variant sweeps) · 04_trend_runner_leverage
+notebooks/               # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study (Q1-Q9)
+                         #   · 04_trend_runner_leverage · 05_simple_1m_ema_breakout
+scripts/fetch_gold_dukascopy.py   # resumable true-spot XAUUSD fetch (1m/5m/15m/1h/4h)
 examples/gold_ema_demo.py · tests/ (9 files) · docs/ · data/ (cache, git-ignored)
 ```
 
@@ -125,7 +127,8 @@ examples/gold_ema_demo.py · tests/ (9 files) · docs/ · data/ (cache, git-igno
   (`stop_first`/`take_profit_first`), force-close at end.
 - Close-reason codes: `signal`, `stop_loss`, `take_profit`, `forced_close_end`, `margin_call`.
 
-`SimResult` = `trades` (DataFrame), `equity_curve` (t/equity/open_trades/drawdown), `stats` (dict),
+`SimResult` = `trades` (DataFrame; incl. per-trade `stop_price`), `equity_curve`
+(t/equity/open_trades/drawdown), `stats` (dict),
 `elapsed_s` (kernel time).
 
 ## 6. Key conventions & invariants (DO NOT BREAK)
@@ -202,7 +205,7 @@ print(res.stats)
 `test_leverage.py` (margin/stop-out/lots), `test_costs.py` (spread/commission — incl the EUR/USD
 $12 example), `test_signals.py` (primitive correctness), `test_strategies.py` (all 7 run),
 `test_analytics.py` (attribution + reporting), `test_viz.py` (responsive chart resamples),
-`test_dukascopy.py` (provider mapping + incremental cache, mocked fetch). 38 total.
+`test_dukascopy.py` (provider mapping + incremental cache, mocked fetch). 40 total (incl. costs, leverage, dukascopy, EmaCross).
 
 ## 12. Known limitations / honest caveats
 
