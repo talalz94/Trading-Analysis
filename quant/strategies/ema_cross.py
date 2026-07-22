@@ -52,13 +52,27 @@ class EmaCross(Strategy):
     swings_left: int = 12
     swings_right: int = 12
 
+    @property
+    def _src_tag(self) -> str:
+        return "ha" if self.use_heikin_ashi else "px"
+
+    @property
+    def _entry_col(self) -> str:
+        return f"ema_entry_{self._src_tag}_{int(self.ema_period)}"
+
+    @property
+    def _exit_col(self) -> str:
+        return f"ema_exit_{self._src_tag}_{int(self.exit_ema or 0)}"
+
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         need_ha = self.use_heikin_ashi or self.exit_mode == "ha_flip"
         out = add_heikin_ashi(df) if need_ha else df.copy()
         src = "ha_close" if self.use_heikin_ashi else "close"
-        out["entry_ema"] = ema(out[src], int(self.ema_period))
+        # Period-encoded column names so sweeps over ema_period produce DISTINCT columns
+        # (run_grid caches indicator columns by name; a fixed name would silently reuse one EMA).
+        out[self._entry_col] = ema(out[src], int(self.ema_period))
         if self.exit_mode == "below_ema" and self.exit_ema:
-            out["exit_ema"] = ema(out[src], int(self.exit_ema))
+            out[self._exit_col] = ema(out[src], int(self.exit_ema))
         out = add_swings(out, self.swings_left, self.swings_right)   # for ref_col stops
         out = add_atr(out, 14)                                       # for ATR-based experiments
         if self.htf and self.htf_ema:
@@ -73,7 +87,7 @@ class EmaCross(Strategy):
         lo = "ha_low" if ha else "low"
         hi = "ha_high" if ha else "high"
         o_col, c_col = ("ha_open", "ha_close") if ha else ("open", "close")
-        ema_col = "entry_ema"
+        ema_col = self._entry_col
         zeros = np.zeros(n, dtype=bool)
 
         def entry(side_long: bool):
@@ -106,7 +120,7 @@ class EmaCross(Strategy):
                 return (S.below(df, "ha_close", "ha_open") if side_long
                         else S.above(df, "ha_close", "ha_open"))
             if self.exit_mode == "below_ema":
-                ec = "exit_ema"
+                ec = self._exit_col
                 return S.below(df, hi, ec) if side_long else S.above(df, lo, ec)
             raise ValueError(f"bad exit_mode {self.exit_mode}")
 
