@@ -101,48 +101,59 @@ class ResearchChart:
         self._add_hf(tr, self.df[self.time_col], y)
         return self
 
-    def add_trades(self, trades: pd.DataFrame, *, markers: bool = True) -> "ResearchChart":
-        # Trade markers are added as PLAIN traces (not resampled) so their per-trade hover data
-        # stays intact — there are only a few thousand, which renders fine.
-        if trades is None or trades.empty or not markers:
-            return self
-        t = trades.copy()
-        for c in ("entry_time", "exit_time"):
-            t[c] = pd.to_datetime(t[c]).dt.strftime("%Y-%m-%d %H:%M")
-        if "close_reason" not in t:
-            t["close_reason"] = ""
-        if "return_pct" not in t:
-            t["return_pct"] = float("nan")
-
-        def _cd(sub):
-            return np.column_stack([
-                sub["side"].astype(str),
-                sub["entry_time"], sub["entry_price"].round(3).astype(str),
-                sub["exit_time"], sub["exit_price"].round(3).astype(str),
-                sub["pnl"].round(2).astype(str),
-                sub["return_pct"].round(2).astype(str),
-                sub["close_reason"].astype(str),
-            ])
-
-        HOVER = ("<b>%{customdata[0]} trade</b><br>"
-                 "entry: %{customdata[1]} @ %{customdata[2]}<br>"
-                 "exit:  %{customdata[3]} @ %{customdata[4]}<br>"
-                 "pnl:   %{customdata[5]}  (%{customdata[6]}%)<br>"
-                 "reason: %{customdata[7]}<extra></extra>")
-
-        def _markers(sub, xcol, ycol, name, symbol, color, size=10):
-            if sub.empty:
-                return
-            self.fig.add_trace(go.Scattergl(
-                x=sub[xcol], y=sub[ycol], mode="markers", name=name,
-                marker=dict(symbol=symbol, size=size, color=color, line=dict(width=0.6, color="white")),
-                customdata=_cd(sub), hovertemplate=HOVER))
-
-        _markers(t[t["side"] == "long"], "entry_time", "entry_price", "long entry", "triangle-up", _UP)
-        _markers(t[t["side"] == "short"], "entry_time", "entry_price", "short entry", "triangle-down", _DOWN)
-        _markers(t[t["pnl"] > 0], "exit_time", "exit_price", "exit (win)", "x", _UP, size=8)
-        _markers(t[t["pnl"] <= 0], "exit_time", "exit_price", "exit (loss)", "x", _DOWN, size=8)
+    def add_trades(self, trades: pd.DataFrame, *, markers: bool = True,
+                   stops: bool = True) -> "ResearchChart":
+        # Defer rendering to show() so ALL resampled hf traces (close, EMAs) are added first and
+        # the static overlays (markers, stops) come last — mixing the two desyncs the resampler.
+        self._pending_trades = (trades, markers, stops)
         return self
+
+    def _render_trades(self):
+        trades, markers, stops = getattr(self, "_pending_trades", (None, True, True))
+        if trades is None or trades.empty or not markers:
+            return
+        t = trades.reset_index(drop=True)
+        et = pd.to_datetime(t["entry_time"]).to_numpy()
+        xt = pd.to_datetime(t["exit_time"]).to_numpy()
+        ets = pd.to_datetime(t["entry_time"]).dt.strftime("%Y-%m-%d %H:%M").to_numpy()
+        xts = pd.to_datetime(t["exit_time"]).dt.strftime("%Y-%m-%d %H:%M").to_numpy()
+        side = t["side"].astype(str).to_numpy()
+        entry_px = t["entry_price"].to_numpy(); exit_px = t["exit_price"].to_numpy()
+        pnl = t["pnl"].to_numpy()
+        rp = (t["return_pct"] if "return_pct" in t else t["pnl"]).round(2).astype(str).to_numpy()
+        cr = (t["close_reason"].astype(str) if "close_reason" in t else pd.Series([""] * len(t))).to_numpy()
+        stop = t["stop_price"].to_numpy() if "stop_price" in t else np.full(len(t), np.nan)
+
+        def _cd(m):
+            return np.column_stack([side[m], ets[m], np.round(entry_px[m], 3).astype(str),
+                                    xts[m], np.round(exit_px[m], 3).astype(str),
+                                    np.round(pnl[m], 2).astype(str), rp[m], cr[m]])
+
+        HOVER = ("<b>%{customdata[0]} trade</b><br>entry: %{customdata[1]} @ %{customdata[2]}<br>"
+                 "exit:  %{customdata[3]} @ %{customdata[4]}<br>pnl: %{customdata[5]} "
+                 "(%{customdata[6]}%)<br>reason: %{customdata[7]}<extra></extra>")
+
+        def _markers(m, x, y, name, symbol, color, size=10):
+            if not m.any():
+                return
+            self._add_static(go.Scattergl(
+                x=x[m], y=y[m], mode="markers", name=name,
+                marker=dict(symbol=symbol, size=size, color=color, line=dict(width=0.6, color="white")),
+                customdata=_cd(m), hovertemplate=HOVER))
+
+        _markers(side == "long", et, entry_px, "long entry", "triangle-up", _UP)
+        _markers(side == "short", et, entry_px, "short entry", "triangle-down", _DOWN)
+        _markers(pnl > 0, xt, exit_px, "exit (win)", "x", _UP, 8)
+        _markers(pnl <= 0, xt, exit_px, "exit (loss)", "x", _DOWN, 8)
+
+        # stop-loss: a short dotted horizontal segment at each trade's stop, spanning entry->exit
+        if stops and np.isfinite(stop).any():
+            xs, ys = [], []
+            for e, x, s in zip(et, xt, stop):
+                if np.isfinite(s):
+                    xs += [e, x, None]; ys += [s, s, None]
+            self._add_static(go.Scattergl(x=xs, y=ys, mode="lines", name="stop-loss",
+                             line=dict(color="#f59e0b", width=1, dash="dot"), hoverinfo="skip"))
 
     # ---- build / show ----
     def _add_hf(self, trace, x, y):
@@ -152,6 +163,18 @@ class ResearchChart:
             trace.x = np.asarray(x)
             trace.y = np.asarray(y)
             self.fig.add_trace(trace)
+
+    def _add_static(self, trace):
+        # Overlay traces (markers, stop-loss lines) must NOT be resampled — marker/segmented data
+        # (with None gaps) breaks the aggregator's monotonic check. Passing a huge max_n_samples
+        # tells plotly-resampler to keep the trace as-is (no aggregation).
+        if _HAVE_RESAMPLER:
+            try:
+                self.fig.add_trace(trace, max_n_samples=10_000_000)
+                return
+            except Exception:
+                pass
+        self.fig.add_trace(trace)
 
     def _initial_range(self):
         i0 = max(0, len(self.df) - self.initial_bars)
@@ -190,6 +213,7 @@ class ResearchChart:
                          line=dict(width=0.8, color=_PRICE), opacity=0.5),
                          self.df[self.time_col], self.df["close"])
             self._build_candles()
+            self._render_trades()   # static overlays LAST, after all resampled hf traces
             x0, x1 = self._initial_range()
             self.fig.update_xaxes(range=[x0, x1])   # open zoomed to the recent window
             self._built = True

@@ -73,7 +73,7 @@ def run_backtest(
     t0 = time.perf_counter()
     (t_side, t_entry_i, t_exit_i, t_entry_px, t_exit_px, t_qty,
      t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason,
-     equity_curve, pos_count, final_cash) = invoke_kernel(
+     equity_curve, pos_count, final_cash, t_stop) = invoke_kernel(
         open_, high, low, close, el, xl, es, xs, cfg, df=df
     )
     elapsed = time.perf_counter() - t0
@@ -83,7 +83,7 @@ def run_backtest(
     t_series = df[time_col].reset_index(drop=True)
     trades = _build_trades_df(
         t_series, t_side, t_entry_i, t_exit_i, t_entry_px, t_exit_px,
-        t_qty, t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason,
+        t_qty, t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason, t_stop,
     )
 
     eq = pd.DataFrame({"equity": equity_curve, "open_trades": pos_count})
@@ -107,11 +107,11 @@ def run_backtest(
 
 
 def _build_trades_df(t_series, side, entry_i, exit_i, entry_px, exit_px,
-                     qty, gross, entry_fee, exit_fee, pnl, reason) -> pd.DataFrame:
+                     qty, gross, entry_fee, exit_fee, pnl, reason, stop=None) -> pd.DataFrame:
     if len(side) == 0:
         return pd.DataFrame(columns=[
             "side", "entry_time", "exit_time", "entry_i", "exit_i",
-            "entry_price", "exit_price", "qty", "gross_pnl", "fees", "pnl",
+            "entry_price", "exit_price", "stop_price", "qty", "gross_pnl", "fees", "pnl",
             "return_pct", "bars_held", "close_reason",
         ])
     n = len(t_series)
@@ -130,6 +130,7 @@ def _build_trades_df(t_series, side, entry_i, exit_i, entry_px, exit_px,
         "exit_i": exit_i,
         "entry_price": entry_px,
         "exit_price": exit_px,
+        "stop_price": stop if stop is not None else np.nan,
         "qty": qty,
         "gross_pnl": gross,
         "fees": entry_fee + exit_fee,
