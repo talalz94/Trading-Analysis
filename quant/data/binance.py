@@ -11,17 +11,20 @@ from typing import Optional
 
 import pandas as pd
 
+from ..config import SETTINGS
 from .base import DataSource, validate_ohlcv
 
 
 class BinanceSource:
-    """DataSource backed by `data.fetch_binance_klines` (public data API, no keys needed)."""
+    """DataSource backed by the incremental klines fetcher (public data API, no keys needed)."""
 
     name = "binance"
 
     def __init__(self, market: str = "spot", cache_dir: Optional[str] = None):
         self.market = market
-        self.cache_dir = cache_dir
+        # Default to the package's absolute data dir (repo-root/data), NOT the process cwd —
+        # otherwise running from notebooks/ would create a second cache in notebooks/data/.
+        self.cache_dir = str(cache_dir) if cache_dir is not None else str(SETTINGS.data_dir)
 
     def fetch(
         self,
