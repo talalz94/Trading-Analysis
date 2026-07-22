@@ -70,7 +70,9 @@ class BacktestConfig:
     cash_per_trade      Fixed notional per trade for sizing_mode='cash'. None ->
                         initial_cash / max_open_trades.
     max_open_trades     Max concurrent open positions (>1 allows pyramiding / multi-position).
-    allow_short         If True (and the strategy emits short signals), shorts are taken.
+    allow_short         Engine gate for shorts. Defaults True, so the STRATEGY is the single source
+                        of truth for sides (via its short signals / allow_short field). Set False to
+                        force long-only regardless of the strategy.
 
     ── Costs (Exness-style: total cost = spread + commission [+ slippage]) ──────
     spread              Bid/ask spread WIDTH in PRICE units (constant, per-instrument). Buys fill at
@@ -127,7 +129,7 @@ class BacktestConfig:
     slippage_bps: float = 0.0
     spread: float = 0.0
     commission_per_lot: float = 0.0
-    allow_short: bool = False
+    allow_short: bool = True
 
     # Exit / risk module
     exit_enabled: bool = False

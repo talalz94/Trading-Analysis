@@ -61,14 +61,17 @@ class ResearchChart:
     """Interactive, viewport-resampling price chart for Jupyter."""
 
     def __init__(self, df: pd.DataFrame, *, time_col: str = "t", candles: bool = True,
-                 n_shown: int = 2500, candle_target: int = 350, height: int = 560,
-                 title: str = "Price"):
+                 n_shown: int = 3000, candle_target: int = 400, height: int = 680,
+                 initial_bars: int = 400, title: str = "Price"):
         if time_col not in df.columns:
             raise ValueError(f"df must contain '{time_col}'")
         self.df = df.reset_index(drop=True)
         self.time_col = time_col
         self.candles = candles
         self.candle_target = candle_target
+        # Open zoomed to the most recent `initial_bars` bars so candles render at their NATIVE
+        # resolution (not the whole history binned into multi-hour blobs). Pan/zoom for the rest.
+        self.initial_bars = min(int(initial_bars), len(self.df))
         self._overlays: List[str] = []
         self._built = False
 
@@ -99,30 +102,46 @@ class ResearchChart:
         return self
 
     def add_trades(self, trades: pd.DataFrame, *, markers: bool = True) -> "ResearchChart":
+        # Trade markers are added as PLAIN traces (not resampled) so their per-trade hover data
+        # stays intact — there are only a few thousand, which renders fine.
         if trades is None or trades.empty or not markers:
             return self
-        longs = trades[trades["side"] == "long"]
-        if not longs.empty:
-            self._add_hf(go.Scattergl(name="long entry", mode="markers",
-                         marker=dict(symbol="triangle-up", size=9, color=_UP,
-                                     line=dict(width=0.5, color="white"))),
-                         longs["entry_time"], longs["entry_price"])
-        shorts = trades[trades["side"] == "short"]
-        if not shorts.empty:
-            self._add_hf(go.Scattergl(name="short entry", mode="markers",
-                         marker=dict(symbol="triangle-down", size=9, color=_DOWN,
-                                     line=dict(width=0.5, color="white"))),
-                         shorts["entry_time"], shorts["entry_price"])
-        wins = trades[trades["pnl"] > 0]
-        losses = trades[trades["pnl"] <= 0]
-        if not wins.empty:
-            self._add_hf(go.Scattergl(name="exit (win)", mode="markers",
-                         marker=dict(symbol="x", size=7, color=_UP)),
-                         wins["exit_time"], wins["exit_price"])
-        if not losses.empty:
-            self._add_hf(go.Scattergl(name="exit (loss)", mode="markers",
-                         marker=dict(symbol="x", size=7, color=_DOWN)),
-                         losses["exit_time"], losses["exit_price"])
+        t = trades.copy()
+        for c in ("entry_time", "exit_time"):
+            t[c] = pd.to_datetime(t[c]).dt.strftime("%Y-%m-%d %H:%M")
+        if "close_reason" not in t:
+            t["close_reason"] = ""
+        if "return_pct" not in t:
+            t["return_pct"] = float("nan")
+
+        def _cd(sub):
+            return np.column_stack([
+                sub["side"].astype(str),
+                sub["entry_time"], sub["entry_price"].round(3).astype(str),
+                sub["exit_time"], sub["exit_price"].round(3).astype(str),
+                sub["pnl"].round(2).astype(str),
+                sub["return_pct"].round(2).astype(str),
+                sub["close_reason"].astype(str),
+            ])
+
+        HOVER = ("<b>%{customdata[0]} trade</b><br>"
+                 "entry: %{customdata[1]} @ %{customdata[2]}<br>"
+                 "exit:  %{customdata[3]} @ %{customdata[4]}<br>"
+                 "pnl:   %{customdata[5]}  (%{customdata[6]}%)<br>"
+                 "reason: %{customdata[7]}<extra></extra>")
+
+        def _markers(sub, xcol, ycol, name, symbol, color, size=10):
+            if sub.empty:
+                return
+            self.fig.add_trace(go.Scattergl(
+                x=sub[xcol], y=sub[ycol], mode="markers", name=name,
+                marker=dict(symbol=symbol, size=size, color=color, line=dict(width=0.6, color="white")),
+                customdata=_cd(sub), hovertemplate=HOVER))
+
+        _markers(t[t["side"] == "long"], "entry_time", "entry_price", "long entry", "triangle-up", _UP)
+        _markers(t[t["side"] == "short"], "entry_time", "entry_price", "short entry", "triangle-down", _DOWN)
+        _markers(t[t["pnl"] > 0], "exit_time", "exit_price", "exit (win)", "x", _UP, size=8)
+        _markers(t[t["pnl"] <= 0], "exit_time", "exit_price", "exit (loss)", "x", _DOWN, size=8)
         return self
 
     # ---- build / show ----
@@ -134,10 +153,14 @@ class ResearchChart:
             trace.y = np.asarray(y)
             self.fig.add_trace(trace)
 
+    def _initial_range(self):
+        i0 = max(0, len(self.df) - self.initial_bars)
+        return self.df[self.time_col].iloc[i0], self.df[self.time_col].iloc[-1]
+
     def _build_candles(self):
         if not self.candles:
             return
-        x0, x1 = self.df[self.time_col].iloc[0], self.df[self.time_col].iloc[-1]
+        x0, x1 = self._initial_range()   # candles at native resolution for the opening window
         agg = _aggregate_candles(self.df, x0, x1, time_col=self.time_col, target=self.candle_target)
         self.fig.add_trace(go.Candlestick(
             x=agg[self.time_col], open=agg["open"], high=agg["high"], low=agg["low"],
@@ -162,11 +185,13 @@ class ResearchChart:
 
     def show(self):
         if not self._built:
-            # add a resampled close line as the always-present backbone (carries zoomed-out view)
+            # resampled close line = zoomed-out backbone (thin, so candles read as primary)
             self._add_hf(go.Scattergl(name="close", mode="lines",
-                         line=dict(width=1.0, color=_PRICE)),
+                         line=dict(width=0.8, color=_PRICE), opacity=0.5),
                          self.df[self.time_col], self.df["close"])
             self._build_candles()
+            x0, x1 = self._initial_range()
+            self.fig.update_xaxes(range=[x0, x1])   # open zoomed to the recent window
             self._built = True
         return self.fig
 
