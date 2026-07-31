@@ -16,6 +16,12 @@ question asks about is a parameter, so a single sweep can answer "which variant 
   exit_mode    : 'opposite' (flip when price crosses back), 'none' (rely on SL/TP from cfg),
                  'ha_flip' (exit on first opposite Heikin-Ashi candle),
                  'below_ema' (exit when a full candle forms beyond a shorter `exit_ema`)
+  one_entry_per_cross: fire the entry only ONCE per EMA-cross episode (on the bar the full entry
+                 condition — ema-state + confirm_color + HTF bias — first holds), then stay
+                 disarmed until a candle FULLY forms on the opposite side of the entry EMA (high <
+                 EMA for long, low > EMA for short) — merely touching the EMA does NOT re-arm it.
+                 Turns the 'state' entry_modes (close/full_candle) into a hysteresis trigger so a
+                 closed trade does not immediately re-enter while price stays beyond the EMA.
 
 `prepare()` also adds swing levels (`swing_last_low/high`) so ref_col structure stops work out of
 the box, and ATR (`atr_14`) for ATR-based experiments.
@@ -49,6 +55,11 @@ class EmaCross(Strategy):
     htf_ema: Optional[int] = None
     exit_mode: str = "opposite"        # opposite | none | ha_flip | below_ema
     exit_ema: Optional[int] = None     # shorter EMA for exit_mode="below_ema"
+    one_entry_per_cross: bool = False  # fire the entry only ONCE per EMA-cross episode: on the
+                                       #   bar the entry condition first turns true, then re-arm
+                                       #   only after it goes false again (price returns to/through
+                                       #   the entry EMA). Prevents immediate re-entry while price
+                                       #   stays beyond the EMA after a trade closes.
     swings_left: int = 12
     swings_right: int = 12
 
@@ -109,6 +120,13 @@ class EmaCross(Strategy):
                 hcol = f"{self.htf}__ema_{int(self.htf_ema)}"
                 bias = S.above(df, c, hcol) if side_long else S.below(df, c, hcol)
                 trig = S.all_of(trig, bias)
+            if self.one_entry_per_cross:
+                # One entry per EMA-cross episode: fire the first bar the FULL entry condition
+                # (ema-state + color + HTF bias, all above) holds; then stay disarmed until a
+                # candle fully forms on the OPPOSITE side of the entry EMA (not merely touching
+                # it) — i.e. high < EMA (long) / low > EMA (short) on a single bar.
+                reset_ready = S.below(df, hi, ema_col) if side_long else S.above(df, lo, ema_col)
+                trig = S.arm_reset_trigger(trig, reset_ready)
             return trig
 
         def exit_(side_long: bool):

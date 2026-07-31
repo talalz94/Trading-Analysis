@@ -16,6 +16,14 @@ from typing import Sequence, Union
 import numpy as np
 import pandas as pd
 
+try:
+    from numba import njit
+except Exception:  # pragma: no cover
+    def njit(*a, **k):
+        def w(f):
+            return f
+        return w(a[0]) if a and callable(a[0]) else w
+
 Ref = Union[str, float, int, pd.Series, np.ndarray]
 
 
@@ -188,6 +196,74 @@ def refs_ordered(df, refs: Sequence[Ref], *, descending: bool = True) -> np.ndar
     for i in range(len(arrs) - 1):
         out &= (arrs[i] >= arrs[i + 1]) if descending else (arrs[i] <= arrs[i + 1])
     return out
+
+
+# --- edges -------------------------------------------------------------------
+
+def becomes_true(mask: np.ndarray) -> np.ndarray:
+    """Rising edge of a boolean mask: True only on the bar it FIRST turns True.
+
+    `out[i] = mask[i] and not mask[i-1]` (the bar before the start counts as False). Use this to
+    fire a signal once per episode instead of every bar the condition holds — e.g. one entry per
+    'price fully above the EMA' run, re-arming only after the mask goes False again (price returns
+    to/through the EMA).
+    """
+    m = np.asarray(mask, bool)
+    out = m.copy()
+    out[1:] &= ~m[:-1]
+    return out
+
+
+@njit(cache=True)
+def _arm_reset_trigger(fire_ready: np.ndarray, reset_ready: np.ndarray) -> np.ndarray:
+    n = fire_ready.shape[0]
+    out = np.zeros(n, dtype=np.bool_)
+    armed = True
+    for i in range(n):
+        if armed and fire_ready[i]:
+            out[i] = True
+            armed = False
+        elif not armed and reset_ready[i]:
+            armed = True
+    return out
+
+
+def arm_reset_trigger(fire_ready: np.ndarray, reset_ready: np.ndarray) -> np.ndarray:
+    """Stateful one-shot trigger with hysteresis: starts ARMED; the first bar `fire_ready` is
+    True while armed, it fires and goes DISARMED; while disarmed, the first bar `reset_ready` is
+    True re-arms it (without firing that bar). Unlike `becomes_true`, the re-arm condition is
+    independent of the fire condition — e.g. fire on 'N candles fully above the EMA', but only
+    re-arm on 'a candle fully forms below the EMA' (not merely touching it in between).
+    """
+    fr = np.ascontiguousarray(np.asarray(fire_ready, dtype=np.bool_))
+    rr = np.ascontiguousarray(np.asarray(reset_ready, dtype=np.bool_))
+    return _arm_reset_trigger(fr, rr)
+
+
+@njit(cache=True)
+def _latch(set_mask: np.ndarray, reset_mask: np.ndarray) -> np.ndarray:
+    n = set_mask.shape[0]
+    out = np.zeros(n, dtype=np.bool_)
+    on = False
+    for i in range(n):
+        if reset_mask[i]:          # reset wins on ties: a bar that both sets and resets ends OFF
+            on = False
+        elif set_mask[i]:
+            on = True
+        out[i] = on
+    return out
+
+
+def latch(set_mask: np.ndarray, reset_mask: np.ndarray) -> np.ndarray:
+    """SR latch: output is True from the bar `set_mask` fires until `reset_mask` fires (inclusive
+    of the set bar, exclusive of the reset bar). Reset wins when both fire on the same bar. Use it
+    to make one rule eligible only after another has happened this 'episode' — e.g. a secondary
+    entry that stays available from the first primary breakout until price fully drops back below
+    the trend EMA (the reset).
+    """
+    sm = np.ascontiguousarray(np.asarray(set_mask, dtype=np.bool_))
+    rm = np.ascontiguousarray(np.asarray(reset_mask, dtype=np.bool_))
+    return _latch(sm, rm)
 
 
 # --- boolean combinators -----------------------------------------------------

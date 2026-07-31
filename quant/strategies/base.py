@@ -29,10 +29,15 @@ class Strategy(ABC):
     name: str = "strategy"
 
     # Universal optional time filters (applied to ENTRIES only).
+    # ALLOW-lists — say what to KEEP:
     session: Optional[str] = None                 # 'london' | 'newyork' | 'tokyo' | 'sydney'
-    hours: Optional[Tuple[int, int]] = None       # (start_hour, end_hour) local to `time_col` tz
+    hours: Optional[Tuple[int, int]] = None       # (start_hour, end_hour), one contiguous window
     weekdays: Optional[Tuple[int, ...]] = None    # 0=Mon .. 6=Sun
     avoid_weekends: bool = False
+    # BLOCK-lists — say what to EXCLUDE. Arbitrary/non-contiguous sets, which `hours` cannot express.
+    block_hours: Optional[Tuple[int, ...]] = None       # e.g. (12, 16, 18) -> no entries in those hours
+    block_weekdays: Optional[Tuple[int, ...]] = None    # e.g. (5, 6) -> no entries Sat/Sun
+    block_times: Optional[Tuple[Tuple[str, str], ...]] = None  # (("13:30","14:15"), ("20:00","20:30"))
     filter_tz: Optional[str] = None               # evaluate filters in this tz (else the t-col tz)
 
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -55,6 +60,13 @@ class Strategy(ABC):
             masks.append(S.weekday_in(df, self.weekdays, time_col=time_col, tz=self.filter_tz))
         if self.avoid_weekends:
             masks.append(S.not_weekend(df, time_col=time_col, tz=self.filter_tz))
+        # block-lists: keep everything EXCEPT these
+        if self.block_hours:
+            masks.append(~S.hour_in(df, self.block_hours, time_col=time_col, tz=self.filter_tz))
+        if self.block_weekdays:
+            masks.append(~S.weekday_in(df, self.block_weekdays, time_col=time_col, tz=self.filter_tz))
+        if self.block_times:
+            masks.append(~S.in_any_times(df, self.block_times, time_col=time_col, tz=self.filter_tz))
         if not masks:
             return None
         return S.all_of(*masks)
@@ -66,8 +78,13 @@ class Strategy(ABC):
         if mask is not None:
             el = np.asarray(sig.entry_long, bool) & mask
             es = None if sig.entry_short is None else (np.asarray(sig.entry_short, bool) & mask)
+            # Preserve any per-rule leg arrays (unaffected by the entry mask: a masked-out entry
+            # simply never opens, so its leg index is moot).
             sig = Signals(entry_long=el, exit_long=sig.exit_long,
-                          entry_short=es, exit_short=sig.exit_short)
+                          entry_short=es, exit_short=sig.exit_short,
+                          entry_leg_long=sig.entry_leg_long, entry_leg_short=sig.entry_leg_short,
+                          exit_legs_long=sig.exit_legs_long, exit_legs_short=sig.exit_legs_short,
+                          stop_specs=sig.stop_specs)
         return sig
 
     def params(self) -> dict:

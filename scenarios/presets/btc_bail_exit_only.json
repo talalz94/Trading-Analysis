@@ -1,0 +1,41 @@
+{
+  "name": "btc_bail_exit_only",
+  "scenario": "support_break_short@v1.2",
+  "stop": "leg_high@v1",
+  "tp": "none@v1",
+  "secondary": "profit_candle_bail@v1",
+  "params": {
+    "entry_mode": "break_close",
+    "break_mode": "close_below",
+    "prev_low_n": 20,
+    "confirm_red": 2,
+    "grad_period": 200,
+    "grad_smooth": 9,
+    "grad_lookback": 5,
+    "grad_max": 0.0,
+    "stop_buffer_pct": 0.05,
+    "stop_max_risk_pct": 0.0,
+    "stop_pct": 0.6,
+    "stop_above_ema_only": false,
+    "sec_opp_n": 1,
+    "candle_src": "real",
+    "sec_touch": true
+  },
+  "cfg": {
+    "initial_cash": 10000,
+    "spread": 0.0,
+    "sizing_mode": "risk_pct_equity",
+    "sizing_value": 1.0,
+    "allow_leverage": true
+  },
+  "data": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "start": "2026-07-10",
+    "end": "2026-07-29",
+    "source": "binance",
+    "market": "spot",
+    "tz": "UTC"
+  },
+  "description": "Support-break short exited solely by the in-profit bail-out rule."
+}

@@ -6,7 +6,281 @@
 > Keep this current; it is the running memory of the project.
 
 ## Current state (2026-07)
-- Repo: https://github.com/talalz94/Trading-Analysis · branch `main`. **40 tests pass** (`pytest tests/`).
+- Repo: https://github.com/talalz94/Trading-Analysis · branch `main`. **121 tests pass** (`pytest tests/`).
+
+## Parked ideas — DO NOT ACTION YET (user will return to these)
+> Captured 2026-07-27 at the user's request ("store these, don't work on them yet"). Three threads.
+
+**1 — Manually backtrack & refine the support-break scenario/configs against a specific BTC window.**
+Review `support_break_short@*` + the stop/TP configs (see the 2026-07-26 entry below) by eye, walk the
+trades bar-by-bar, and refine them for the reference chart the user sent:
+- **Reference chart:** BTCUSD **Coinbase, 1-minute**, window ≈ **13:30 → 20:15** (tz unstated on the
+  screenshot), price band ≈ **64,480–65,520**, last price ~65,151. Shape = a long **range ~64,600–64,720
+  until ≈17:15**, then a **strong impulsive up-swing 17:15 → 19:15** to ~65,500, then a **rollover/pullback
+  into 20:15**. (This is a LONG-swing chart — note our scenario is short-only, so refining here may mean
+  building the long mirror or judging where a short would/wouldn't have fired.)
+- Chart overlays present (for context / possible replication): **Colored EMA/SMA (9, 200)**,
+  **MA Shift [ChartPrime] (EMA, 40, hl2, 15, 0.5)** as the bottom histogram, plus manual arrows /
+  trendlines / horizontal rays / S-R text.
+- Goal: does the setup fire where a human would draw it? Tighten entry/stop/TP params to match.
+
+**2 — Adaptive "when to get out of a caught swing" exit (trade management).** Once a good swing is
+caught, choose the exit *adaptively*:
+- pick the **trail EMA by the steepness / ROC of price (or of momentum)** — steeper move → faster EMA,
+  shallower → slower EMA (ride longer);
+- and/or **exit after N opposite-colour candles**, allowing a **larger % give-back the bigger the
+  favourable move was** (asymmetric pullback tolerance scaled to the move captured).
+- Belongs as new versioned `TPMethod`s in `quant/scenarios/takeprofits.py` (e.g. `roc_trail_ema@v1`,
+  `asym_pullback@v1`); may need an ROC/steepness helper indicator. Ties to the `trailing`/`n_green_exit`
+  family already built.
+
+**3 — Test the 2 screenshot indicators, alone and in combos.** The two TradingView indicators shown:
+- **Colored EMA/SMA (9, 200)** — a colour-by-slope MA overlay (the green/red/orange fast+slow lines).
+- **MA Shift [ChartPrime] (EMA, 40, hl2, 15, 0.5)** — the bottom-pane teal/orange histogram (price-vs-
+  shifted-MA deviation / momentum). Needs a faithful port (like SQZMOM/WaveTrend in `indicators/momentum.py`).
+- Test **each alone**, then **in combo with WaveTrend (WT) + Squeeze (SQZMOM)** and/or **price structure**
+  (HH/HL, S/R zones, 200-EMA). Likely a new notebook + faithful indicator port(s), reusing `studies_figure`.
+
+### 2026-07-30 — Divergence lag quantified; ADAPTIVE (ZigZag) structure beats the fractal
+
+Measured on BTC 1m, 2026-05-01 -> 2026-07-29 (128,161 bars).
+
+**Divergence lag == `right` exactly. `left` is FREE** (those bars are already history), so an
+asymmetric pivot keeps significance at minimal delay. Smaller `right` also produces MORE signals —
+lag and noise trade off directly:
+
+| left | right | lag | signals |
+|---|---|---|---|
+| 10 | 1 | 1 | 1727 |
+| 10 | 2 | **2** | 1523 |
+| 10 | 5 | 5 | 1379 |
+| 10 | 10 | 10 | 1034 |
+
+BUG FIXED: `scenario_figure` derived the divergence pivot from `struct_lr // 2`, so `STRUCT_LR=10`
+silently forced a 5-bar lag the user never chose. Now explicit via `div_left` / `div_right`.
+
+**Zero-lag IS possible but costs ~47% false positives.** `add_rsi_divergence_realtime` fires on the
+running extreme vs the last confirmed swing — no lookahead, appears on the bar it becomes true.
+Provisional **4300** signals vs **1523** confirmed; only **53%** are ratified by a confirmed
+divergence within 15 bars. Frame it as an early warning, never as a better detector. There is no
+lag-free AND accurate option — confirming a pivot requires future bars by definition.
+
+**Structure: ATR-scaled ZigZag (directional-change events) is the right adaptive method.** Surveyed
+fixed fractals, ATR/%-threshold ZigZag, efficiency-ratio adaptive lookbacks, and Perceptually
+Important Points (offline only — not causal, unusable here).
+
+| method | pivots | mean lag | max lag | up/down/side % |
+|---|---|---|---|---|
+| fractal lr=5 | 19,563 | 5.0 | 5 | 21 / 40 / 40 |
+| fractal lr=10 | 9,994 | 10.0 | 10 | 21 / 40 / 39 |
+| fractal lr=20 | 5,023 | 20.0 | 20 | 22 / 38 / 40 |
+| **zigzag 1.5xATR** | 24,988 | **1.8** | 14 | 31 / 33 / 36 |
+| **zigzag 2.5xATR** | 12,838 | **3.6** | 27 | 31 / 33 / 36 |
+
+`zigzag 2.5xATR` gives MORE pivots than `fractal lr=10` at ~1/3 the lag. Lag at 1.5xATR: median **1**,
+p75 2, p95 4 bars — short on sharp reversals, longer in chop (correct: chop shouldn't manufacture
+structure). Regime split is also more balanced than the fractal's.
+-> `add_zigzag_structure(df, atr_mult=...)` in `indicators/structure.py`; it is now the chart default
+(`struct_method='zigzag'`). The fractal path stays for comparison.
+
+### 2026-07-29 — THE ENTRY ITSELF HAS NO EDGE (the root cause of everything above)
+
+Prompted by the right question from the user: *"the main driver of the profits should be the main
+logic — or are you just looking at the secondary scenario results?"* Correct challenge; every test
+until now measured entry+stop+exit **bundles**. Isolated the entry two ways, no stop and no target.
+
+**Test 1 — drift-adjusted mean forward return.** For every raw entry signal (from `compose()`, so all
+signals, not just those that became trades), forward move signed for a short, in ATR units, minus the
+same statistic over all bars in that window (= the drift). `support_break_short@v1.2`:
+- BULL +26%: edge **+0.08 … +0.36** ATR across horizons
+- BEAR1 −24%: edge **−0.02 … −0.66** ATR  ← *negative*
+- BEAR2 −28%: edge **−0.68 … +0.10** ATR (mixed)
+Sign flips by regime; |t| never clears noise (max 2.15 across 54 cells tested, and those t-stats are
+optimistic because the forward windows overlap).
+
+**Test 2 — post-signal PATH (the fair test for a trailing exit).** A trailing stop harvests trending
+behaviour, not mean forward return, so also measured the 60-min forward path: Kaufman efficiency of
+the path after a signal vs a random-bar baseline, and MFE/MAE excursion asymmetry.
+- **Efficiency delta ≈ 0.000 … 0.004 in every window for both v1.0 and v1.2.** The path after a
+  signal is *exactly as choppy* as a random moment. **A trailing stop has nothing extra to harvest.**
+
+**Conclusion: the entry contributes no measurable predictive power.** That is *why* exit choice
+dominated every earlier result — when the exit rule explains the P&L, it means the entry does not.
+Leverage multiplies zero edge to zero.
+
+**The one consistent signal in the whole analysis — and it says we optimised the WRONG version.**
+`support_break_short@v1.0` (the S/R-zone version) is the only piece with a consistent sign across all
+three independent regimes:
+- drift-adjusted 5-min edge **+0.068 / +0.038 / +0.037** ATR (BULL / BEAR1 / BEAR2) — all positive
+- MFE/MAE excursion delta **+0.127 / +0.031 / +0.074** — all positive (ratio 1.04–1.09 vs base 0.95–1.02)
+All of notebooks 10–12 tuned **v1.2** (no-structure). v1.2's own numbers flip sign by regime.
+Effect size is small (~0.05 ATR ≈ $2/unit on BTC vs ~$6/unit round-trip at 0.7bp), so it likely does
+not clear costs as-is — but if anything here is worth pursuing, it is v1.0, and the direction is
+**fewer, higher-conviction entries** (it currently fires ~8–10/day), not more exit tuning.
+
+### 2026-07-29 — Time-of-day / day-of-week: HOURS ARE NOISE, WEEKDAY PERSISTS
+
+BTC 1m, 2025-01-01 → 2026-07-29 (826,561 bars). New module `quant/analytics/timing.py` +
+`notebooks/12_time_of_day.ipynb` (`ROLL_FREQ` = the rolling cadence: 'M'/'Q'/'2W').
+
+**Hour-of-day is NOT tradeable — do not build an hour blocker.** Four independent checks agree:
+- Efficiency ratio (chop) by hour spans only **0.1127–0.1375** (22% relative); *every* hour is choppy.
+- Best/worst hours **disagree across timeframes**: 1m best `[21,11,1,9]` vs 15m best `[23,6,8,19]`
+  (no overlap); hour 3 is 1m-worst but 5m-best. Only hour **18** is bad on all three.
+- **Quarter-to-quarter rank correlation of the hourly means: mean rho = −0.030** (5 of 6 negative,
+  all p > 0.30). The ranking reshuffles every quarter.
+- **Walk-forward blocking the prior quarter's worst 6 hours helped in 2 of 6 quarters** — worse than
+  a coin flip. Strategy level: bear-vs-bull hourly rank correlation +0.217 (p = 0.308); only **4 of
+  24** hours positive in both regimes, *below* the ~6 expected by chance.
+
+**Day-of-week DOES persist (weak but real).**
+- Weekday rank correlation quarter-to-quarter: **mean rho = +0.315**, all six ≥ 0 (0.75, 0.61, 0.21,
+  0.21, 0.11, 0.00) — a clear contrast with the hourly −0.030.
+- **Sunday is positive in 7 of 7 quarters** (mean follow-through +0.162 ATR vs ~0.02–0.05 for other
+  days). Sign test p ≈ 0.008; t-test p = 0.047 (NOT significant after Bonferroni for 7 tests, 0.0071).
+  Suggestive, not proven. Saturday is the weakest (3/7 positive, mean −0.022).
+- Weekday filters on the strategy (spread 6.0, bear/bull): `all days` +0.107/−0.059 →
+  `Mon+Thu+Sun` **+0.194/+0.177**, `Sun only` +0.167/+0.613, `exclude Sat` +0.135/+0.002.
+  **CAVEAT: those day-sets were chosen after looking at the full sample, so the "bull" column is not
+  a clean OOS test.** Only Sunday has independent support (picked on 7/7 sign consistency in the
+  direction-agnostic measure, not on strategy PnL).
+
+**Gotcha:** by-weekday stats of an *unfiltered* run ≠ running *with* a weekday filter — with
+`max_open_trades=1`, blocking other days frees the slot so a different trade set is taken (Sunday was
+−0.063R unfiltered but +0.167R as `Sun only`). Always re-run with the filter applied.
+
+#### ...and the clean OOS test REFUTED it. Weekday filtering does NOT work.
+Pre-registered protocol — select on **TRAIN 2025** only, evaluate on **TEST 2026-01→07** untouched;
+control = score **all 127** non-empty weekday subsets on TEST (so regime cancels out).
+- **Both selection rules made things worse.** ALL DAYS `expR +0.0721, +36.8%` →
+  Rule A (`Mon+Thu+Fri+Sat+Sun`, picked on follow-through) `+0.0345, −0.6%`;
+  Rule B (`Mon+Tue+Thu+Sun`, picked on train expectancy) `+0.0376, +2.5%`.
+- **Both landed in the BOTTOM ~15% of all 127 subsets** (rank 110/127 and 107/127, where 1 = best;
+  random would be ~64). Median subset `+0.0960`. So the trained picks were *worse than choosing days
+  at random*.
+- **Per-day sign flips: 5 of 7.** Train→test rank correlation **rho = −0.143 (p = 0.76)**.
+  **Sunday: train rank 1 (+0.542) → test rank 6 (−0.013).** **Wednesday: train rank 6 (−0.224) →
+  test rank 2 (+0.306).** Only Mon (and weakly Tue) kept its sign.
+- Subsets containing Sunday averaged `+0.0721` vs `+0.1396` without it — including Sunday *hurt*.
+
+**Correction to the entry above:** the +0.315 quarter-to-quarter persistence was real *in the
+direction-agnostic follow-through metric*, but it does **not** translate into a tradeable weekday
+filter. Sunday's 7/7 quarterly consistency did not survive contact with an unseen period. Treat both
+hour-of-day and day-of-week filtering as CLOSED — negative results, do not revisit without a
+materially longer history and this same OOS + all-subset control protocol.
+
+**Method to reuse:** measure direction-agnostically (efficiency ratio, EMA follow-through in ATR
+units) so market drift can't fake a result → rank-correlate consecutive periods → walk-forward the
+blocking rule → only then check the strategy in a regime the buckets weren't chosen from.
+
+### 2026-07-29 — 1-year validation of the support-break shorts: NO ROBUST EDGE FOUND
+
+Tested the notebook-10/11 exit variants on **BTC 1m, 2025-07-29 → 2026-07-29** (525,601 bars).
+Result: **the apparent winners are regime beta and/or die on costs.** Record this before re-running
+the same experiments.
+
+- **The window was a bear market: BTC −45.8%** (117,989 → 63,983). Everything here is **short-only**
+  (`Scenario.side = 'short'` for all `support_break_short` versions), so a passive 1× short would have
+  made ~+45.8%. Any short-only result in this window must be compared against that, not against zero.
+- **SIZING BUG in my own test harness (watch for it):** `allow_leverage=True` is *not* enough —
+  `max_notional_pct` defaults to **100**, which re-caps notional at ~1× equity. With a 0.25%-wide stop
+  the realised risk was **0.25%**, not the configured 1%, and `ret_pct`/`sharpe`/`dd` were meaningless
+  while `R` stayed valid. Set `max_notional_pct` high (e.g. 5000) for risk-based sizing to bind. Same
+  75.5R went from **+0.1% to +56.7%** once uncapped.
+- **Full year (correct sizing), ranked by expectancy:** trailing 2% `0.188R`, trailing 1% `0.136R`,
+  rr3R `0.054`, rr2R `0.054`, bail-shaky `0.031`, bail-profit-candle `0.025`, rr1R `0.003`.
+- **Split-half:** trailing is stable across both (bear) halves; **`bail: shaky` is NEGATIVE in H1**
+  (−0.009R, −21.7%) and positive in H2 (+0.074R) — unstable.
+- **OUT-OF-SAMPLE REGIME (2025-01-01 → 2025-07-29, BTC +26.0%): everything collapses.**
+  trailing 2% `−0.079R` (−53.7%), bail-shaky `−0.041R`, trailing 1% `−0.036R` (−42.9%), rr2R
+  `−0.020R`. Only `bail: profit candle` stayed positive (`+0.008R`, +10.6%). **So the trailing
+  variants are directional beta, not edge.**
+- **COSTS KILL THE BAIL RULES.** All the above ran at `spread=0`. At `spread=6.0` price units
+  (**~0.7 bp**, deliberately optimistic) `bail: profit candle` goes **−0.0067R** in the bear year and
+  −0.0225R in the bull. Its average win is only **0.25R** over ~2,600 trades, so it cannot absorb any
+  friction. `trailing 1%` survives costs (+0.107R at 6.0) — but only in the bear window.
+- **Refinement attempt (stricter down-gradient gate `grad_max` × `trail_pct`, spread 6.0):** exactly
+  **1 of 10** cells was positive in both regimes (`grad_max=-0.05, trail_pct=2.0`: bear +0.055, bull
+  +0.110) — but its neighbours flip sign (`-0.05/1.0` → bear −0.002; `-0.10/2.0` → bull −0.030).
+  An isolated cell in a noisy grid is an overfit, not a discovery. **Do not trust it without a
+  proper walk-forward.**
+
+**Conclusion / next direction:** the binding constraint is that the family is **short-only**, so it
+inherits market direction. Worth trying before more parameter tuning: (a) build the **long mirror**
+(resistance-break-long) so both sides can trade; (b) a **higher-timeframe regime filter** (MTF EMA
+bias) so shorts only fire in a confirmed downtrend — `grad_max` is a weak, same-timeframe proxy for it.
+
+### 2026-07-29 — Scenario round 2: stop lag, level B, secondary rules
+
+**GOTCHA worth remembering — pivot stops lag by construction.** User ran
+`support_break_short@v1.2 + swing_high@v1 + rr@v1` on BTC 1m 2026-07-28 and asked why the stop sat so
+far above the entry. Reproduced: entry bar 237 (`03:57`, 63284.60), `swing_last_high` = **63375.39**
+(the `03:44` high), `× 1.0005` buffer → stop **63407.08**. Cause: `stop_swing_lr=12` means a pivot
+needs **12 bars of confirmation to its RIGHT**, so the newest usable swing is always ≥12 bars old —
+the nearer high (`03:55`, 63336.70) only confirmed at bar 238, *one bar after* the entry. **Lowering
+`lr` does NOT fix this** (verified: `prev_high@v1` with `lr=3` returns the identical 63407.08). Any
+pivot level has this property; it is anti-lookahead working correctly.
+→ Fix = a lag-free definition. New **`leg_high@v1`**: running max of `high` since price last closed
+below the EMA line (episode-restarted `cummax`), optional `stop_above_ema_only`. On that trade it
+gives **63373.05** (~34 pts tighter), cutting the loss from -19.35 to -13.98. `high_of_n@v1` is the
+other lag-free option.
+
+**Level B is now a first-class column.** Each version writes `break_level_raw` (the live candidate)
+and `break_level` (**latched at the first break of the episode**). The latch matters: an S/R support
+steps DOWN to the next zone the instant price closes through it, so the live value stops naming the
+level that actually broke — which is also why `break_mode='full_below'` returned 0 trades before
+latching. `scenario_figure` draws it per trade (amber dashed, own legend group).
+`break_mode = close_below` (default, the original rule) `| full_below`. Optional, default-off
+`break_min_ema_dist_pct` / `break_max_ema_dist_pct` gate level B on its distance from the EMA line —
+the notebook's level-B audit table prints that distance so thresholds can be chosen from real trades.
+
+**Secondary rules = the 4th composable piece** (`quant/scenarios/secondaries.py`). Needed a real
+kernel feature: "armed since THIS trade opened" is per-trade path-dependent state a global signal
+array can't express. `Signals.exit_arm_*` / `exit_alt_*` + per-trade `o_armed`; arming is evaluated
+before entries open, so **a trade arms only from the bar AFTER its entry** and can't inherit arming
+from before it existed. Once armed, `exit_alt_*` closes it **only while in profit** (close reason
+`alt_exit`). `sec_replace_tp` additionally drops the TP ladder for armed trades (stop/trailing never
+affected). All flag-guarded → runs without a secondary are byte-identical (golden tests green).
+`shaky_trend_bail@v1` turned the 63407 stop-out above into an `alt_exit` at 63269.30, in profit.
+
+**Also:** `opposite_candle@v1` TP ("ride it while candles stay red, bail on the first green");
+`candle_src='real'|'ha'` threaded through every candle test in the scenarios; `scenario_figure`
+title/legend no longer overlap (title 14–34px, legend 79–99px, plot starts at 110px);
+`zone_top@v1` now uses `break_level`, and `next_zone@v1` adds S/R zones itself — so every
+stop×TP×scenario combination is runnable.
+
+**Env gotcha:** the registered Jupyter kernels are **Python 3.9 / 3.10** while the project runs on
+**3.13** — `nbconvert --execute` fails on old pandas. Notebook 10 was verified by executing its code
+cells under the 3.13 interpreter instead. Registering a 3.13 kernel would fix this properly.
+
+### 2026-07-26 — Scenario framework + EMA-gradient (earlier session)
+- **`quant/scenarios/`** — new package: a run = **`Scenario` × `StopMethod` × `TPMethod` × params**,
+  each `name@version`, registered, bundled into a **`Preset`** (JSON in `scenarios/presets/`,
+  reloadable on any symbol/TF). `run_pieces(df, scen, stop, tp, params=…, cfg=…)` / `run(preset)` →
+  `ScenarioRun`. Built on the existing engine + `RuleStrategy` (one-per-episode short rule, re-arm
+  when price closes back above the EMA line) — **no kernel change, golden parity untouched.**
+  - Scenarios: `support_break_short@v1.0` (core: close below smoothed 200-EMA + support-zone break),
+    `v1.1` (+HH/HL structure into resistance), `v1.2` (no S/R: N red below EMA + prior-N-low break),
+    `v1.3` (nearest-trough support). `entry_mode = break_close|wait_n|n_red|pullback` (the user's Q2).
+  - Stops (Q1): `pct / swing_high / high_of_n / zone_top / atr`. TPs (Q3): `rr / fixed_pct / trailing /
+    n_green_exit / back_above_ema / next_zone / rr_partials`. Signal-TPs write `Signals.exit_short`;
+    cfg-TPs set `BacktestConfig`. **`zone_partials` (true absolute multi-zone partials) NOT built** —
+    would need a per-trade TP-ref kernel branch mirroring `sl_ref_short_col` (deferred).
+- **EMA-gradient indicator** `add_ema_gradient` (in `indicators/momentum.py`): `grad_line` =
+  EMA(smooth) of EMA(period) — the red-dotted trend line; `grad` = ATR-normalised slope (≈±0.15 on
+  BTC 1m; sign = trend direction, small threshold ≈±0.1 = flat). Scale is smaller than the
+  screenshot's ±1 TradingView oscillator — cosmetic only; the threshold is the knob.
+- **New conditions** (`strategies/conditions.py`): `broke_below_support` (close < prior-bar support),
+  `broke_above_resistance`, `broke_below_prev_low(n)`, `n_red_below(n, level)`.
+- **Viz** `quant/viz/studies.py`: `scenario_figure(run)` — one annotated chart (candles + EMA line +
+  causal S/R zones + entries/stops/exits + gradient pane + crosshair); `zoom_to_trade(fig, run, i)`.
+  **Notebook `10_scenario_lab`** drives it all (config → chart → zoom → variant sweep → save preset).
+- **Sweep read (recent BTC 1m, in-sample, one window):** shorts get stopped often — BTC was trending
+  UP, so this is the honest result and the chart shows why. Tight stops (atr/zone_top) → more trades,
+  higher Sharpe than wide swing-high stops; `atr@v1 + trailing@v1` was the best risk-adjusted combo
+  (~Sharpe 1.5). Not validated OOS; the point of this session was the **framework**, not an edge.
+
+### Earlier 2026-07
 - Package `quant/` + `experiments/` + `scripts/` + `notebooks/`. Legacy code removed.
 - Strategies (REGISTRY): `ema_ribbon, ema_cross, rsi_reversal, macd_trend, heikin_ashi, supertrend,
   mtf_trend, key_level`. **`EmaCross` is the workhorse** for EMA-variant research (every variant is a param).
@@ -85,3 +359,176 @@ python -m pytest tests/    # 40 pass
 python scripts/fetch_gold_dukascopy.py   # (re)fetch true spot XAU/USD, resumable
 jupyter lab notebooks/     # restart kernel after any quant/ code change
 ```
+
+---
+
+## Phase A findings — gold market character (Discovery 2024-06 → 2025-08, Dukascopy XAUUSD 1m)
+
+Cost model: spread 0.25 $/oz, slippage 1bp/side → **~2.9 bp round-trip** at price ~2740.
+
+1. **No cheap statistical edge.** Variance ratio ~0.94 (mild mean-reversion) across 5m–120m; lag-1
+   autocorr ≈ 0. Conditional-fade test: **no move-size bucket beats cost** — even top-1% extreme
+   moves revert only ~2.5 bp vs 2.9 bp cost, and signs are unstable across windows. High-frequency
+   momentum AND mean-reversion are both < cost. → naive RSI-fade / MA-scalp are out.
+2. **Fat tails exist and are harvestable.** After a new N-bar high, MFE ≈ MAE (no directional edge)
+   BUT **MFE > 2×cost in 68–86%** of cases (more at longer horizons); p90 MFE 31–64 bp. 60m-return
+   kurtosis 8.5. → the raw material for **breakout/trend-CAPTURE with trailing / RR-ladder exits**
+   is there; profitability must come from **exit design + selectivity**, not the entry's mean edge.
+3. **Bull-market regime bias.** 58.8% of time above EMA200(15m) — gold rallied hard 2024–25.
+   Long-biased backtests are flattered by this; MUST validate OOS (2026 H1) + walk-forward, and
+   test SHORT side too. Median run on one side of EMA200 = ~60 min (whippy); p90 ~19h.
+4. **Negative skew (−0.47).** Sharper down-moves than up → short setups may have positive-skew
+   payoff; long trend-following faces occasional sharp reversals.
+5. **Session:** overlap 12–16 UTC = the big moves (avg 2.7 bp/bar) but near-random (VR 0.97);
+   afternoon/late (16–24 UTC) reverts more (VR 0.90 / 0.75) but too small to trade after cost.
+   Hourly directional drift negligible; no day-of-week edge.
+
+**Strategic pivot for Phase B:** de-prioritise high-frequency fade/scalp; prioritise **selective,
+low-frequency breakout/trend-capture on 5m/15m with trailing / RR-ladder exits** (harvest the fat
+right tail), S/R zones as entry/stop/target structure, HTF+session filters for selectivity, and
+**test both directions** while staying sceptical of the 2024–25 bull bias.
+
+## Phase B findings — trend/breakout capture family (EmaCross entry + exit matrix)
+
+- **3-month subset (2025 Q1) looked promising**: long trailing-trend-capture (EMA50, trail ~0.3%)
+  PF ~1.15-1.2, broad plateau. **Full 14-month Discovery killed it**: PF collapses to ~1.03-1.05.
+- **Per-quarter: best config positive in only 2/6 quarters** (wins in gold up-quarters, loses in
+  chop/down). Short side is a disaster (PF 0.7-0.8). It's inconsistent long-beta, not an edge.
+- Refinements that *did* matter: **5m > 1m**, **EMA100 > EMA50** → 5m/EMA100/trail0.4 reaches 5/6
+  positive quarters, PF 1.12, +10.5%, DD 5.9%. **HTF trend filters did NOT help** (removed trades
+  without improving quality).
+- **DECISIVE BENCHMARK:** vs buy-and-hold gold over Discovery (+48.2%, Sharpe 2.14), the best
+  strategy makes **+10.5%, Sharpe 1.11**, 76% time in market. **It underperforms holding on BOTH
+  raw and risk-adjusted terms.** → the trend-capture family is expensive diluted beta, not alpha.
+
+**Deeper problem:** Discovery (2024-06 → 2025-08) is a near-monotonic gold BULL (+48%). On such a
+sample, any long strategy just tracks the trend, any short loses, and **nothing intraday beats
+buy-and-hold** — the sample can't distinguish timing-alpha from beta. "Profitable" must be
+redefined as **beat buy-and-hold risk-adjusted** (or protect capital in the OOS/other regimes),
+which is a much harder and different target than a standalone positive backtest. Decision point
+before continuing.
+
+## Goal redefined (user decision)
+
+Beating buy-and-hold is OFF the table (impossible on a monotonic bull; can't distinguish alpha
+from beta). New target: a **controlled-risk absolute-return system** — market-neutral or
+capital-protection — judged on **Sharpe / Sortino / max-DD / consistency across quarters & OOS**,
+with positive expectancy NET of the 0.25 cost. Trade count can be low; selectivity + defined
+risk/reward is the path. First test: symmetric S/R (long at support, short at resistance, stop
+beyond the zone, RR target) — structural, defined-risk, not pure beta.
+
+## Phase B breakthrough — the edge lives at HIGHER timeframe (1h/4h)
+
+Testing genuinely different families first confirmed the cost wall intraday:
+- Symmetric S/R mean-reversion: PF 0.63-0.71, clear LOSER (bounce doesn't beat cost).
+- Opening-range breakout (NY): PF ~1.00, break-even net of cost (short side faintly +).
+→ At 0.25 cost (~2.9bp), NO intraday family beats cost.
+
+**But cost is a FIXED per-trade tax — negligible when a trade rides a multi-day move.** At 1h/4h,
+long trend-capture (EMA breakout + % trailing) works:
+- **4h EMA50 sl/trail 2%: Sharpe 3.22, PF 5.6, DD 3.4%, +19.3%, 6/6 quarters +, 22 trades.**
+- 1h EMA50 2%: Sharpe 2.79, PF 2.67, 6/6q. | 1h EMA20 1%: Sharpe 2.26, +29%, 119 trades, 6/6q.
+- vs buy-hold gold (Sharpe 2.14): these **beat it RISK-ADJUSTED** (higher Sharpe, DD 3-7% << gold's)
+  — satisfying the controlled-risk goal even though raw return (+19-29%) < buy-hold (+48%).
+
+**CAVEATS (must validate):** (1) still LONG-only / bull-dependent — short side loses badly; needs
+OOS (2026) + ideally a bear regime. (2) best configs have few trades (22-37) → overfit risk; prefer
+higher-trade 1h configs (~120 trades) for robustness. (3) Sharpe 3.2 on 22 trades likely optimistic.
+
+**Next:** focus Phase C on 1h/4h trend-capture — sweep the full exit matrix (trailing/RR/BE/
+time-stop) + a trend-regime filter, rank by consistency×Sharpe×trade-count, then Selection then
+lockbox OOS.
+
+## Phase C/F — FINAL VERDICT (the lockbox caught it)
+
+Phase C exit-matrix sweep on 1h/4h: huge robust plateau (179/215 configs Sharpe>1.5 & PF>1.3);
+winners = tight stop (1-2%) + RR-3 take-profit. Held on Selection (OOS#1, 2025-09→2026-01):
+PF 2.5-3.1, Sharpe ~5, DD ~7%. Looked like a validated controlled-risk edge.
+
+**Then the LOCKBOX (2026-02→06) — which is the ONE period gold FELL (-16.9%) — failed both frozen
+finalists:**
+- A (EMA50 tight+trail+RR3): -5.1%, PF 0.77, DD 13.5%  (risk mgmt limited the bleed)
+- B (EMA20 stop+RR3):        -19.3%, PF 0.50, DD 23.4%
+Cost stress (0.30) barely changes it — cost was never the issue at 1h.
+Walk-forward whole span: 8/10 quarters positive, but the 2 losers = the 2026 downturn quarters.
+
+**Conclusion:** what we found is well-risk-managed **long-only gold BETA**, not alpha. It makes money
+when gold rises (Discovery + Selection, both bull) and loses when gold falls (lockbox). The rigorous
+lockbox (a period the strategy was never tuned on, which happened to contain the regime shift)
+PREVENTED deploying a strategy that would have lost real money in 2026 — which every in-sample and
+Selection test missed. Config A's tight stop/trailing did contain the drawdown (-5% vs gold -17%),
+so risk management is real, but the entry is beta.
+
+**No validated regime-independent controlled-risk edge exists in this 2-year (mostly-bull) sample.**
+To build/validate one that survives bear+range REQUIRES the deeper Dukascopy history (2003-2024) —
+the option previously declined. Otherwise: treat any long-gold trend system as beta, size it as
+such, and do NOT trust bull-only backtests.
+
+## Deep-history verdict (2005-2026, 1h, all regimes) — DEFINITIVE
+
+Fetched Dukascopy XAUUSD 1h+4h back to 2005 (410 -> 4000, bull/bear/range).
+- **Trend-following (both directions), 22yr: net -6258, positive 8/22 yrs.** BULL +2276, RANGE -6504,
+  BEAR -2029. Shorts total -6900 — LOSE EVEN IN THE 2013 -28% CRASH. No trend edge exists at 1h.
+- **User's ride-the-EMA idea** (enter above EMA200, ride till cross under smaller EMA): PF 0.98-1.06.
+  The "low win-rate, win big" mechanic is real (30% win, big winners) BUT nets positive only via bull
+  (+5475 bull vs -2848 bear+range). Bull-beta.
+- **EMA-cross continuation base rate = 52% (coin flip).** A full EMA cross carries ~no directional
+  info net of cost. The "price always continues" intuition is false over 22yr.
+- **Adaptive macro-direction filter** (long above / short below daily EMA200): net +14875, PF 1.14,
+  but ALL from bull longs (+23634 bull; RANGE -7348, BEAR -1410; shorts still -8357). Concentrates
+  beta, doesn't create a regime-independent edge.
+
+**FINAL:** No profitable, regime-independent, controlled-risk intraday/short-swing gold strategy
+exists in 22 years at 0.25 cost. Every 'winner' is long-gold BETA that pays only in bull markets;
+shorts never work (gold spikes up, drifts down). The only honest artifact is a LONG-ONLY,
+macro-filtered (daily EMA200) trend overlay — a low-drawdown way to hold gold in uptrends, sized as
+beta, NOT alpha. Mean-reversion/scalping lose to the fixed cost. Adaptation cannot manufacture an
+edge that isn't in the data.
+
+## BREAKTHROUGH — conditional entry + let-winners-run (user was right to push)
+
+Aggregate tests said "no edge"; that was too COARSE. Slicing the EMA-cross continuation by context,
+with IS(2005-18)/OOS(2019-26) persistence, revealed durable pockets: US-pm(16-21) & Asia(0-7)
+sessions, macro-uptrend (EMA200 rising), higher-low structure — each small but OOS-persistent.
+Open-space/S-R proximity did NOT persist (data-mined).
+
+**The exit was the other half.** Same conditional entry, capping winners (RR2) → Sharpe 0.27,
+IS-negative. LETTING WINNERS RUN (trailing 2-2.5%) → the edge appears. Final strategy:
+
+  ENTRY (1h): 2 closes above EMA50  +  session in {US-pm 16-21, Asia 0-7}  +  EMA200 rising
+              +  higher-low structure (swing_last_low rising)   [one per episode, long only]
+  EXIT: 0.5% initial stop, 2.0-2.5% TRAILING stop (ride winners), no fixed TP.
+
+Full 2005-2026: **+503% (trail2%) / +720% (trail2.5%), PF 1.6-1.8, Sharpe 1.07-1.18, maxDD 25-29%,
+15/22 years positive.** Robust: trail 2/2.5/3% all work (plateau); positive IS AND OOS; positive in
+BULL(+44k) AND RANGE(+10k); only mildly negative BEAR(-4k, filter minimises exposure); survives
+spread 0.30; 68% of profit survives excluding 2025.
+
+HONEST CAVEATS: still LONG-only (a conditioned trend-capture, not market-neutral); Sharpe ~1.1 &
+DD ~26% = a real trend system, not a holy grail; 36% win rate (must stomach long losing streaks);
+session condition was selected on IS (mild bias, but IS/OOS/regime/plateau evidence is strong).
+Both of the user's instincts were correct: (1) condition by time/structure, (2) small win-rate/win-big.
+
+NEXT: formalise as a RuleStrategy + notebook; final walk-forward + lockbox; adaptive re-optimisation.
+
+## EMA-crossover sweep (Stage 1) — findings
+
+Swept fast×slow pairs (10-300) × TF(1m/5m/15m/1h/4h) × exit(opposite-cross vs trailing) × direction,
+cost 0.25, gold.
+- **Opposite-cross exit = dead everywhere** (whipsaw). Only TRAILING exits produce positives — the
+  exit does the work, not the crossover entry (consistent with all prior findings).
+- **Plain crossovers marginal**: best raw 1h 50x200+trail = PF 1.33, Sharpe 0.66. Short side loses
+  (gold). Long-only lifts it to PF 1.61.
+- **Session filter (US-pm 16-21 / Asia 0-7) is a robust improvement**: 1h 50x200 long+session+trail
+  -> PF 1.90, Sharpe 0.90, **DD 11.4%**, positive IS+OOS AND bull/range/bear. A PLATEAU of good 1h
+  pairs (50x100 PF1.86 Sh0.95 DD17; 50x200; 100x300 DD10.4; 20x100; 20x200) — not a spike.
+- **Candle-confirmation (2-green) OVER-filters** the crossover (it already implies momentum) -> kills it.
+- **Small TFs (1m/5m) show Sharpe 2.3+ but ONLY on the 2024-26 BULL sample** (no deep small-TF data)
+  -> treat as bull-beta, UNVALIDATED. 15m weak.
+
+**Best crossover strategy:** 1h EMA 50x100 or 50x200, LONG-only, US-pm|Asia session, 0.5-1% stop +
+2% trailing. Comparable to the earlier '2 closes>EMA50' strategy but LOWER drawdown (11-17% vs 25%).
+Session/time-of-day genuinely helps; short side and candle-confirm do not.
+
+NOT yet done: band-width / cut-through-rate, day-of-week, MTF-crossover (fast on 1TF vs slow on
+higher TF), adaptive walk-forward re-optimisation. Small-TF needs deep data to validate.

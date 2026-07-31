@@ -24,11 +24,35 @@ MAX_TP = 6  # maximum laddered take-profit levels per trade
 
 @dataclass
 class Signals:
-    """Precomputed boolean signal arrays (one per bar). Missing sides default to all-False."""
+    """Precomputed boolean signal arrays (one per bar). Missing sides default to all-False.
+
+    Per-rule ("leg") exits (optional): set `exit_legs_long`/`exit_legs_short` to a 2-D uint8 array
+    [n_legs, n_bars] (one exit column per rule) and `entry_leg_long`/`entry_leg_short` to an
+    int array [n_bars] naming which rule opens on each bar. The engine then closes each trade on
+    the exit of the rule that opened it. Leave them None for the standard shared-exit path.
+
+    Secondary ("alt") exit (optional): `exit_arm_*` ARMS an open trade — only on bars AFTER its own
+    entry bar (arming is evaluated before entries are opened, so a trade cannot arm on the bar it
+    opens, nor inherit arming from before it existed). Once armed, `exit_alt_*` closes it, but ONLY
+    while that trade is in profit. Use for "the trend went shaky — bail on the next opposite candle,
+    if we're green". Close reason is `alt_exit`. `alt_replace_tp` additionally drops the take-profit
+    ladder once armed (stop/trailing unaffected). Leave None for the standard path.
+    """
     entry_long: np.ndarray
     exit_long: Optional[np.ndarray] = None
     entry_short: Optional[np.ndarray] = None
     exit_short: Optional[np.ndarray] = None
+    entry_leg_long: Optional[np.ndarray] = None
+    entry_leg_short: Optional[np.ndarray] = None
+    exit_legs_long: Optional[np.ndarray] = None
+    exit_legs_short: Optional[np.ndarray] = None
+    stop_specs: Optional[list] = None      # per-leg StopSpec (or None) for per-rule stops
+    exit_arm_long: Optional[np.ndarray] = None    # arms the secondary exit (per open trade)
+    exit_arm_short: Optional[np.ndarray] = None
+    exit_alt_long: Optional[np.ndarray] = None    # fires the secondary exit (if armed AND in profit)
+    exit_alt_short: Optional[np.ndarray] = None
+    alt_replace_tp: bool = False   # once armed, drop the take-profit ladder (stop/trailing unaffected)
+    alt_arm_on_tp: bool = False    # reaching a TP level ARMS the trade instead of closing it
 
     def as_u8(self, n: int):
         def u8(a):
