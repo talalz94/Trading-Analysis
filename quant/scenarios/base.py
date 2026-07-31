@@ -326,6 +326,7 @@ def compose(df: pd.DataFrame, scenario: Scenario, stop: StopMethod, tp: TPMethod
     the entry/exit conditions are compiled on the fully-prepared frame.
     """
     p = merged_params(scenario, stop, tp, params, secondary)
+    p["_side"] = scenario.side          # stops / TPs / secondaries mirror themselves from this
     prepared = _prepare_mtf(df, p.get("mtf_emas"))
     prepared = scenario.prepare(prepared, p)
     prepared = stop.prepare(prepared, p)

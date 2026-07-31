@@ -27,6 +27,25 @@ from ..indicators import add_atr, add_swings
 from .base import StopMethod, register_stop
 
 
+def _side_of(p) -> str:
+    """'long' | 'short' — injected by compose() from the scenario. Stops MUST mirror: a short's stop
+    sits ABOVE entry on a high, a long's sits BELOW entry on a low."""
+    return p.get("_side", "short")
+
+
+def _ref(cfg, p, col, **kw):
+    """Point the config at `col` on the correct side."""
+    field = "sl_ref_long_col" if _side_of(p) == "long" else "sl_ref_short_col"
+    kw.setdefault("sl_fallback_mode", "entry_pct")
+    kw.setdefault("sl_fallback_value", float(p.get("stop_pct", 0.6)))
+    return dataclasses.replace(cfg, sl_mode="ref_col", **{field: col}, **kw)
+
+
+def _buf(p):
+    return dict(sl_buffer_pct=float(p.get("stop_buffer_pct", 0.05)),
+                sl_max_ref_risk_pct=float(p.get("stop_max_risk_pct", 0.0)))
+
+
 class _PctStop(StopMethod):
     name, version = "pct", "v1"
     description = "Tight fixed % stop from entry."
@@ -63,15 +82,13 @@ class _HighOfNStop(StopMethod):
     def prepare(self, df, p):
         out = df.copy()
         n = int(p["stop_n"])
-        out["stop_high_n"] = out["high"].rolling(n, min_periods=1).max()
+        out["stop_extreme_n"] = (out["low"].rolling(n, min_periods=1).min()
+                                 if _side_of(p) == "long"
+                                 else out["high"].rolling(n, min_periods=1).max())
         return out
 
     def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
-        return dataclasses.replace(
-            cfg, sl_mode="ref_col", sl_ref_short_col="stop_high_n",
-            sl_buffer_pct=float(p["stop_buffer_pct"]),
-            sl_max_ref_risk_pct=float(p.get("stop_max_risk_pct", 0.0)),
-            sl_fallback_mode="entry_pct", sl_fallback_value=float(p.get("stop_pct", 0.6)))
+        return _ref(cfg, p, "stop_extreme_n", **_buf(p))
 
 
 class _ZoneTopStop(StopMethod):
@@ -91,11 +108,7 @@ class _ZoneTopStop(StopMethod):
         return out
 
     def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
-        return dataclasses.replace(
-            cfg, sl_mode="ref_col", sl_ref_short_col="stop_zone_top",
-            sl_buffer_pct=float(p["stop_buffer_pct"]),
-            sl_max_ref_risk_pct=float(p.get("stop_max_risk_pct", 0.0)),
-            sl_fallback_mode="entry_pct", sl_fallback_value=float(p.get("stop_pct", 0.6)))
+        return _ref(cfg, p, "stop_zone_top", **_buf(p))
 
 
 class _LegHighStop(StopMethod):
@@ -110,23 +123,26 @@ class _LegHighStop(StopMethod):
         out = df.copy()
         line = out[f"{p.get('grad_prefix', 'grad')}_line"].to_numpy(dtype=float)
         close = out["close"].to_numpy(dtype=float)
-        high = out["high"].to_numpy(dtype=float)
+        long_side = _side_of(p) == "long"
+        px = out["low"].to_numpy(dtype=float) if long_side else out["high"].to_numpy(dtype=float)
         with np.errstate(invalid="ignore"):
-            below = close < line
-            vals = np.where(high > line, high, np.nan) if p.get("stop_above_ema_only") else high
-        # episode = a contiguous run of "price below the line"; the running max restarts on each one.
-        # Unlike a pivot high this needs NO right-hand confirmation, so it is usable the same bar.
-        ep = np.cumsum(below & ~np.r_[False, below[:-1]])
-        s = pd.Series(np.where(below, vals, np.nan))
-        out["leg_high"] = s.groupby(ep).cummax().groupby(ep).ffill().to_numpy()
+            # a LONG leg runs while price is ABOVE the line and tracks its running MIN (the low the
+            # move is built on); the SHORT leg is the mirror image.
+            active = (close > line) if long_side else (close < line)
+            if p.get("stop_above_ema_only"):
+                vals = np.where(px < line, px, np.nan) if long_side else np.where(px > line, px, np.nan)
+            else:
+                vals = px
+        # episode = a contiguous run on the active side; the running extreme restarts on each one.
+        # Unlike a pivot this needs NO right-hand confirmation, so it is usable the same bar.
+        ep = np.cumsum(active & ~np.r_[False, active[:-1]])
+        ser = pd.Series(np.where(active, vals, np.nan))
+        acc = ser.groupby(ep).cummin() if long_side else ser.groupby(ep).cummax()
+        out["leg_low" if long_side else "leg_high"] = acc.groupby(ep).ffill().to_numpy()
         return out
 
     def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
-        return dataclasses.replace(
-            cfg, sl_mode="ref_col", sl_ref_short_col="leg_high",
-            sl_buffer_pct=float(p["stop_buffer_pct"]),
-            sl_max_ref_risk_pct=float(p.get("stop_max_risk_pct", 0.0)),
-            sl_fallback_mode="entry_pct", sl_fallback_value=float(p.get("stop_pct", 0.6)))
+        return _ref(cfg, p, "leg_low" if _side_of(p) == "long" else "leg_high", **_buf(p))
 
 
 class _PrevHighStop(StopMethod):
@@ -145,22 +161,23 @@ class _PrevHighStop(StopMethod):
         high = out["high"]
         # pivot high = centre bar is the max of its window; only KNOWN `lr` bars later (anti-lookahead,
         # same convention as add_swings). Small `lr` -> a genuinely *recent* high.
-        ph = high.where(high == high.rolling(w, center=True, min_periods=w).max())
-        conf = ph.shift(lr)
+        long_side = _side_of(p) == "long"
+        if long_side:
+            low = out["low"]
+            piv = low.where(low == low.rolling(w, center=True, min_periods=w).min())
+        else:
+            piv = high.where(high == high.rolling(w, center=True, min_periods=w).max())
+        conf = piv.shift(lr)
         if p.get("stop_require_above_ema"):
-            # keep only pivots that sat ABOVE the EMA line at the pivot bar (for a short: the highs
-            # that actually poked through the trend line, not minor ones underneath it)
+            # keep only pivots that sat BEYOND the EMA line at the pivot bar (the extremes that
+            # actually poked through the trend line, not minor ones on the near side of it)
             line = out[f"{p.get('grad_prefix', 'grad')}_line"].shift(lr)
-            conf = conf.where(conf > line)
-        out["prev_high"] = conf.ffill()
+            conf = conf.where(conf < line) if long_side else conf.where(conf > line)
+        out["prev_pivot"] = conf.ffill()
         return out
 
     def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
-        return dataclasses.replace(
-            cfg, sl_mode="ref_col", sl_ref_short_col="prev_high",
-            sl_buffer_pct=float(p["stop_buffer_pct"]),
-            sl_max_ref_risk_pct=float(p.get("stop_max_risk_pct", 0.0)),
-            sl_fallback_mode="entry_pct", sl_fallback_value=float(p.get("stop_pct", 0.6)))
+        return _ref(cfg, p, "prev_pivot", **_buf(p))
 
 
 class _AtrStop(StopMethod):
@@ -171,13 +188,12 @@ class _AtrStop(StopMethod):
     def prepare(self, df, p):
         out = df.copy()
         a = add_atr(out, int(p["stop_atr_period"]))[f"atr_{int(p['stop_atr_period'])}"]
-        out["stop_atr"] = out["close"] + float(p["stop_atr_mult"]) * a
+        sign = -1.0 if _side_of(p) == "long" else 1.0
+        out["stop_atr"] = out["close"] + sign * float(p["stop_atr_mult"]) * a
         return out
 
     def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
-        return dataclasses.replace(
-            cfg, sl_mode="ref_col", sl_ref_short_col="stop_atr", sl_buffer_pct=0.0,
-            sl_fallback_mode="entry_pct", sl_fallback_value=float(p.get("stop_pct", 0.6)))
+        return _ref(cfg, p, "stop_atr", sl_buffer_pct=0.0)
 
 
 register_stop(_PctStop())
