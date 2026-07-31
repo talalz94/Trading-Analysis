@@ -94,6 +94,19 @@ def _leg_stop_args(signals, df, n, n_legs):
             np.ascontiguousarray(ref_long), np.ascontiguousarray(ref_short))
 
 
+def _session_ids(df, cfg, n):
+    """Per-bar session id for the daily loss cap. Uses `cfg.session_col` when given, else the calendar
+    day of the time column (so 'daily' means UTC day unless the frame is localised elsewhere)."""
+    if float(getattr(cfg, "daily_loss_limit", 0.0)) <= 0.0:
+        return np.zeros(n, np.int64)
+    col = getattr(cfg, "session_col", None)
+    if col and df is not None and col in df.columns:
+        return pd.factorize(df[col])[0].astype(np.int64)
+    if df is not None and "t" in df.columns:
+        return pd.factorize(df["t"].dt.floor("D"))[0].astype(np.int64)
+    return np.zeros(n, np.int64)
+
+
 def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, df=None,
                   signals=None):
     """Assemble all kernel inputs from a config (+df for ref_col stops) and run it.
@@ -109,13 +122,14 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
      leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short) = _leg_stop_args(
         signals, df, n, n_legs)
     arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp = _alt_exit_args(signals, n)
+    sess = _session_ids(df, cfg, n)
     return run_kernel(
         open_, high, low, close, el, xl, es, xs,
         ell_i, els_i, exit_legs_long, exit_legs_short, n_legs,
         per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
         leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
         sl_ref_long, sl_ref_short,
-        arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp,
+        arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp, sess,
         tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp,
         **cfg.scalar_args(),
     )

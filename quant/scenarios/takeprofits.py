@@ -20,7 +20,7 @@ import dataclasses
 
 from ..engine import BacktestConfig, TakeProfit
 from ..indicators import add_heikin_ashi, add_sr_zones
-from ..strategies.conditions import above, green, near_support
+from ..strategies.conditions import (above, below, green, near_resistance, near_support, red)
 from .base import TPMethod, register_tp
 
 
@@ -68,7 +68,8 @@ class _NGreenExit(TPMethod):
     default_params = {"tp_n_green": 2}
 
     def exit(self, p: dict):
-        return green(int(p["tp_n_green"]))
+        n = int(p["tp_n_green"])
+        return red(n) if p.get("_side") == "long" else green(n)
 
 
 class _BackAboveEma(TPMethod):
@@ -77,7 +78,8 @@ class _BackAboveEma(TPMethod):
     default_params = {"grad_prefix": "grad"}
 
     def exit(self, p: dict):
-        return above("close", f"{p.get('grad_prefix', 'grad')}_line")
+        line = f"{p.get('grad_prefix', 'grad')}_line"
+        return below("close", line) if p.get("_side") == "long" else above("close", line)
 
 
 class _NextZoneSignal(TPMethod):
@@ -94,7 +96,9 @@ class _NextZoneSignal(TPMethod):
         return df
 
     def exit(self, p: dict):
-        return near_support(float(p["tp_zone_pct"]), min_touches=int(p.get("tp_zone_min_touches", 1)))
+        pct, mt = float(p["tp_zone_pct"]), int(p.get("tp_zone_min_touches", 1))
+        return (near_resistance(pct, min_touches=mt) if p.get("_side") == "long"
+                else near_support(pct, min_touches=mt))
 
 
 class _OppositeCandle(TPMethod):
@@ -110,8 +114,9 @@ class _OppositeCandle(TPMethod):
         return df
 
     def exit(self, p: dict):
-        # short setups: the favourable candle is RED, so the opposite (exit) candle is GREEN
-        return green(int(p["tp_opp_n"]), src=p.get("candle_src", "real"))
+        # the opposite-colour candle: GREEN ends a short, RED ends a long
+        n, src = int(p["tp_opp_n"]), p.get("candle_src", "real")
+        return red(n, src=src) if p.get("_side") == "long" else green(n, src=src)
 
 
 class _RRPartials(TPMethod):

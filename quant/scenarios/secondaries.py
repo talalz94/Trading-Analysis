@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..indicators import add_heikin_ashi
-from ..strategies.conditions import Cond, above, green
+from ..strategies.conditions import Cond, above, below, green, red
 from .base import SecondaryMethod, register_secondary
 
 
@@ -46,26 +46,33 @@ def arm_cond(p: dict) -> Cond:
     if mode is None:
         mode = "touch" if p.get("sec_touch", True) else "close_above"
     tol = float(p.get("sec_arm_tol_pct", 0.0) or 0.0)
+    long_side = p.get("_side") == "long"
 
     if mode == "close_above":
-        return above("close", line)
+        return below("close", line) if long_side else above("close", line)
 
     if mode == "full_above":
         def full(df):
-            return df["low"].to_numpy() > df[line].to_numpy()
-        return Cond(full, f"full_above({line})")
+            ln = df[line].to_numpy()
+            return (df["high"].to_numpy() < ln) if long_side else (df["low"].to_numpy() > ln)
+        return Cond(full, f"full_beyond({line})")
 
     if mode == "touch":
         def touched(df):
-            return df["high"].to_numpy() >= df[line].to_numpy()
-        # a close above the line also counts, even on a bar whose high is odd/missing
-        return above("close", line) | Cond(touched, f"touch({line})")
+            ln = df[line].to_numpy()
+            return (df["low"].to_numpy() <= ln) if long_side else (df["high"].to_numpy() >= ln)
+        # a close beyond the line also counts, even on a bar whose extreme is odd/missing
+        base = below("close", line) if long_side else above("close", line)
+        return base | Cond(touched, f"touch({line})")
 
     if mode == "near":
         def near(df):
             ln = df[line].to_numpy()
+            if long_side:
+                return df["low"].to_numpy() <= ln * (1.0 + tol / 100.0)
             return df["high"].to_numpy() >= ln * (1.0 - tol / 100.0)
-        return above("close", line) | Cond(near, f"near({line},{tol}%)")
+        base = below("close", line) if long_side else above("close", line)
+        return base | Cond(near, f"near({line},{tol}%)")
 
     raise ValueError(f"unknown sec_arm_mode {mode!r}: "
                      f"use near|touch|close_above|full_above")
@@ -90,8 +97,9 @@ class _ShakyTrendBail(SecondaryMethod):
         return arm_cond(p)
 
     def exit(self, p: dict) -> Cond:
-        # short setups: bail on the opposite (green) candle
-        return green(int(p.get("sec_opp_n", 1)), src=p.get("candle_src", "real"))
+        # bail on the opposite-colour candle: GREEN ends a short, RED ends a long
+        n, src = int(p.get("sec_opp_n", 1)), p.get("candle_src", "real")
+        return red(n, src=src) if p.get("_side") == "long" else green(n, src=src)
 
 
 class _ProfitCandleBail(SecondaryMethod):
@@ -120,7 +128,8 @@ class _ProfitCandleBail(SecondaryMethod):
         return Cond(lambda df: np.ones(len(df), dtype=bool), "always_armed")
 
     def exit(self, p: dict) -> Cond:
-        return green(int(p.get("sec_opp_n", 1)), src=p.get("candle_src", "real"))
+        n, src = int(p.get("sec_opp_n", 1)), p.get("candle_src", "real")
+        return red(n, src=src) if p.get("_side") == "long" else green(n, src=src)
 
 
 class _RunPastTp(SecondaryMethod):
@@ -150,7 +159,8 @@ class _RunPastTp(SecondaryMethod):
         return Cond(lambda df: np.zeros(len(df), dtype=bool), "arm_on_tp_only")
 
     def exit(self, p: dict) -> Cond:
-        return green(int(p.get("sec_opp_n", 1)), src=p.get("candle_src", "real"))
+        n, src = int(p.get("sec_opp_n", 1)), p.get("candle_src", "real")
+        return red(n, src=src) if p.get("_side") == "long" else green(n, src=src)
 
 
 register_secondary(_ShakyTrendBail())

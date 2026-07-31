@@ -143,6 +143,11 @@ class BacktestConfig:
     margin_call_level   Informational margin-call level %% (not enforced).
 
     ── Fills ─────────────────────────────────────────────────────────────────
+    daily_loss_limit    Stop opening NEW trades for the rest of a session once that session's
+                        realised loss reaches this %% of the equity it opened with (0 = off). Open
+                        trades keep running; only new risk is blocked. Sessions come from
+                        `session_col` (default: calendar day of the `t` column).
+    session_col         Column holding a per-bar session id. None -> calendar day.
     allow_rule_close    If False, strategy exit signals don't close (only SL/TP/trailing do).
     intrabar_priority   'stop_first' | 'take_profit_first' when a bar hits both SL and TP.
     """
@@ -191,6 +196,8 @@ class BacktestConfig:
     stop_out_level: float = 0.0     # margin level %% at which open positions are liquidated
     margin_call_level: float = 0.0  # informational; margin level %% flagged in equity stats
 
+    daily_loss_limit: float = 0.0     # %% of session-start equity; 0 = no cap
+    session_col: Optional[str] = None  # per-bar session id column; None -> calendar day
     allow_rule_close: bool = True
     intrabar_priority: str = "stop_first"   # stop_first | take_profit_first
 
@@ -251,6 +258,7 @@ class BacktestConfig:
             leverage=float(self.leverage) if self.leverage and self.leverage > 0 else 1.0,
             contract_size=float(self.contract_size) if self.contract_size and self.contract_size > 0 else 1.0,
             stop_out_level=float(self.stop_out_level),
+            daily_loss_limit=float(self.daily_loss_limit),
             allow_rule_close=1 if self.allow_rule_close else 0,
             intrabar_stop_first=1 if self.intrabar_priority == "stop_first" else 0,
         )

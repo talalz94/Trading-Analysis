@@ -164,7 +164,7 @@ def run_kernel(
     leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
     sl_ref_long, sl_ref_short,
     exit_arm_long, exit_arm_short, exit_alt_long, exit_alt_short, alt_exit_enabled, alt_replace_tp,
-    alt_arm_on_tp,
+    alt_arm_on_tp, session_id,
     tp_modes, tp_values, tp_close_pcts, tp_move_modes, tp_move_values, n_tp,
     initial_cash, cash_per_trade, fee_bps, slippage_bps, max_open_trades, allow_short,
     exit_enabled,
@@ -173,7 +173,7 @@ def run_kernel(
     sizing_mode, sizing_value, max_notional_pct, allow_leverage,
     margin_enabled, leverage, contract_size, stop_out_level,
     spread, commission_per_lot,
-    allow_rule_close, intrabar_stop_first,
+    allow_rule_close, intrabar_stop_first, daily_loss_limit,
 ):
     # Per-rule ("leg") exits: when n_legs > 1 each open trade remembers which rule opened it
     # (o_leg) and closes on THAT rule's exit column (exit_legs_*[leg, i]). When n_legs == 1 the
@@ -188,6 +188,12 @@ def run_kernel(
     # rule then owns the exit); the stop-loss and trailing stop are never affected.
     # `alt_arm_on_tp` arms a trade when it REACHES a take-profit level instead of closing there, so a
     # winner can keep running and is handed to the secondary rule (it implies the TP suppression).
+    #
+    # `daily_loss_limit` > 0 stops NEW entries for the rest of a session once that session's realised
+    # loss reaches the limit (a fraction of the equity the session opened with). `session_id` labels
+    # each bar's session, so this works for calendar days or any custom grouping. Open trades are
+    # never force-closed - their stops still run - because a broker-style daily stop-out and a
+    # "stop opening new risk" rule are different things and only the latter is modelled here.
     n = close.shape[0]
     fee = fee_bps / 10000.0
     slip = slippage_bps / 10000.0
@@ -224,10 +230,25 @@ def run_kernel(
     pos_count = np.zeros(n, np.int64)
     cash = initial_cash
 
+    # session loss cap state
+    cur_session = session_id[0] if n > 0 else 0
+    session_start_equity = initial_cash
+    session_realised = 0.0
+    session_blocked = False
+
     for i in range(n):
         px = close[i]
         hi = high[i]
         lo = low[i]
+
+        if daily_loss_limit > 0.0:
+            sid = session_id[i]
+            if sid != cur_session:                 # new session -> reset the budget
+                cur_session = sid
+                session_start_equity = cash
+                session_realised = 0.0
+                session_blocked = False
+            cash_at_bar_start = cash
         if np.isnan(px):
             equity_curve[i] = cash
             pos_count[i] = o_cnt
@@ -485,7 +506,14 @@ def run_kernel(
             o_cnt = w
 
         # 4) open a new position (long first, then short)
-        if o_cnt < max_open_trades and cash > 0.0 and cash_per_trade > 0.0:
+        if daily_loss_limit > 0.0:
+            session_realised += cash - cash_at_bar_start        # realised P&L booked this bar
+            if session_start_equity > 0.0 and \
+                    session_realised <= -(daily_loss_limit / 100.0) * session_start_equity:
+                session_blocked = True
+
+        if o_cnt < max_open_trades and cash > 0.0 and cash_per_trade > 0.0 and \
+                not (daily_loss_limit > 0.0 and session_blocked):
             want_long = entry_long[i] == 1
             want_short = (allow_short == 1) and (entry_short[i] == 1)
             side = 0
