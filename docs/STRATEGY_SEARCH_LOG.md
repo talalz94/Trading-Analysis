@@ -249,3 +249,47 @@ bull25        -0.0220  0.0873  0.0582  0.0508| 40.2   36.1   46.1   49.3
 
 **Nothing here yet justifies high leverage.** The one promising candidate needs far more trades and a
 parameter plateau before it could be sized.
+
+---
+
+## 9. ⛔ The 15m candidate is OVERFIT — verdict downgraded
+
+§5 ran parameter sensitivity on the *mean* across quarters, which was too forgiving. Re-run on
+**`expR_min`** (the worst of the three regimes — the metric that actually decides), the picture is
+unambiguous:
+
+```
+tp_rr            1.0: -0.0274   1.5: -0.0199   2.0: +0.0823   2.5: +0.0087   3.0: -0.2681
+stop_n            10: -0.0496    15: -0.1443    20: +0.0823    30: -0.0355    40: +0.0087
+grad_max        None: -0.1887   0.0: +0.0823  -0.02: -0.1879  -0.05: -0.2204
+sr_min_touches     1: +0.0823      2: -0.0356      3: +0.0449
+```
+
+**The chosen config is the only positive cell on essentially every axis, and every neighbour is
+negative.** `stop_n` 15 → 20 swings −0.144 → +0.082; `grad_max` −0.02 → 0.0 swings −0.188 → +0.082.
+That is a single lucky cell in a 4-D grid, not an edge with a basin around it.
+
+Also: **1 of 36 configs survives the strict test, where chance alone predicts ~4** (`36 × 0.5³`). The
+search is producing *fewer* survivors than random, which is what you would expect if there is no edge
+anywhere in this family.
+
+The clean train→test result (+0.21 → +0.25) does not rescue it: with 161 trades and a spike-shaped
+parameter surface, one hold-out passing is entirely consistent with luck.
+
+**Verdict: no validated edge found in the support/resistance-break family, on any timeframe, either
+direction.** This is consistent with the earlier direct measurement that the entry has no predictive
+power once drift is removed.
+
+### What I would try next (not yet tested)
+
+The family itself looks exhausted. Directions that are genuinely different rather than more parameter
+tuning:
+
+1. **Different signal class entirely** — the breaks are momentum-continuation bets. Mean-reversion at
+   S/R (fade the break) is the untested inverse and costs nothing to run through the same harness.
+2. **Volatility-regime conditioning** — the efficiency-ratio work in `analytics/timing.py` showed BTC
+   1m is choppy at *all* hours; a filter on *realised volatility* rather than clock time is untried.
+3. **Squeeze / WaveTrend as the primary trigger** — both are ported and charted but have never been
+   the entry, only decoration.
+4. **A bull-heavy window set** — the current 1-bull / 2-bear split structurally penalises longs, so
+   the long mirror has not had a fair test.
