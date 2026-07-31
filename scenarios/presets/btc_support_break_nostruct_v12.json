@@ -1,0 +1,28 @@
+{
+  "name": "btc_support_break_nostruct_v12",
+  "scenario": "support_break_short@v1.2",
+  "stop": "high_of_n@v1",
+  "tp": "rr@v1",
+  "params": {
+    "confirm_red": 2,
+    "prev_low_n": 20,
+    "grad_max": 0.0,
+    "stop_n": 20,
+    "tp_rr": 2.0
+  },
+  "cfg": {
+    "initial_cash": 10000,
+    "spread": 0.0,
+    "sizing_mode": "risk_pct_equity",
+    "sizing_value": 1.0
+  },
+  "data": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "start": "2026-07-10",
+    "end": "2026-07-26",
+    "source": "binance",
+    "tz": "UTC"
+  },
+  "description": "Structure-free breakdown: N red below the EMA + prior-N-low break, stop above high-of-N, 2R. BTC 1m."
+}

@@ -65,3 +65,26 @@ def test_time_filter_reduces_entries(gold_df):
     base = EmaRibbon(fast=20, slow=100, confirm_n=3).backtest(gold_df, _cfg())
     filt = EmaRibbon(fast=20, slow=100, confirm_n=3, hours=(8, 12)).backtest(gold_df, _cfg())
     assert filt.stats["num_trades"] <= base.stats["num_trades"]
+
+
+@pytest.mark.parametrize("use_ha", [False, True], ids=["real_candles", "heikin_ashi"])
+def test_confirm_n_and_color_are_independent(gold_df, use_ha):
+    """confirm_n (bars above/below the EMA) and confirm_color (consecutive green/red) are
+    independent AND-ed toggles, on either real or Heikin Ashi candles: every entry must satisfy
+    BOTH — confirm_n consecutive bars with low > EMA, and confirm_n consecutive green candles."""
+    strat = EmaCross(ema_period=50, entry_mode="full_candle", confirm_n=3, confirm_color=True,
+                      use_heikin_ashi=use_ha, allow_short=False, one_entry_per_cross=True)
+    prep = strat.prepare(gold_df.copy())
+    sig = strat.build_signals(prep)
+    assert sig.entry_long.sum() > 0, "test setup should produce at least one entry"
+
+    lo_col = "ha_low" if use_ha else "low"
+    o_col, c_col = ("ha_open", "ha_close") if use_ha else ("open", "close")
+    ema_col = strat._entry_col
+    n = strat.confirm_n
+
+    idxs = np.where(sig.entry_long)[0]
+    for i in idxs:
+        window = prep.iloc[i - n + 1: i + 1]
+        assert (window[lo_col] > window[ema_col]).all(), f"bar {i}: not all {n} bars above EMA"
+        assert (window[c_col] > window[o_col]).all(), f"bar {i}: not all {n} bars green"

@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from . import primitives, time_filters
 from .primitives import (
-    above, above_all, all_of, any_of, below, below_all, col,
+    above, above_all, all_of, any_of, arm_reset_trigger, becomes_true, below, below_all, col,
     consecutive_green, consecutive_red, cross_down, cross_up, crossed_up_within,
-    falling, is_green, is_red, last_all_above, last_all_below, none_of,
+    falling, is_green, is_red, last_all_above, last_all_below, latch, none_of,
     prev_all_above, prev_all_below, refs_ordered, rising,
 )
 from .time_filters import (
-    between_times, hour_between, in_session, not_weekend, weekday_in,
+    between_times, hour_between, hour_in, in_any_times, in_session, not_weekend, weekday_in,
 )
 
 __all__ = [
@@ -17,6 +17,8 @@ __all__ = [
     "cross_up", "cross_down", "crossed_up_within",
     "last_all_above", "last_all_below", "prev_all_above", "prev_all_below",
     "is_green", "is_red", "consecutive_green", "consecutive_red",
-    "rising", "falling", "refs_ordered", "all_of", "any_of", "none_of",
-    "hour_between", "in_session", "weekday_in", "not_weekend", "between_times",
+    "rising", "falling", "refs_ordered", "becomes_true", "arm_reset_trigger", "latch",
+    "all_of", "any_of", "none_of",
+    "hour_between", "hour_in", "in_any_times", "in_session", "weekday_in", "not_weekend",
+    "between_times",
 ]

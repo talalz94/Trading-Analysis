@@ -1,0 +1,73 @@
+{
+  "name": "my_btc_support_break",
+  "scenario": "support_break_short@v1.2",
+  "stop": "leg_high@v1",
+  "tp": "rr@v1",
+  "secondary": [
+    "shaky_trend_bail@v1",
+    "run_past_tp@v1"
+  ],
+  "params": {
+    "entry_mode": "break_close",
+    "break_mode": "close_below",
+    "prev_low_n": 20,
+    "sr_min_touches": 1,
+    "break_min_ema_dist_pct": null,
+    "break_max_ema_dist_pct": null,
+    "candle_src": "real",
+    "confirm_red": 2,
+    "n_red": 1,
+    "wait_n": 3,
+    "pullback_lookback": 5,
+    "grad_period": 200,
+    "grad_smooth": 9,
+    "grad_lookback": 5,
+    "grad_max": 0.0,
+    "stop_buffer_pct": 0.05,
+    "stop_max_risk_pct": 0.0,
+    "stop_pct": 0.6,
+    "stop_above_ema_only": false,
+    "stop_lr": 3,
+    "stop_swing_lr": 12,
+    "stop_n": 20,
+    "stop_atr_period": 14,
+    "stop_atr_mult": 1.5,
+    "tp_rr": 2.0,
+    "tp_pct": 0.6,
+    "trail_pct": 1.0,
+    "tp_opp_n": 1,
+    "tp_zone_pct": 0.1,
+    "block_hours": null,
+    "block_weekdays": null,
+    "block_times": [
+      "08:00",
+      "13:00"
+    ],
+    "hours": null,
+    "weekdays": null,
+    "session": null,
+    "filter_tz": "UTC",
+    "sec_touch": true,
+    "sec_opp_n": 1,
+    "sec_replace_tp": false,
+    "sec_arm_on_tp": true,
+    "sec_arm_mode": "near",
+    "sec_arm_tol_pct": 0.05
+  },
+  "cfg": {
+    "initial_cash": 10000,
+    "spread": 0.0,
+    "sizing_mode": "risk_pct_equity",
+    "sizing_value": 1.0
+  },
+  "data": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "start": "2026-07-25",
+    "end": "2026-07-27",
+    "source": "binance",
+    "market": "spot",
+    "tz": "UTC"
+  },
+  "description": "My tuned support-break short."
+}

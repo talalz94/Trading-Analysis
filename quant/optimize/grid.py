@@ -93,6 +93,9 @@ def run_grid(
     sl_ref_long = _ref_arr(prepared, cfg.sl_ref_long_col, n)
     sl_ref_short = _ref_arr(prepared, cfg.sl_ref_short_col, n)
     ka = cfg.scalar_args()
+    # sweeps use plain single-exit strategies -> single leg + cfg stop (no per-leg exits/stops)
+    zero_leg = np.zeros(n, np.int64)
+    z1 = np.zeros(1, np.int64); z1f = np.zeros(1, np.float64); z1ref = np.zeros((1, 1), np.float64)
 
     _log.info("sweep: %d combos | n_jobs=%d | bars=%d", len(combos), n_jobs, n)
 
@@ -100,7 +103,10 @@ def run_grid(
         # Fast path: kernel + array-native stats, no per-combo DataFrame construction.
         signals = strategy_cls(**combo).signals(prepared)
         el, xl, es, xs = signals.as_u8(n)
-        out = run_kernel(open_, high, low, close, el, xl, es, xs, sl_ref_long, sl_ref_short,
+        out = run_kernel(open_, high, low, close, el, xl, es, xs,
+                         zero_leg, zero_leg, xl.reshape(1, n), xs.reshape(1, n), 1,
+                         0, z1, z1f, z1f, z1f, z1, z1f, z1ref, z1ref,
+                         sl_ref_long, sl_ref_short,
                          tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp, **ka)
         stats = fast_stats(out[0], out[9], out[11],
                           initial_cash=ic, final_cash=out[13], ppy=ppy)

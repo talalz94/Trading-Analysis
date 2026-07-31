@@ -1,0 +1,27 @@
+{
+  "name": "btc_support_break_atr_trail",
+  "scenario": "support_break_short@v1.0",
+  "stop": "atr@v1",
+  "tp": "trailing@v1",
+  "params": {
+    "entry_mode": "break_close",
+    "grad_max": 0.0,
+    "stop_atr_mult": 1.5,
+    "trail_pct": 1.0
+  },
+  "cfg": {
+    "initial_cash": 10000,
+    "spread": 0.0,
+    "sizing_mode": "risk_pct_equity",
+    "sizing_value": 1.0
+  },
+  "data": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "start": "2026-07-10",
+    "end": "2026-07-26",
+    "source": "binance",
+    "tz": "UTC"
+  },
+  "description": "Support-break short with a tight ATR stop and a 1% trailing exit (let the breakdown run). BTC 1m."
+}

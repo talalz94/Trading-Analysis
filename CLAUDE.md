@@ -33,7 +33,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **40 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **190 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -65,13 +65,18 @@ quant/
 │   └── timeframe.py     #   resample_ohlcv + align_timeframes + build_mtf (anti-lookahead)
 ├── indicators/          # vectorized compute ONLY (no plotting); recursive parts in numba
 │   ├── overlays.py      #   ema, sma, add_emas, add_smas
-│   ├── oscillators.py   #   add_rsi (Wilder), add_macd, add_stochastic
+│   ├── oscillators.py   #   add_rsi (Wilder), add_macd, add_stochastic, add_rsi_divergence
+│   │                    #     (+ rsi_divergence_table; lag == `right` bars exactly, `left` is free)
+│   │                    #     and add_rsi_divergence_realtime (zero-lag but PROVISIONAL, ~53% ratified)
 │   ├── candles.py       #   add_heikin_ashi (recursive ha_open in numba)
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
-│   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points
+│   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
+│                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
+│                        #     add_zigzag_structure (ATR-adaptive swings; ~1/3 the lag — preferred),
+│                        #     add_sr_zones (nearest S/R per bar) + sr_zone_table (causal S/R zone timeline for plotting)
 ├── signals/
 │   ├── primitives.py    #   numpy-native bool predicates (cross_up, last_all_above, consecutive_*,
-│   │                    #     refs_ordered, rising/falling, all_of/any_of/none_of, …)
+│   │                    #     refs_ordered, rising/falling, becomes_true (rising edge), all_of/…)
 │   └── time_filters.py  #   in_session, hour_between, between_times, weekday_in, not_weekend
 ├── engine/
 │   ├── kernel.py        #   @njit run_kernel (the hot core) + equity_stats reducer + _fill_px/_costs
@@ -80,7 +85,17 @@ quant/
 ├── strategies/
 │   ├── base.py          #   Strategy ABC (prepare + build_signals; signals() adds time filters)
 │   ├── ema_cross.py     #   configurable price-vs-EMA (cross/close/full_candle, confirm_n, HA, HTF
-│   │                    #     bias, exit_mode opposite/none/ha_flip/below_ema) — the variant explorer
+│   │                    #     bias, exit_mode opposite/none/ha_flip/below_ema, one_entry_per_cross
+│   │                    #     = one entry per EMA-cross episode) — the variant explorer
+│   ├── indicators.py    #   TAGGED indicator handles: MA/EMA/SMA/RSI/ATR/HeikinAshi/Swings/SRZones
+│   │                    #     — tag IS the column name (no collisions), `tf=` for higher-timeframe,
+│   │                    #     multi-column handles expose sub-cols (sw.last_low, sr.support)
+│   ├── conditions.py    #   composable Cond algebra (& | ~) + builders (above/full_above/full_below/
+│   │                    #     green/red/ha_red/big_candle/near_support/bounce_off_support…) +
+│   │                    #     indicator specs (ema[+smooth]/ma/mtf_ema/sr_zones/heikin_ashi/swings/
+│   │                    #     atr) + StopSpec builders (pct_stop/ref_col_stop/price_abs_stop)
+│   ├── builder.py       #   RuleStrategy + Rule: declarative entry->exit(->stop) rules with `once`
+│   │                    #     (one per episode), `rearm`, `after` sequencing, per-rule exits+stops
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)
 ├── analytics/
 │   ├── metrics.py       #   compute_stats (return, win/loss, PF, expectancy, Sharpe/Sortino/Calmar,
@@ -88,9 +103,28 @@ quant/
 │   ├── attribution.py   #   by_hour/weekday/month/session/regime + monthly_returns
 │   └── fast.py          #   array-native stats for sweeps (no DataFrame build) + equity_stats use
 ├── viz/
+│   ├── export.py        #   open_in_browser(fig), heikin_ashi_candles(df) — keeps notebooks helper-free
 │   ├── responsive.py    #   ResearchChart / price_chart / equity_chart (plotly-resampler; millions of pts)
 │   ├── charts.py        #   static price+trades, equity+drawdown (HTML-export safe)
+│   ├── studies.py       #   studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup
+│   │                    #     chart: candles+EMA line+S/R zones+entries/stops/exits+gradient pane,
+│   │                    #     ATR bands, HH/HL structure, RSI+divergence, HIGHER-TF EMA line+pane),
+│   │                    #     zoom_to_trade, CROSSHAIR_JS (full-height cross-pane cursor)
 │   └── heatmaps.py      #   monthly-returns, hour×weekday, parameter-sweep heatmaps
+├── scenarios/           # VERSIONED, COMPOSABLE setups: Scenario × Stop × TP × Secondary × params
+│   ├── base.py          #   Scenario/StopMethod/TPMethod/SecondaryMethod ABCs + registries +
+│   │                    #     Preset (JSON I/O) + compose()/run()/run_pieces() -> ScenarioRun
+│   ├── support_break.py #   support_break_short v1.0 core / v1.1 +HH-HL structure / v1.2 no-structure
+│   │                    #     / v1.3 nearest-trough — short below a down-sloping smoothed 200-EMA on a
+│   │                    #     support break; entry_mode = break_close|wait_n|n_red|pullback (Q2);
+│   │                    #     LEVEL B exposed as `break_level` (latched per episode) + break_mode =
+│   │                    #     close_below|full_below; candle_src = real|ha for every candle test
+│   ├── stops.py         #   pct / swing_high / prev_high / leg_high / high_of_n / zone_top / atr
+│   │                    #     (Q1: where the stop goes — see the LAG note in §12)
+│   ├── takeprofits.py   #   rr / fixed_pct / trailing / opposite_candle / n_green_exit /
+│   │                    #     back_above_ema / next_zone / rr_partials  (Q3; signal- or cfg-based)
+│   └── secondaries.py   #   POST-ENTRY rules: shaky_trend_bail@v1 (arm when price closes above/touches
+│                        #     the EMA, then bail on the first opposite candle IF in profit)
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
 │   └── search.py        #   optuna_search (optional; Bayesian)
@@ -100,11 +134,36 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
+scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
 notebooks/               # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study (Q1-Q9)
-                         #   · 04_trend_runner_leverage · 05_simple_1m_ema_breakout
+                         #   · 04_trend_runner_leverage · 05_simple_1m_ema_breakout ·
+                         #   06_ema_breakout_candles · 07_rule_builder · 08_sr_zones_view ·
+                         #   09_squeeze_momentum · 10_scenario_lab (versioned setups + annotated chart)
 scripts/fetch_gold_dukascopy.py   # resumable true-spot XAUUSD fetch (1m/5m/15m/1h/4h)
-examples/gold_ema_demo.py · tests/ (9 files) · docs/ · data/ (cache, git-ignored)
+examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
 ```
+
+### Scenario framework (`quant/scenarios`) — versioned, composable setups
+
+A scenario run = **`Scenario`** (entry logic) × **`StopMethod`** × **`TPMethod`** ×
+**`SecondaryMethod`** (optional post-entry rule) × **params**, each piece named + **versioned**
+(`name@version`) and registered, bundled into a **`Preset`** (JSON under `scenarios/presets/`) that
+reproduces the exact backtest on any symbol/TF. Reuses the engine + `RuleStrategy`/conditions + S/R
+zones + the EMA-gradient indicator. `run_pieces(df, scen, stop, tp, secondary=…, params=…, cfg=…)` or
+`run(preset)` → `ScenarioRun` (`.result/.trades/.stats/.df/.params`); draw it with
+`quant.viz.scenario_figure(run)`. Signal-based TPs (`next_zone`, `opposite_candle`, `back_above_ema`)
+use `Signals.exit_short`; cfg-based TPs (rr/trailing/partials) use existing `BacktestConfig`. Only the
+**secondary** needed an engine change (per-trade `o_armed` + in-profit gate — see §5); it is
+flag-guarded, so runs without a secondary stay byte-identical. Each piece `prepare()`s what it needs
+(e.g. `next_zone` adds S/R zones if the scenario didn't), so any combination is runnable.
+
+**Level B** (the level whose break triggers the entry) is exposed as a `break_level` column, latched
+at the first break of each episode — an S/R support steps down the moment price closes through it, so
+the live value stops naming the level that broke. `scenario_figure` draws it per trade (amber dashed,
+own legend group). `break_mode` = `close_below` (default) | `full_below`.
+
+True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-ref kernel branch
+(mirror of the `sl_ref_short_col` path) — deferred, not yet built.
 
 ## 5. The engine (`quant/engine`) — capabilities
 
@@ -125,7 +184,21 @@ examples/gold_ema_demo.py · tests/ (9 files) · docs/ · data/ (cache, git-igno
   level (close reason `margin_call`). Non-margin path uses `allow_leverage`/`max_notional_pct` cap.
 - **Fills:** `max_open_trades` (multi-position), `allow_short`, `intrabar_priority`
   (`stop_first`/`take_profit_first`), force-close at end.
-- Close-reason codes: `signal`, `stop_loss`, `take_profit`, `forced_close_end`, `margin_call`.
+- **Per-rule ("leg") exits + stops:** `Signals` may carry `entry_leg_*`/`exit_legs_*` (2-D
+  [n_legs, n]) and `stop_specs` (per-leg); the kernel tags each trade with the rule that opened it
+  (`o_leg`) and closes it on THAT rule's exit and (if set) THAT rule's stop method. `n_legs==1` +
+  `per_leg_stops==0` take the original code paths — byte-identical (golden tests pass), no per-bar
+  overhead. Populated automatically by `RuleStrategy` only when rules use different exits/stops.
+- **Secondary ("alt") exit — per-trade armed state:** `Signals` may carry `exit_arm_*` / `exit_alt_*`
+  (+ `alt_replace_tp`). `exit_arm_*` arms an OPEN trade on any bar **after its own entry bar** (the
+  kernel tracks `o_armed` per trade; arming runs before entries open, so a trade can neither arm on
+  its entry bar nor inherit arming from before it existed). Once armed, `exit_alt_*` closes it **only
+  while it is in profit** (measured at the exit fill). `alt_replace_tp` additionally drops the TP
+  ladder for armed trades; the stop/trailing are never affected. Expresses "since THIS trade opened",
+  which a global signal array cannot. With no `exit_alt_*` the whole branch is skipped —
+  byte-identical (golden tests pass).
+- Close-reason codes: `signal`, `stop_loss`, `take_profit`, `forced_close_end`, `margin_call`,
+  `alt_exit` (closed by the secondary rule).
 
 `SimResult` = `trades` (DataFrame; incl. per-trade `stop_price`), `equity_curve`
 (t/equity/open_trades/drawdown), `stats` (dict),
@@ -194,7 +267,12 @@ cfg = BacktestConfig(initial_cash=10_000, fee_bps=8, slippage_bps=1.5, spread=0.
 res = EmaRibbon(fast=50, slow=200, confirm_n=5).backtest(df, cfg)
 print(res.stats)
 ```
-- Notebooks: `notebooks/01_research_cycle.ipynb` (full cycle), `02_inference_experiments.ipynb`.
+- Notebooks: `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
+  `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `06_ema_breakout_candles_demo`
+  (candle chart + HA toggle) · `07_rule_builder` (declarative
+  RuleStrategy) · `08_sr_zones_view` (200-MA strategy + causal S/R zone overlay) ·
+  `09_squeeze_momentum` (SQZMOM + WaveTrend + crosshair) · `10_scenario_lab` (versioned
+  Scenario×Stop×TP setups, fully-annotated `scenario_figure`, variant sweep answering the 3 Qs, Preset I/O).
 - CLI: `quant backtest --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy ema_ribbon --params '{"fast":50,"slow":200,"confirm_n":5}'`
 - Demo: `python examples/gold_ema_demo.py` · Tests: `python -m pytest tests/`
 - New strategy = one dataclass in `quant/strategies/` (`prepare` + `build_signals`); sweep with `run_grid`.
@@ -205,13 +283,25 @@ print(res.stats)
 `test_leverage.py` (margin/stop-out/lots), `test_costs.py` (spread/commission — incl the EUR/USD
 $12 example), `test_signals.py` (primitive correctness), `test_strategies.py` (all 7 run),
 `test_analytics.py` (attribution + reporting), `test_viz.py` (responsive chart resamples),
-`test_dukascopy.py` (provider mapping + incremental cache, mocked fetch). 40 total (incl. costs, leverage, dukascopy, EmaCross).
+`test_dukascopy.py` (provider mapping + incremental cache, mocked fetch), `test_builder.py`
+(RuleStrategy conditions, `after`-sequencing, per-rule leg exits + stops with single-leg golden
+parity, causal S/R zones, MTF bias, big-move, configurable MA, tagged indicator handles),
+`test_scenarios.py` (breakdown conditions, every scenario version runs short-only with stops above
+entry, full stop×TP + entry-mode matrix, LEVEL-B exposure/latching + both break_modes, the pivot-lag
+property (leg_high <= swing_high), Heikin-Ashi candle source, engine-level secondary semantics
+(in-profit gate, arm-only-after-entry, sec_replace_tp), Preset JSON round-trip incl. `secondary`,
+shipped presets load+run). **162 total.**
 
 ## 12. Known limitations / honest caveats
 
 - Data providers: only **binance** + **dukascopy** implemented (OANDA/CSV/metals-API planned).
 - Leverage: models used/free margin + stop-out, but **no swap/overnight financing**; stop-out
   liquidates **all** positions (not partial); spread is a fixed width (no dynamic/time-varying spread).
+- **Pivot levels carry a confirmation lag** (by design, anti-lookahead): `add_swings`/`swing_high@v1`/
+  `prev_high@v1` need `lr` bars to the RIGHT of a pivot before it exists, so the level in use is always
+  ≥ `lr` bars old and can sit surprisingly far from the entry. Lowering `lr` does not remove it. Use
+  `leg_high@v1` (running max since price closed below the EMA) or `high_of_n@v1` for a lag-free level.
+  Worked example in `docs/SESSION_NOTES.md`.
 - No **walk-forward / out-of-sample** automation yet (the experiment guide describes doing it manually).
 - Responsive chart interactivity needs a **live Jupyter kernel** (static HTML export keeps only the
   initial view); static charts are the fallback.

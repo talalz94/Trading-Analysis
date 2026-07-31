@@ -43,6 +43,7 @@ R_STOP = 1
 R_TAKE_PROFIT = 2
 R_FORCED = 3
 R_MARGIN = 4
+R_ALT_EXIT = 5
 
 _TINY = 1e-12
 
@@ -158,7 +159,12 @@ def _costs(fill_px, q, fee, comm_per_lot, contract_size):
 def run_kernel(
     open_, high, low, close,
     entry_long, exit_long, entry_short, exit_short,
+    entry_leg_long, entry_leg_short, exit_legs_long, exit_legs_short, n_legs,
+    per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
+    leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
     sl_ref_long, sl_ref_short,
+    exit_arm_long, exit_arm_short, exit_alt_long, exit_alt_short, alt_exit_enabled, alt_replace_tp,
+    alt_arm_on_tp,
     tp_modes, tp_values, tp_close_pcts, tp_move_modes, tp_move_values, n_tp,
     initial_cash, cash_per_trade, fee_bps, slippage_bps, max_open_trades, allow_short,
     exit_enabled,
@@ -169,6 +175,19 @@ def run_kernel(
     spread, commission_per_lot,
     allow_rule_close, intrabar_stop_first,
 ):
+    # Per-rule ("leg") exits: when n_legs > 1 each open trade remembers which rule opened it
+    # (o_leg) and closes on THAT rule's exit column (exit_legs_*[leg, i]). When n_legs == 1 the
+    # code takes the original exit_long/exit_short path below — byte-identical to before.
+    #
+    # Secondary ("alt") exit, alt_exit_enabled == 1 only: each open trade also remembers whether it
+    # has been ARMED (o_armed) by `exit_arm_*` firing at some bar SINCE its entry. Once armed, the
+    # trade closes on `exit_alt_*` — but only while it is IN PROFIT (measured at the exit fill, so
+    # spread/slippage count). This is per-trade, path-dependent state that a global signal array
+    # cannot express. With alt_exit_enabled == 0 the branch is skipped entirely — byte-identical.
+    # `alt_replace_tp` additionally drops the take-profit ladder once a trade is armed (the secondary
+    # rule then owns the exit); the stop-loss and trailing stop are never affected.
+    # `alt_arm_on_tp` arms a trade when it REACHES a take-profit level instead of closing there, so a
+    # winner can keep running and is handed to the secondary rule (it implies the TP suppression).
     n = close.shape[0]
     fee = fee_bps / 10000.0
     slip = slippage_bps / 10000.0
@@ -197,6 +216,8 @@ def run_kernel(
     o_extreme = np.zeros(mo, np.float64)
     o_tp_done = np.zeros(mo, np.int64)
     o_tp_px = np.zeros((mo, tp_modes.shape[0]), np.float64)
+    o_leg = np.zeros(mo, np.int64)      # which rule (leg) opened each open trade
+    o_armed = np.zeros(mo, np.int8)     # secondary exit armed for this trade (alt_exit_enabled)
     o_cnt = 0
 
     equity_curve = np.empty(n, np.float64)
@@ -248,6 +269,28 @@ def run_kernel(
             pos_count[i] = 0
             continue
 
+        # 1.75) secondary-exit ARMING. Done before the risk exits so that the take-profit gate
+        # (alt_replace_tp) and the alt exit in step 3 both see the same armed state on the same bar.
+        if alt_exit_enabled == 1:
+            for j in range(o_cnt):
+                if o_armed[j] == 0:
+                    if (exit_arm_long[i] if o_side[j] == 1 else exit_arm_short[i]) == 1:
+                        o_armed[j] = 1
+                    elif alt_arm_on_tp == 1 and exit_enabled == 1:
+                        # "let the winner run": reaching a take-profit level ARMS the trade instead
+                        # of closing it, so the position is handed to the secondary rule (e.g. exit
+                        # on N opposite candles) and keeps running while candles stay favourable.
+                        sd = o_side[j]
+                        for kk in range(n_tp):
+                            if (o_tp_done[j] >> kk) & 1:
+                                continue
+                            tpx = o_tp_px[j, kk]
+                            if np.isnan(tpx):
+                                continue
+                            if (hi >= tpx) if sd == 1 else (lo <= tpx):
+                                o_armed[j] = 1
+                                break
+
         # 2) risk exits
         if exit_enabled == 1:
             w = 0
@@ -273,8 +316,14 @@ def run_kernel(
                 stop = o_stop[j]
                 sl_hit = (not np.isnan(stop)) and ((lo <= stop) if side == 1 else (hi >= stop))
 
+                # once ARMED, `sec_replace_tp` drops the original take-profit ladder for this trade —
+                # the secondary rule owns the exit from here. The stop/trailing are untouched.
+                n_tp_eff = n_tp
+                if alt_exit_enabled == 1 and o_armed[j] == 1 and                         (alt_replace_tp == 1 or alt_arm_on_tp == 1):
+                    n_tp_eff = 0
+
                 tp_any = False
-                for kk in range(n_tp):
+                for kk in range(n_tp_eff):
                     if (o_tp_done[j] >> kk) & 1:
                         continue
                     tpx = o_tp_px[j, kk]
@@ -300,7 +349,7 @@ def run_kernel(
                     t_reason[k] = R_STOP
                     closed = True
                 else:
-                    for kk in range(n_tp):
+                    for kk in range(n_tp_eff):
                         if o_qty[j] <= _TINY:
                             break
                         if (o_tp_done[j] >> kk) & 1:
@@ -381,6 +430,8 @@ def run_kernel(
                     o_extreme[w] = o_extreme[j]
                     o_tp_done[w] = o_tp_done[j]
                     o_tp_px[w, :] = o_tp_px[j, :]
+                    o_leg[w] = o_leg[j]
+                    o_armed[w] = o_armed[j]
                     w += 1
             o_cnt = w
 
@@ -389,8 +440,20 @@ def run_kernel(
             w = 0
             for j in range(o_cnt):
                 side = o_side[j]
-                sig = exit_long[i] if side == 1 else exit_short[i]
-                if sig == 1:
+                if n_legs == 1:
+                    sig = exit_long[i] if side == 1 else exit_short[i]
+                else:
+                    sig = exit_legs_long[o_leg[j], i] if side == 1 else exit_legs_short[o_leg[j], i]
+                # secondary exit: arm on `exit_arm_*` (since THIS trade opened), then close on
+                # `exit_alt_*` while in profit. Skipped wholly when the feature is off.
+                alt_fired = 0
+                if alt_exit_enabled == 1 and sig == 0 and o_armed[j] == 1:
+                    alt = exit_alt_long[i] if side == 1 else exit_alt_short[i]
+                    if alt == 1:
+                        alt_px = _fill_px(px, side, slip, spread, 0)
+                        if side * (alt_px - o_entry_px[j]) > 0.0:
+                            alt_fired = 1
+                if sig == 1 or alt_fired == 1:
                     q = o_qty[j]
                     exit_px = _fill_px(px, side, slip, spread, 0)
                     gross = side * (exit_px - o_entry_px[j]) * q
@@ -402,7 +465,10 @@ def run_kernel(
                     t_exit_i[k] = i
                     t_exit_px[k] = exit_px
                     t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
-                    t_reason[k] = R_SIGNAL
+                    if alt_fired == 1:
+                        t_reason[k] = R_ALT_EXIT
+                    else:
+                        t_reason[k] = R_SIGNAL
                 else:
                     o_tr[w] = o_tr[j]
                     o_side[w] = o_side[j]
@@ -413,6 +479,8 @@ def run_kernel(
                     o_extreme[w] = o_extreme[j]
                     o_tp_done[w] = o_tp_done[j]
                     o_tp_px[w, :] = o_tp_px[j, :]
+                    o_leg[w] = o_leg[j]
+                    o_armed[w] = o_armed[j]
                     w += 1
             o_cnt = w
 
@@ -428,13 +496,23 @@ def run_kernel(
 
             if side != 0:
                 entry_px = _fill_px(px, side, slip, spread, 1)   # buy at ask (+half-spread)
+                lg = entry_leg_long[i] if side == 1 else entry_leg_short[i]
 
                 stop = np.nan
-                if exit_enabled == 1 and sl_mode != 0:
-                    ref = sl_ref_long[i] if side == 1 else sl_ref_short[i]
-                    stop = _calc_stop(entry_px, side, sl_mode, sl_value, ref,
-                                      sl_buffer_pct, sl_max_ref_risk_pct,
-                                      sl_fallback_mode, sl_fallback_value)
+                if exit_enabled == 1:
+                    if per_leg_stops == 1:
+                        # this rule's own stop method (per-leg arrays indexed by the opening leg)
+                        smode = leg_sl_mode[lg]
+                        if smode != 0:
+                            ref = leg_sl_ref_long[lg, i] if side == 1 else leg_sl_ref_short[lg, i]
+                            stop = _calc_stop(entry_px, side, smode, leg_sl_value[lg], ref,
+                                              leg_sl_buffer[lg], leg_sl_maxrisk[lg],
+                                              leg_sl_fb_mode[lg], leg_sl_fb_value[lg])
+                    elif sl_mode != 0:
+                        ref = sl_ref_long[i] if side == 1 else sl_ref_short[i]
+                        stop = _calc_stop(entry_px, side, sl_mode, sl_value, ref,
+                                          sl_buffer_pct, sl_max_ref_risk_pct,
+                                          sl_fallback_mode, sl_fallback_value)
 
                 qty = 0.0
                 if sizing_mode == 3:
@@ -498,6 +576,8 @@ def run_kernel(
                         o_stop[o_cnt] = stop
                         o_extreme[o_cnt] = entry_px
                         o_tp_done[o_cnt] = 0
+                        o_leg[o_cnt] = lg
+                        o_armed[o_cnt] = 0
                         if exit_enabled == 1:
                             for kk in range(n_tp):
                                 o_tp_px[o_cnt, kk] = _calc_tp(entry_px, stop, side,
