@@ -54,6 +54,8 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | Higher timeframe as a cure | ✗ | `real − null` is negative at every symbol × timeframe and gets **worse** higher up |
 | Support/resistance-break family (the original setup) | ✗ | Parameter spike with negative neighbours; 1 of 36 survivors where chance predicts ~4 |
 | Bail-out rules as the sole exit | ✗ dies on costs | +0.025R at zero cost → −0.007R at 0.7 bp |
+| **Hybrid / conditional strategies** — volatility terciles, trend vs chop, range position, session, HTF bias (with *and* against) | ✗ | 3 survivors of 304, chance ~38. The metronome filtered to the US session scores +0.070 and clears the same bar |
+| **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
 
@@ -62,7 +64,16 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Time stop** (new engine feature, `max_bars_in_trade`) | Median expR −0.045 → −0.027 at 15–30 bars, median drawdown 62.9% → 55.8%. It helps the **null entry** by about as much, so it is cutting cost-weighted dead time, not finding better exits. Keep it; don't count it as alpha. |
 | **Trailing stop** | Turns almost anything positive in-sample — including a random entry — by harvesting BTC's fat-tailed trend structure. Not an entry edge. |
 | **Higher timeframe for drawdown** | Median max drawdown 64% → 32% → 14% from 1m → 5m → 15m. Real, and unrelated to expectancy. |
-| **Daily loss cap** | Reduces drawdown in every window; expectancy unchanged. Survivability, not alpha. |
+| **Smaller position size** | The ONLY risk control that works. 1% → 0.25% risk leaves `expR` identical and divides drawdown by the same factor — it buys nothing you couldn't get by trading smaller. |
+
+## ✓ The one positive, actionable rule found
+
+**Do not trade into a volatility shock, and do not chase the hour after it.** Conditioning entries on
+the shock bar itself costs **−0.2596R** — the single largest effect measured anywhere in this search —
+and the following 60 minutes costs −0.0888R. It holds across every entry family and both directions.
+Since `vol_shock` is the announcement proxy (no economic calendar is available to this platform),
+this is the empirical form of "stay out of the release." It is a rule about when *not* to trade
+rather than an edge, but it is large, consistent, and the only Phase-4 result worth acting on.
 
 ## ? The only two things that are not obviously nothing
 
@@ -93,8 +104,9 @@ now standing rules:
 2. **Every entry competes against a metronome.** `time_entry` trades on a fixed schedule with no
    signal, through the same stops, targets, costs and windows. Most "real" entries lose to it.
 3. **Count survivors against chance.** `n_configs × 0.5^n_windows`. Phase 1: 2 vs ~16. Phase 2: 1 vs
-   ~22. Phase 5: 18 vs ~81. Cross-instrument: **0 vs ~81**. A search that keeps returning fewer
-   survivors than random is describing an empty space.
+   ~22. Phase 4: 3 vs ~38. Phase 5: 18 vs ~81. Cross-instrument: **0 vs ~81**. Six counts, five of
+   them below chance. A search that keeps returning fewer survivors than random is describing an
+   empty space.
 4. **Trim the top K trades, not just the top one.** Fat-tailed payoffs pass every conventional gate.
    Deleting the best 10 of 600–2,300 trades turned *every* Phase-3 survivor negative.
 5. **Bootstrap per window, never pooled.** Pooling let candidates show `p_neg ≈ 0.0001` when no
@@ -116,7 +128,10 @@ the constraint is arithmetic. What could move the needle, in order of expected v
    from 1m to 1h and ~27× to 4h. That contradicts "quick trades", which is the honest tension.
 3. **A different edge class entirely** — funding-rate / basis, cross-exchange dislocation,
    order-book microstructure. None is reachable with OHLCV bars, which is all this platform ingests.
-4. **Accepting a trend-following payoff for what it is** — 15–30% win rate, median trade a full
+4. **Test the assumption before building on it.** The clustering test settled the entire risk layer
+   in one measurement: outcomes are independent, so no lockout can help. That is cheaper and more
+   honest than sweeping lockout lengths and keeping the best-looking one.
+5. **Accepting a trend-following payoff for what it is** — 15–30% win rate, median trade a full
    stop-out, profits from a handful of runners, 25–80% drawdowns. That is a real and well-documented
    way to make money. It is also the **worst possible profile to leverage**, which is the direct
    conflict with the stated goal of "quick easy trades with high leverage".
