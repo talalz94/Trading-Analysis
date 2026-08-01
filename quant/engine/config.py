@@ -148,6 +148,9 @@ class BacktestConfig:
                         trades keep running; only new risk is blocked. Sessions come from
                         `session_col` (default: calendar day of the `t` column).
     session_col         Column holding a per-bar session id. None -> calendar day.
+    max_bars_in_trade   TIME STOP: close any trade still open this many bars after entry, at that
+                        bar's close (reason 'time_stop'). 0 = off. Checked after SL/TP and exit
+                        signals, so a trade closing for a real reason on the same bar keeps it.
     allow_rule_close    If False, strategy exit signals don't close (only SL/TP/trailing do).
     intrabar_priority   'stop_first' | 'take_profit_first' when a bar hits both SL and TP.
     """
@@ -198,6 +201,7 @@ class BacktestConfig:
 
     daily_loss_limit: float = 0.0     # %% of session-start equity; 0 = no cap
     session_col: Optional[str] = None  # per-bar session id column; None -> calendar day
+    max_bars_in_trade: int = 0        # time stop: bars held before a forced close; 0 = off
     allow_rule_close: bool = True
     intrabar_priority: str = "stop_first"   # stop_first | take_profit_first
 
@@ -259,6 +263,7 @@ class BacktestConfig:
             contract_size=float(self.contract_size) if self.contract_size and self.contract_size > 0 else 1.0,
             stop_out_level=float(self.stop_out_level),
             daily_loss_limit=float(self.daily_loss_limit),
+            max_bars_in_trade=int(self.max_bars_in_trade),
             allow_rule_close=1 if self.allow_rule_close else 0,
             intrabar_stop_first=1 if self.intrabar_priority == "stop_first" else 0,
         )

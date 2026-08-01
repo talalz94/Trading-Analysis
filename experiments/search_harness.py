@@ -81,11 +81,19 @@ def score(windows: Dict[str, pd.DataFrame], scenario: str, stop: str, tp: str, *
             per[name] = r_stats(run)
         except Exception as exc:                       # a bad combo must not kill the sweep
             per[name] = dict(n=0, expR=np.nan, ret=np.nan, dd=np.nan, error=str(exc)[:80])
-    exps = [v["expR"] for v in per.values() if v.get("expR") == v.get("expR")]
-    exps_ex = [v.get("expR_ex_top") for v in per.values()
-               if v.get("expR_ex_top") == v.get("expR_ex_top")]
-    meds = [v.get("med_R") for v in per.values() if v.get("med_R") == v.get("med_R")]
-    rets = [v["ret"] for v in per.values() if v.get("ret") == v.get("ret")]
+    def _vals(key):
+        # `None == None` is True, so a plain NaN test lets error rows through as None and the
+        # subsequent min() compares None with None. Require an actual number.
+        out = []
+        for v in per.values():
+            x = v.get(key)
+            if isinstance(x, (int, float)) and x == x:
+                out.append(float(x))
+        return out
+
+    exps, exps_ex = _vals("expR"), _vals("expR_ex_top")
+    meds, rets = _vals("med_R"), _vals("ret")
+    errs = sorted({v["error"] for v in per.values() if v.get("error")})
     row = dict(tag=tag or f"{scenario}|{stop}|{tp}",
                scenario=scenario, stop=stop, tp=tp,
                secondary=("+".join(secondary) if isinstance(secondary, (list, tuple))
@@ -100,7 +108,7 @@ def score(windows: Dict[str, pd.DataFrame], scenario: str, stop: str, tp: str, *
                top_R_max=round(max((v.get("top_R") or 0) for v in per.values()), 1),
                n_windows_pos=int(sum(1 for e in exps if e > 0)),
                n_windows_pos_ex_top=int(sum(1 for e in exps_ex if e > 0)),
-               n_windows=len(exps))
+               n_windows=len(exps), error=("; ".join(errs)[:120] if errs else ""))
     for name, v in per.items():
         row[f"expR_{name}"] = v.get("expR")
         row[f"n_{name}"] = v.get("n")

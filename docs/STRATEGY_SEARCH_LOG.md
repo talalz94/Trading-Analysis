@@ -293,3 +293,256 @@ tuning:
    the entry, only decoration.
 4. **A bull-heavy window set** — the current 1-bull / 2-bear split structurally penalises longs, so
    the long mirror has not had a fair test.
+
+---
+
+# PHASE 1 — Reference levels: do they predict anything at all?
+
+New primitives built (`quant/indicators/levels.py`, all causal, all tested): previous-day
+high/low/close/mid, previous-week high/low, session structure (Asia/EU/US blocks, running extremes,
+previous-session extremes, opening range), session/day VWAP with σ bands, **volume features** (never
+used anywhere in this project before), and round numbers. Plus `level_events()`, which classifies each
+bar's interaction with any level as **break / fade / sweep / retest**.
+
+Screen: at every interaction, forward return over {5,15,30,60,120} bars in ATR units, in the direction
+a trader would actually take, across 3 regime windows × 6 symbol/timeframe combinations
+(BTC 1m/5m/15m, XAUUSD 1m/5m, PAXGUSDT 5m).
+
+## 1a. First attempt — whole-window drift adjustment → BIASED
+
+Pooling by interaction type gave a suspiciously clean picture: **every short cell positive, every long
+cell negative**, across all four interaction types (`sweep short` 42.4% consistent, med_h60 +0.118 vs
+`sweep long` 9.3%, med_h60 −0.115).
+
+That is not a level effect. A genuine mean-reversion effect must be **symmetric** — if sweeps of highs
+revert, so must sweeps of lows. A clean long/short split is residual short bias: level events cluster
+in trending stretches, so the short-side event set inherits the drift of the days it lands on, which a
+single whole-window mean does not remove.
+
+## 1b. Second attempt — day-matched controls → ALSO BIASED
+
+Compare each event with the mean forward return of **all bars on the same calendar day**. This flipped
+the result and looked excellent: breaks and retests strongly negative on both sides, fade and sweep
+positive on both sides, 20/50 mirrored pairs positive against a chance rate of ~12.
+
+## 1c. ⚠️ The null control that killed both — `experiments/null_control.py`
+
+The day-mean control contains bars from *after* the event, so a signal firing near a day's extremes
+shows reversion **by construction**: within a finite path, points at the top of the day's range are
+followed by lower prices whether or not the market actually reverts.
+
+Test: rebuild the series by **shuffling bars within each calendar day**. Each day keeps its exact
+drift, volatility, candle shapes and volume — only the *order* is destroyed, which is where any level
+effect must live. Levels on that series cannot predict anything. Run the identical screen:
+
+```
+      event   bet  real_h60  null_h60  excess_h60
+       fade  long    0.0595    0.2685     -0.2090   <- the null "edge" is 4.5x the real one
+      sweep short    0.2194    0.1051      0.1144
+       fade short    0.0674    0.1232     -0.0558
+      sweep  long    0.1345    0.1975     -0.0630
+```
+
+**The shuffled data — which has no structure at all — produces the same "edges", and on `fade long` a
+much bigger one.** Both screens were measuring their own methodology.
+
+## 1d. The screen done correctly — real minus its own null
+
+`experiments/phase1c_null_differenced.py`: identical pipeline on the real series and on 3 within-day
+shuffles; the reported edge is `real − mean(null)`.
+
+```
+      event   bet  exc_h15  exc_h30  exc_h60  exc_h120  pct_pos_h30  pct_pos_h60
+      sweep  long  -0.0151   0.0034   0.0307    0.0897         44.4         53.7
+      sweep short  -0.0183  -0.0002  -0.0111   -0.0187         45.5         43.9
+first_break short   0.0114  -0.0006  -0.0490   -0.1156         33.3         24.1
+       fade short  -0.0074  -0.0178   0.0068   -0.0352         47.0         51.5
+       fade  long  -0.0152  -0.0211   0.0201    0.0774         40.7         55.6
+     retest  long  -0.0014  -0.0242  -0.0138   -0.0276         31.8         33.3
+```
+
+Everything collapses to ±0.02–0.05 ATR with hit rates near 50% — noise.
+
+- **Symmetry test: 10/50 mirrored pairs positive on both sides, against a chance rate of ~12.**
+  *Below* chance.
+- **Individual cells: 2 survivors out of 320** (positive excess in ≥5 of 6 runs with |z|>2), where
+  chance predicts ~16. Again below chance.
+
+### Verdict — Phase 1
+
+**No reference level carries an exploitable directional edge on BTC or gold, at any of the tested
+timeframes, for any of break / fade / sweep / retest.** This covers everything requested: prev-day
+high/low, session high/low, weekly, opening range, S/R zones, VWAP bands and round numbers. The
+"fade the break" hypothesis from §9 above is included and is **not** supported.
+
+### Methodological rule now in force
+
+> Any screen based on forward returns must be differenced against its own within-day-shuffled null.
+> Two independent, plausible-looking control schemes both manufactured edges of exactly the size we
+> were hunting for. A positive number means nothing until the same pipeline has been shown to produce
+> zero on data with no structure.
+
+---
+
+# PHASE 2 — Every entry family as the PRIMARY trigger
+
+Built `quant/scenarios/entries.py`: nine entry families, each registered **long and short** (a
+one-sided result is a directional bet, not an edge), all runnable through the same engine, stops,
+targets, costs and regime windows.
+
+| Family | Trigger |
+|---|---|
+| `level_event` | break / fade / sweep / retest of any reference level (prev-day, session, opening range, VWAP bands, S/R zones) — covers "level fade", "liquidity sweep" and "opening-range break" in one parameterised trigger |
+| `bos` / `choch` | break of the last **adaptive zigzag** swing, with the trend or against it |
+| `vol_thrust` | volume z-score spike with a directional candle — **volume used for the first time** |
+| `squeeze` | squeeze fires off, traded with the momentum histogram |
+| `wt_cross` | WaveTrend cross inside the OB/OS band |
+| `rsi_div` | RSI divergence, confirmed or the zero-lag provisional variant |
+| `vwap_rev` | price beyond N σ of session VWAP, turning back |
+| `grad_extreme` | EMA gradient beyond its own trailing quantile |
+| **`time_entry`** | **NULL BENCHMARK — enter every N bars, no signal at all** |
+
+## The control that makes this readable
+
+`time_entry` runs identical stops, targets, costs and windows with **no information whatsoever**. Any
+entry that cannot beat a metronome contributed nothing — whatever it scores belongs to the exit rules.
+This is precisely the mistake that made ~150 earlier configs look interesting: they varied exits only.
+
+## Result — 176 configs × 3 regime windows
+
+```
+NULL BENCHMARK (no signal, fixed schedule): best expR_min = -0.0445, best expR_mean = -0.0351
+
+family  configs  best_min  best_mean  med_min  n_pos_all_windows  beats_null_min
+ choch       12    0.0023     0.0310  -0.0568                  1            True
+ level       80   -0.0019     0.0716  -0.0670                  0            True
+ vwapz       12   -0.0156     0.0264  -0.0408                  0            True
+   div        8   -0.0217     0.0027  -0.0528                  0            True
+    wt       12   -0.0356    -0.0034  -0.0652                  0            True
+  NULL       12   -0.0445    -0.0351  -0.0843                  0           False
+   vol       12   -0.0521    -0.0420  -0.1209                  0           False
+   sqz        8   -0.0671    -0.0498  -0.0987                  0           False
+   bos       12   -0.0795    -0.0415  -0.1165                  0           False
+  grad        8   -0.0855    -0.0623  -0.1312                  0           False
+```
+
+**Positive in all 3 regimes with ≥300 trades: 1 of 176. Chance alone predicts ~22.**
+
+The single survivor (`choch/atr4.0/long`, expR_min **+0.0023**) is zero to three decimal places, and
+its `expR_ex_top_min` is **−0.0000** — remove each window's best trade and the edge is gone. Max
+drawdown 38.5%, worst-window return −6.2%.
+
+### What the numbers say
+
+1. **No entry family beats random timing by a meaningful margin.** Four families clear the null, but
+   only by clawing back cost drag — `level` reaches −0.0019 versus the null's −0.0445, i.e. it
+   recovers the spread and adds nothing.
+2. **`medR_min ≈ −1.03` for every single family.** The median trade is a full stop-out everywhere.
+   That is the signature of no directional information plus costs.
+3. **Volume, squeeze, gradient and plain BOS are *worse* than the metronome** — they select *more*
+   costly moments, not better ones.
+4. Survivor count below chance, for the third time in this project. A search that keeps producing
+   fewer survivors than random is telling you the space is empty, not that you need a finer grid.
+
+### Verdict — Phase 2
+
+**None of the nine entry families, in either direction, is tradable on BTC 1m after costs.** That
+covers every "new method" on the plan: level fades, liquidity sweeps, opening-range breaks, structure
+breaks (BOS *and* CHoCH), volume confirmation, squeeze release, WaveTrend, RSI divergence (confirmed
+*and* zero-lag) and VWAP reversion.
+
+---
+
+# PHASE 3 — Management (incl. the TIME STOP), and the trap it walked into
+
+**New engine feature:** `BacktestConfig.max_bars_in_trade` — close any trade still open N bars after
+entry, at that bar's close (`time_stop`). Checked after SL/TP and exit signals, so a trade closing for
+a real reason keeps that reason; at `0` the block is skipped and the path is byte-identical (golden
+tests pass). Also new: `experiments/mgmt_sweep.py::EntryBundle`, which prepares an entry's indicators
+once and re-applies only the stop/target per combination — byte-identical to `run_pieces`, ~9× faster.
+
+10 entries × 150 management combos (5 stops × 6 targets × 5 time stops) × 3 regimes.
+
+## What management actually did
+
+```
+by target (median expR_min)          by stop (median expR_min)     time stop (median expR_min)
+  trailing0.5   -0.0198               pct0.5   -0.0179              0    -0.0448
+  rr3           -0.0216               pct0.2   -0.0286              15   -0.0268
+  rr_partials   -0.0314               atr2.5   -0.0328              30   -0.0272
+  rr2           -0.0321               atr1.5   -0.0480              60   -0.0344
+  rr1.5         -0.0402               atr1     -0.0652              120  -0.0356
+  rr1           -0.0548
+```
+
+**The time stop helps, mildly and universally** (−0.045 → −0.027 at 15–30 bars) — and it helps the
+null entry by about as much, so it is cutting cost-weighted dead time, not finding better exits. It
+also cuts median drawdown 62.9% → 55.8%. Worth keeping; not an edge.
+
+Then: **60 of 1200 configs are positive in all three regimes**, and *every one of them uses a trailing
+stop or rr3*. Best: `choch_long|atr1/trailing0.5/t60` at +0.171R, `pdlow_fade_long|atr1/trailing0.5/t30`
+at +0.136R with a **+115% worst-window return and 32% max drawdown**.
+
+That looked like the first real finding in this project.
+
+## ⛔ PHASE 6 — the gates say it is a lottery
+
+A 1×ATR initial stop with a 0.5% trail on BTC 1m means risking ~1R (≈37 price units) to chase a
+~13R runner. The payoff is deliberately fat-tailed, so the usual gates stop discriminating.
+
+### Where the profit comes from
+
+```
+cfg                    win     n   expR  win%  med_R  max_R  top1_share  top1pct_share
+pdlow_fade_long/t30  bear25  598  0.172  23.2  -1.03   17.7        17.3           70.9
+choch_long/t60       bear25 1069  0.245  15.3  -1.06   66.4        25.4          138.2
+rtdiv_short/t120     bear26 2331  0.079  15.1  -1.07   48.7        26.5          312.2
+NULL_short/t60       bear25 1318  0.046  15.6  -1.06   32.2        53.2          476.2
+```
+
+`top1pct_share` above 100% means everything outside the top 1% of trades sums to a **net loss**.
+
+### Gate B — TRIM-TOP-K (worst window)
+
+```
+cfg                   full   drop1   drop5  drop10  drop25  drop1%  drop5%
+pdlow_fade_long/t30  0.136   0.117   0.050  -0.038  -0.262   0.032  -0.313
+pdlow_fade_long/t15  0.134   0.118   0.046  -0.027  -0.193   0.030  -0.256
+choch_long/t60       0.171   0.127   0.032  -0.094  -0.309  -0.094  -0.578
+vwapz2_short/t60     0.098   0.084   0.032  -0.014  -0.123  -0.091  -0.485
+rtdiv_short/t120     0.079   0.058  -0.009  -0.066  -0.182  -0.169  -0.634
+NULL_short/t60       0.040   0.019  -0.059  -0.133  -0.305  -0.194  -0.640
+```
+
+**Deleting the ten best trades out of 600–2300 turns every single candidate negative.**
+
+### Gate C — spread sensitivity
+
+```
+cfg                      x1      x2      x4
+pdlow_fade_long/t30  0.1363  0.0336 -0.1390
+choch_long/t60       0.1710 -0.0125 -0.2847
+vwapz2_short/t60     0.0984 -0.0394 -0.2730
+NULL_short/t60       0.0397 -0.1198 -0.3646
+```
+
+At 1.4 bp (still generous for retail crypto) only `pdlow_fade_long` is still alive, barely.
+
+### Gate E — rotating out-of-sample: **the gate itself fails**
+
+Every candidate passes (all held-out windows positive) — **and so does the metronome**
+(`NULL_short/t60`: +0.040 / +0.046 / +0.044, all positive). A random-entry rule with a trailing stop
+passes rotating OOS. On this payoff shape, that test has no discriminating power at all.
+
+### What the trailing stop is really doing
+
+The trailing stop is not finding good entries; it is harvesting BTC's fat-tailed trend structure with
+whatever entries you feed it. That is why the **random** entry also turns positive (+0.040R) the
+moment it is given a trailing stop, and why the ranking of families barely changes.
+
+**Verdict:** the Phase-3 "survivors" are trend-capture on a fat-tailed asset, carried by <1% of
+trades, indistinguishable from a random-entry version at any useful resolution, and dead at 2× spread.
+`pdlow_fade_long` is the only one that clears the null by a real margin (+0.136 vs +0.040) and
+survives 2× spread — it is the single thing in this whole search that is not obviously nothing, and it
+is still uninvestable at leverage: **its worst-window drawdowns run 26–32%, its median trade is a full
+stop-out, and six trades make its year.**

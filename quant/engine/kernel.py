@@ -44,6 +44,7 @@ R_TAKE_PROFIT = 2
 R_FORCED = 3
 R_MARGIN = 4
 R_ALT_EXIT = 5
+R_TIME = 6
 
 _TINY = 1e-12
 
@@ -173,7 +174,7 @@ def run_kernel(
     sizing_mode, sizing_value, max_notional_pct, allow_leverage,
     margin_enabled, leverage, contract_size, stop_out_level,
     spread, commission_per_lot,
-    allow_rule_close, intrabar_stop_first, daily_loss_limit,
+    allow_rule_close, intrabar_stop_first, daily_loss_limit, max_bars_in_trade,
 ):
     # Per-rule ("leg") exits: when n_legs > 1 each open trade remembers which rule opened it
     # (o_leg) and closes on THAT rule's exit column (exit_legs_*[leg, i]). When n_legs == 1 the
@@ -188,6 +189,11 @@ def run_kernel(
     # rule then owns the exit); the stop-loss and trailing stop are never affected.
     # `alt_arm_on_tp` arms a trade when it REACHES a take-profit level instead of closing there, so a
     # winner can keep running and is handed to the secondary rule (it implies the TP suppression).
+    #
+    # `max_bars_in_trade` > 0 is a TIME STOP: any trade still open that many bars after its entry is
+    # closed at that bar's close (reason `time_stop`). It is checked after the stop/TP and signal
+    # exits, so a trade that would have closed for a real reason on the same bar keeps that reason.
+    # At 0 the whole block is skipped - byte-identical to before.
     #
     # `daily_loss_limit` > 0 stops NEW entries for the rest of a session once that session's realised
     # loss reaches the limit (a fraction of the equity the session opened with). `session_id` labels
@@ -490,6 +496,39 @@ def run_kernel(
                         t_reason[k] = R_ALT_EXIT
                     else:
                         t_reason[k] = R_SIGNAL
+                else:
+                    o_tr[w] = o_tr[j]
+                    o_side[w] = o_side[j]
+                    o_entry_px[w] = o_entry_px[j]
+                    o_qty0[w] = o_qty0[j]
+                    o_qty[w] = o_qty[j]
+                    o_stop[w] = o_stop[j]
+                    o_extreme[w] = o_extreme[j]
+                    o_tp_done[w] = o_tp_done[j]
+                    o_tp_px[w, :] = o_tp_px[j, :]
+                    o_leg[w] = o_leg[j]
+                    o_armed[w] = o_armed[j]
+                    w += 1
+            o_cnt = w
+
+        # 3b) time stop: close anything held longer than max_bars_in_trade
+        if max_bars_in_trade > 0:
+            w = 0
+            for j in range(o_cnt):
+                k = o_tr[j]
+                if i - t_entry_i[k] >= max_bars_in_trade:
+                    side = o_side[j]
+                    q = o_qty[j]
+                    exit_px = _fill_px(px, side, slip, spread, 0)
+                    gross = side * (exit_px - o_entry_px[j]) * q
+                    ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
+                    cash += gross - ef
+                    t_gross[k] += gross
+                    t_exit_fee[k] += ef
+                    t_exit_i[k] = i
+                    t_exit_px[k] = exit_px
+                    t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                    t_reason[k] = R_TIME
                 else:
                     o_tr[w] = o_tr[j]
                     o_side[w] = o_side[j]
