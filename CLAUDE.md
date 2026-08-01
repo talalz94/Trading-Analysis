@@ -6,6 +6,15 @@
 > (design + roadmap) · [`docs/INDICATOR_GUIDE.md`](docs/INDICATOR_GUIDE.md) · [`docs/EXPERIMENT_GUIDE.md`](docs/EXPERIMENT_GUIDE.md)
 > · [`experiments/README.md`](experiments/README.md) · **[`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md)
 > (research findings, gotchas, next steps — read this for running context).**
+>
+> **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
+> before proposing any new strategy idea, because most of them have already been tested and killed.
+> [`docs/SEARCH_PLAN.md`](docs/SEARCH_PLAN.md) is the plan that was executed and
+> [`docs/STRATEGY_SEARCH_LOG.md`](docs/STRATEGY_SEARCH_LOG.md) the full phase-by-phase evidence.
+> **Four methodology rules now bind all research here:** difference every forward-return screen
+> against a within-day-shuffled null (`experiments/null_control.py`); make every entry compete
+> against the `time_entry` metronome; count survivors against `n_configs x 0.5^n_windows`; and trim
+> the top K trades, not just the top one, before believing a fat-tailed result.
 
 ---
 

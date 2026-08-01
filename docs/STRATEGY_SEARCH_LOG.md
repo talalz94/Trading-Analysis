@@ -624,3 +624,133 @@ since pooling lets one good regime carry the others.
 
 The candidates *are* clearly better than the metronome (`p_neg` 0.06–0.16 versus 0.21–0.67). "Better
 than random" is real. It is just not the same claim as "positive after costs with any confidence".
+
+---
+
+# PHASE 4 — Hybrid / conditional strategies: does any regime rescue a dead entry?
+
+10 entries (incl. both nulls) × 19 conditioners × 2 management combos × 3 regimes = 380 configs.
+Conditioners: volatility terciles, trend/chop by Kaufman efficiency ratio, volatility-shock windows
+(the announcement proxy — no calendar is available), position in the recent range, the three sessions,
+and 5-minute EMA bias with *and* against.
+
+The trap this has to avoid: almost any filter improves a losing rule, because cutting trades cuts cost
+drag. So each conditioner is applied to the real entries **and to the metronome**, and what counts is
+the real lift MINUS the null's lift under the same filter.
+
+## Raw lift (median over entries and management)
+
+```
+cond                med_lift  med_expR  med_trades      cond            med_lift  med_expR
+vol_high             +0.0151   -0.0418        1616      vol_mid          -0.0380   -0.0741
+no_shock60           +0.0033   -0.0345        3874      sess_eu          -0.0628   -0.1200
+htf_against          -0.0039   -0.0434        2124      range_upper      -0.0867   -0.1435
+vol_high+trending    -0.0072   -0.0545         736      post_shock60     -0.0888   -0.1245
+trending             -0.0105   -0.0456        1841      sess_us          -0.1173   -0.1543
+choppy               -0.0186   -0.0760         761      vol_low+choppy   -0.1196   -0.1752
+sess_asia            -0.0244   -0.0786         260      shock_now        -0.2280   -0.2584
+htf_with             -0.0317   -0.0824        1738
+```
+
+**Only `vol_high` (+0.015) and `no_shock60` (+0.003) improve anything at all.** Every session filter,
+both HTF-bias directions, both range positions and both trend/chop states make things worse.
+
+## Null-adjusted lift — the honest version
+
+```
+cond                real_lift  null_lift      net
+htf_against           +0.0037    -0.0543  +0.0580
+no_shock+trending     -0.0006    -0.0528  +0.0522
+trending              -0.0045    -0.0402  +0.0356
+...
+shock_now             -0.2596    -0.0977  -0.1618
+```
+
+Note what the top rows actually say: `real_lift ≈ 0`. These conditioners score a positive *net* only
+because they damage the metronome more than they damage the signal — they preserve what little the
+entry has, they do not add to it.
+
+**Survivors: 3 of 304, where chance predicts ~38.** Eight times below chance, for the fifth time.
+
+And the decisive detail: **`NULL_short@sess_us|atr1.5/rr2` scores +0.0701, positive in all three
+regimes.** The metronome, filtered to the US session, clears the same bar the "hybrid strategies" do.
+That is why the null ceiling is 0.0701, and why only three configs are left above it — all of them
+with 100–150 trades per window, where the standard error on expR is ≈0.1 and +0.09 is under one sigma.
+
+## ✓ The one genuinely actionable finding in Phase 4
+
+**Trading INTO a volatility shock is reliably catastrophic: −0.2596R real lift, the worst number in
+the entire search.** `post_shock60` (the hour after) is also strongly negative at −0.0888. Since
+`vol_shock` is the announcement proxy, this is the empirical version of "don't trade the release, and
+don't chase the hour after it." It is a negative rule rather than an edge, but it is robust, large,
+and consistent across every entry family — the only conditioner result big enough to act on.
+
+---
+
+# PHASE 6R — The risk layer: can a loss cap or lockout add anything?
+
+Daily loss caps, max-trades-per-day and consecutive-loss lockouts all rest on one assumption: **that
+losses cluster**. If trade outcomes are independent, a lockout cannot improve expectancy — it only
+removes exposure, scaling wins and losses down together. That is testable, and testing it is more
+honest than sweeping lockout lengths and keeping whichever looked best.
+
+## Do losses cluster? No.
+
+```
+entry              trades  p_loss  p_loss_after_loss  excess     acf1     acf2     acf3     acf5
+orlow_break_short    6371  0.6481             0.6574 +0.0093  +0.0287  -0.0111  +0.0162  -0.0086
+choch_long           2768  0.6354             0.6384 +0.0030  +0.0046  +0.0089  +0.0157  -0.0142
+NULL_long            4125  0.6707             0.6722 +0.0014  +0.0054  +0.0433  -0.0133  -0.0069
+rtdiv_short          7177  0.6465             0.6443 -0.0022  -0.0057  -0.0121  -0.0061  -0.0053
+wt53_long           10174  0.6587             0.6554 -0.0033  -0.0131  +0.0003  -0.0099  -0.0102
+pdlow_fade_long      1821  0.6371             0.6260 -0.0111  -0.0292  +0.0030  -0.0231  -0.0103
+```
+
+Standard error on each autocorrelation ≈ **0.027**. Every `acf` sits inside that band and `excess`
+(the extra chance of a loss right after a loss) is at most ±0.011 — and it changes sign across
+entries, which is what pure noise looks like.
+
+**Trade outcomes are independent. Consecutive-loss lockouts are therefore ruled out analytically, not
+by sweeping them.** Losing streaks in this data are the ordinary consequence of a 65% loss rate, not
+a regime you can detect and sit out.
+
+## What the risk controls actually do
+
+```
+                dd_max  expR_min  ret_min          drawdown by entry:  none -> risk_0.25%
+daily_cap_1%    45.55    -0.0571   -26.45          choch_long          38.5 -> 11.2
+daily_cap_2%    50.02    -0.0291   -33.49          orlow_break_short   63.5 -> 20.9
+daily_cap_4%    53.27    -0.0159   -30.87          vwapz2_long         79.9 -> 31.3
+max_1_open      61.83    -0.0230   -43.05          pdlow_fade_long     25.1 ->  7.1
+none            61.83    -0.0230   -43.05
+risk_0.25%      20.29    -0.0230   -10.50   <- identical expectancy, one third the drawdown
+risk_0.5%       37.30    -0.0230   -21.63
+```
+
+* **Daily loss caps make expectancy WORSE** (−0.023 → −0.057 at a 1% cap) and do not reliably cut
+  drawdown — `orlow_break_short` got *worse*, 63.5% → 75.1%, because blocking new entries changes
+  which trades exist rather than removing bad ones.
+* **`max_open_trades=1` changes nothing** — the setups rarely overlap anyway.
+* **Position size is the only control that works, and it works linearly**: 1% → 0.25% risk leaves
+  `expR` byte-identical and divides drawdown and return by the same factor. Exactly what theory
+  predicts for independent outcomes, and it buys nothing you couldn't get by trading smaller.
+
+**Verdict: there is no risk-management trick here. With independent trade outcomes the only lever is
+size, and size trades return for drawdown one-for-one.**
+
+---
+
+# FINAL SCOREBOARD
+
+| Phase | What was tested | Survivors | Chance predicts |
+|---|---|---|---|
+| 1 | 8 level types × 4 interactions, null-differenced | **2 / 320 cells** | ~16 |
+| 2 | 9 entry families, long and short | **1 / 176** | ~22 |
+| 3 | 150 management combos | 60 / 1200 — **all fail trim-top-K** | ~150 |
+| 4 | 19 regime conditioners (hybrids) | **3 / 304** | ~38 |
+| 5 | 3 timeframes × 2 instruments | **18 / 648** | ~81 |
+| 5 | **positive on BTC *and* gold** | **0 / 324** | ~81 |
+| 6 | bootstrap lower bound > 0 per window | **0 / 7 candidates** | — |
+
+Six independent counts, five of them **below** chance. A search that keeps returning fewer survivors
+than random selection would is not under-tuned; it is describing an empty space.
