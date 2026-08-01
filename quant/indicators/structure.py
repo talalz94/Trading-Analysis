@@ -409,4 +409,11 @@ def add_zigzag_structure(df: pd.DataFrame, *, atr_mult: float = 1.5, atr_period:
     out[f"{prefix}_pivot_i"] = piv_i
     out[f"{prefix}_lag"] = lag
     out[f"{prefix}_trend"] = trend
+    # Running last CONFIRMED swing high / low, forward-filled from the confirmation bar onward.
+    # These are the levels a break-of-structure entry trades against; carrying them per bar keeps
+    # that rule a plain column comparison instead of a lookup loop.
+    lab = pd.Series(label, index=out.index)
+    px = pd.Series(price, index=out.index, dtype="float64")
+    out[f"{prefix}_last_high"] = px.where(lab.isin(("HH", "LH"))).ffill().to_numpy()
+    out[f"{prefix}_last_low"] = px.where(lab.isin(("HL", "LL"))).ffill().to_numpy()
     return out

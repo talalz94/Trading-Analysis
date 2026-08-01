@@ -74,6 +74,7 @@ quant/
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
 │                        #     add_zigzag_structure (ATR-adaptive swings; ~1/3 the lag — preferred),
 │                        #     add_sr_zones (nearest S/R per bar) + sr_zone_table (causal S/R zone timeline for plotting)
+│                        #     zigzag also exposes zz_last_high/zz_last_low (running confirmed pivots -> BOS)
 ├── signals/
 │   ├── primitives.py    #   numpy-native bool predicates (cross_up, last_all_above, consecutive_*,
 │   │                    #     refs_ordered, rising/falling, becomes_true (rising edge), all_of/…)
@@ -94,6 +95,11 @@ quant/
 │   │                    #     green/red/ha_red/big_candle/near_support/bounce_off_support…) +
 │   │                    #     indicator specs (ema[+smooth]/ma/mtf_ema/sr_zones/heikin_ashi/swings/
 │   │                    #     atr) + StopSpec builders (pct_stop/ref_col_stop/price_abs_stop)
+│   ├── regimes.py       #   REGIME CONDITIONERS as Conds (AND onto any entry via entry_filter=):
+│   │                    #     vol_regime(high/mid/low) · trendiness(trending/choppy, Kaufman ER) ·
+│   │                    #     vol_shock(within=N) = ANNOUNCEMENT PROXY · range_position · CONDITIONERS dict.
+│   │                    #     Thresholds are ROLLING QUANTILES of the instrument's own history (shifted
+│   │                    #     one bar), never absolute numbers — an absolute cut becomes a date filter.
 │   ├── builder.py       #   RuleStrategy + Rule: declarative entry->exit(->stop) rules with `once`
 │   │                    #     (one per episode), `rearm`, `after` sequencing, per-rule exits+stops
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)
@@ -114,6 +120,11 @@ quant/
 ├── scenarios/           # VERSIONED, COMPOSABLE setups: Scenario × Stop × TP × Secondary × params
 │   ├── base.py          #   Scenario/StopMethod/TPMethod/SecondaryMethod ABCs + registries +
 │   │                    #     Preset (JSON I/O) + compose()/run()/run_pieces() -> ScenarioRun
+│   ├── entries.py       #   ENTRY FAMILIES as primary triggers, each registered long AND short:
+│   │                    #     level_event (break/fade/sweep/retest of any level) · bos/choch (zigzag) ·
+│   │                    #     vol_thrust · squeeze · wt_cross · rsi_div · vwap_rev · grad_extreme ·
+│   │                    #     time_entry = NULL BENCHMARK (enter every N bars, no signal — any entry
+│   │                    #     that can't beat a metronome on the same exits contributed nothing)
 │   ├── support_break.py #   support_break_short v1.0 core / v1.1 +HH-HL structure / v1.2 no-structure
 │   │                    #     / v1.3 nearest-trough — short below a down-sloping smoothed 200-EMA on a
 │   │                    #     support break; entry_mode = break_close|wait_n|n_red|pullback (Q2);
@@ -197,8 +208,11 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
   ladder for armed trades; the stop/trailing are never affected. Expresses "since THIS trade opened",
   which a global signal array cannot. With no `exit_alt_*` the whole branch is skipped —
   byte-identical (golden tests pass).
+- **Time stop (`max_bars_in_trade`)**: close any trade still open N bars after entry, at that bar's
+  close. Checked AFTER stop/TP and exit signals, so a trade closing for a real reason keeps that
+  reason. `0` = off and the whole block is skipped — byte-identical (golden tests pass).
 - Close-reason codes: `signal`, `stop_loss`, `take_profit`, `forced_close_end`, `margin_call`,
-  `alt_exit` (closed by the secondary rule).
+  `alt_exit` (closed by the secondary rule), `time_stop`.
 
 `SimResult` = `trades` (DataFrame; incl. per-trade `stop_price`), `equity_curve`
 (t/equity/open_trades/drawdown), `stats` (dict),
@@ -290,7 +304,12 @@ parity, causal S/R zones, MTF bias, big-move, configurable MA, tagged indicator 
 entry, full stop×TP + entry-mode matrix, LEVEL-B exposure/latching + both break_modes, the pivot-lag
 property (leg_high <= swing_high), Heikin-Ashi candle source, engine-level secondary semantics
 (in-profit gate, arm-only-after-entry, sec_replace_tp), Preset JSON round-trip incl. `secondary`,
-shipped presets load+run). **162 total.**
+shipped presets load+run), `test_levels_entries.py` (reference-level CAUSALITY — prev-day/week/session
+levels come from the completed prior period, running session extremes are expanding not final, the
+opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
+`level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
+the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
+close reason). **234 total.**
 
 ## 12. Known limitations / honest caveats
 

@@ -26,6 +26,7 @@ from . import takeprofits as _tps      # noqa: F401
 from . import secondaries as _sec      # noqa: F401
 from . import support_break as _sb     # noqa: F401
 from . import resistance_break as _rb  # noqa: F401
+from . import entries as _entries      # noqa: F401
 
 __all__ = [
     "Scenario", "StopMethod", "TPMethod", "SecondaryMethod", "Preset", "ScenarioRun",
