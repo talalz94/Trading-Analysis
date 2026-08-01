@@ -34,12 +34,12 @@ class EntryBundle:
         self.key = scenario
         self.scen = resolve_scenario(scenario)
         self.entry_params = dict(entry_params or {})
-        self.entry_filter = entry_filter
+        self.entry_filter = entry_filter          # default; `run` may override per call
         p = {**self.scen.default_params, **self.entry_params, "_side": self.scen.side}
         self._df = self.scen.prepare(_prepare_mtf(df, p.get("mtf_emas")), p)
 
     def run(self, stop: str, tp: str, params: Optional[dict] = None,
-            cfg: Optional[dict] = None, secondary=None):
+            cfg: Optional[dict] = None, secondary=None, entry_filter=None):
         st, tpm = resolve_stop(stop), resolve_tp(tp)
         secs = resolve_secondaries(secondary)
         p = merged_params(self.scen, st, tpm, {**self.entry_params, **(params or {})}, secs)
@@ -49,8 +49,11 @@ class EntryBundle:
             d = s.prepare(d, p)
 
         entry = self.scen.entry(p)
-        if self.entry_filter is not None:
-            entry = entry & self.entry_filter
+        # A regime conditioner only gates an existing trigger, so it must NOT force the entry's
+        # indicators to be recomputed - the filter is applied here, not at construction.
+        filt = self.entry_filter if entry_filter is None else entry_filter
+        if filt is not None:
+            entry = entry & filt
         rule = Rule("entry", entry=entry, exit=tpm.exit(p), side=self.scen.side, once=True)
         strat = RuleStrategy(indicators=(), rules=(rule,), reset=self.scen.reset(p),
                              session=p.get("session"), hours=p.get("hours"),
@@ -81,16 +84,21 @@ def sweep(windows: Dict[str, pd.DataFrame], entries: List[tuple], mgmt: List[dic
     """
     base_cfg = {**CFG_LEVERED, "spread": spread, **(cfg_extra or {})}
     rows, t0 = [], time.time()
+    cache: Dict[tuple, Dict[str, EntryBundle]] = {}
     for ei, (etag, skey, eparams, efilter) in enumerate(entries, 1):
-        bundles = {w: EntryBundle(d, skey, eparams, entry_filter=efilter)
-                   for w, d in windows.items()}
+        # Entries that differ ONLY by their regime filter share one prepared frame.
+        ck = (skey, tuple(sorted((k, repr(v)) for k, v in (eparams or {}).items())))
+        if ck not in cache:
+            cache[ck] = {w: EntryBundle(d, skey, eparams) for w, d in windows.items()}
+        bundles = cache[ck]
         for m in mgmt:
             per = {}
             for w, b in bundles.items():
                 try:
                     per[w] = r_stats(b.run(m["stop"], m["tp"], m.get("params"),
                                            {**base_cfg, **m.get("cfg", {})},
-                                           secondary=m.get("secondary")))
+                                           secondary=m.get("secondary"),
+                                           entry_filter=efilter))
                 except Exception as exc:
                     per[w] = dict(n=0, error=f"{type(exc).__name__}: {exc}"[:90])
 

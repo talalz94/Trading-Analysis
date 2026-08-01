@@ -546,3 +546,81 @@ trades, indistinguishable from a random-entry version at any useful resolution, 
 survives 2× spread — it is the single thing in this whole search that is not obviously nothing, and it
 is still uninvestable at leverage: **its worst-window drawdowns run 26–32%, its median trade is a full
 stop-out, and six trades make its year.**
+
+---
+
+# PHASE 5 — Timeframe and a SECOND INSTRUMENT (the structural test)
+
+## The cost floor — why 1-minute BTC was never going to work
+
+Spread as a percentage of one R (1.5 × ATR stop, median ATR over 2026 H1):
+
+| | 1m | 5m | 15m | 1h | 4h |
+|---|---|---|---|---|---|
+| **BTCUSDT** (spread 6.0) | **10.8%** | 3.8% | 2.0% | 0.9% | 0.4% |
+| **XAUUSD** (spread 0.25) | **7.0%** | 2.9% | 1.6% | 0.8% | 0.4% |
+
+On BTC 1m an entry must generate **more than 0.108R of raw edge** before it pays for the spread
+alone. That single number explains the null benchmark's −0.045R and why every family in Phase 2 sat
+just below zero. It is also why "quick trades on the 1-minute chart" is the hardest possible version
+of this problem, not the easiest.
+
+## Does the cost relief convert into edge? No.
+
+9 entries + 2 nulls × 12 management combos × 3 regimes × {5m, 15m, 1h} × {BTC, gold}.
+
+```
+median expR_min          real     NULL   real - NULL
+BTCUSDT  5min          -0.0625  -0.0596      -0.0028
+BTCUSDT  15min         -0.1267  -0.0828      -0.0439
+BTCUSDT  1h            -0.1884  -0.0901      -0.0984
+XAUUSD   5min          -0.1848  -0.1327      -0.0521
+XAUUSD   15min         -0.2695  -0.1354      -0.1342
+XAUUSD   1h            -0.3993  -0.2262      -0.1730
+```
+
+**`real − NULL` is negative in every cell and gets WORSE at higher timeframes.** Cheaper trading did
+not reveal a hidden edge; it just made the metronome cheaper too. Gold is uniformly negative.
+
+## ⛔ The cross-instrument gate — the single most damning number in this project
+
+> **0 of 324** entry × management × timeframe combinations are positive on **both** BTC and gold.
+> Chance alone predicts ~81.
+
+Not "few". **Zero.** Whatever the BTC numbers are measuring does not exist in another instrument.
+
+The best-looking config anywhere, `wt53_short|atr2.5/rr1.5` on **BTC 15m**, is instructive: +0.074 /
++0.148 / +0.077 across all three regimes, 509 trades, 17.3% drawdown, bounded rr target (not a
+trailing stop), and it survives removing the best trade. It looks like the real thing. Then:
+
+* the **same config on gold 15m**: −0.129 / −0.167 / +0.140;
+* ~170 trades per window with sd(R) ≈ 1.2 gives a standard error of ≈ 0.09 per window — **+0.074 is
+  less than one standard error from zero**;
+* "positive in all 3 windows" is a p = 1/8 event, and 648 configs were tested.
+
+Survivors overall: **18 of 648, where chance predicts ~81.** Below chance again.
+
+---
+
+# PHASE 6F — Bootstrap: is any of it distinguishable from zero?
+
+20,000 resamples, IID and moving-block (block = 25 trades, so clustered winners can't be broken up).
+
+```
+per-window 5th-percentile lower bound on expR (worst window shown)
+cfg                  min_lo5  min_lo1  max_p_neg  survives
+choch_long/t60       -0.0097  -0.0974     0.0595     False
+pdlow_fade_long/t30  -0.0115  -0.0837     0.0616     False
+vwapz2_short/t60     -0.0146  -0.0553     0.0743     False
+pdlow_fade_long/t15  -0.0125  -0.0693     0.0654     False
+rtdiv_short/t120     -0.0516  -0.1011     0.1648     False
+NULL_short/t60       -0.1163  -0.1770     0.3411     False   <- control
+NULL_long/t30        -0.2118  -0.2573     0.9120     False   <- control
+```
+
+**Not one candidate holds a lower bound above zero in every window.** Pooling all three windows makes
+them look decisive (`p_neg` ≈ 0.0001) — which is exactly the mistake this harness exists to prevent,
+since pooling lets one good regime carry the others.
+
+The candidates *are* clearly better than the metronome (`p_neg` 0.06–0.16 versus 0.21–0.67). "Better
+than random" is real. It is just not the same claim as "positive after costs with any confidence".
