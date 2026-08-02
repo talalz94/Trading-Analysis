@@ -14,7 +14,7 @@
 eight level types, four interaction types, six timeframes, two instruments, 150 management
 combinations and ten regime conditioners — the search kept producing *fewer* survivors than chance
 would, and the two configurations that looked genuinely good both failed the gates that discriminate:
-one is carried by under 1% of its trades, the other does not exist on a second instrument. The
+one is carried by under 1% of its trades; the other turned out to be short beta, losing in four of five bull windows once the sample was balanced. The
 binding constraint is not the signal, it is the **cost floor**.
 
 ---
@@ -58,6 +58,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Volatility compression then breakout** (quiet range, big move off the 200-EMA) | x the filter HURTS | Paired control over 288 matched pairs: compression helped in **10.1%**, median delta **-0.045R**. Quiet periods are followed by *smaller* absolute moves (57 vs 103 bps); longer coils do NOT spring harder (flat 78-86 bps); release direction is a coin flip (47.8% up). Best configs *fade* the break and die on trim-top-K (5 trades of 351) |
 | **Improving the best strategy with S/R zones / EMA bias / HH-HL structure** | x no improvement | Phase 8: every filter keeping >=294 trades scored BELOW the unfiltered base; the ones that look better run on 11-71 trades. Only 1 of 153 configs beat the base at >=300 trades, by +0.006R |
 | **Faster timeframes for the best strategy** | x worse | Unconditioned `wt_cross_short`: 15m **+0.065**, 5m -0.063, 1m -0.056. On 1m *every* conditioner is negative |
+| **Long side vs short side** | ~ mirror images, both beta | Phase 9, nine windows over a full cycle: longs +0.014 mean in bulls / -0.063 in bears; shorts -0.044 in bulls / +0.048 in bears. Neither is inherently better; the earlier apparent superiority of shorts was a biased sample |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -91,10 +92,17 @@ positive across every stop and trail value tested. **But:** the top 1% of trades
 profit, deleting the best 10 trades of 2,081 turns it negative, and its bootstrap lower bound is
 below zero in two of three windows.
 
-**2. `wt53_short|atr2.5/rr1.5` (BTC 15m)** — the cleanest-shaped result in the search: bounded 1.5R
-target, no trailing stop, +0.074 / +0.148 / +0.077 across all three regimes, 509 trades, only 17.3%
-drawdown. **But:** the identical config on gold 15m scores −0.129 / −0.167 / +0.140, and with ~170
-trades per window the standard error is ≈0.09 — **+0.074 is less than one standard error from zero**.
+**2. `wt53_short|atr2.5/rr1.5` (BTC 15m) — RETRACTED.** It looked like the cleanest result in the
+search (+0.074 / +0.148 / +0.077, 509 trades, 17.3% drawdown). Phase 9 re-ran it on nine windows
+spanning a full cycle and it **loses in four of the five bull windows**:
+
+```
+2022H1  2022H2  2023H1  2023H2  2024H1  2024H2  2025H1  2025H2  2026H1
+ bear    bear    bull    bull    bull    bull    bull    bear    bear
++0.196  -0.043  -0.202  -0.092  -0.131  -0.079  +0.074  +0.148  +0.048
+```
+
+It scored well only because the original window set was 2/3 bear. **It is short beta, not an edge.**
 
 Neither is fundable. Both are what a 648-config search returns when the true edge is zero.
 
@@ -125,6 +133,10 @@ now standing rules:
 7. **Judge a filter at constant trade count.** Apparent edge and sample size moved in opposite
    directions almost monotonically in Phase 8 — cut any sample hard enough and some subset looks
    excellent. A 7-trade configuration scored +1.49R.
+8. **Balance the window set before trusting a directional result.** Three windows drawn from a
+   single falling market cannot separate "short edge" from "short beta". Every gate in Phases 6
+   and 8 was applied to the eventual winner and none caught it, because they all took the window
+   set as given. Phase 9's nine-window cycle retracted it in one table.
 ---
 
 ## What would have to change

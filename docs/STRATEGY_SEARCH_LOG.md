@@ -973,3 +973,77 @@ judged at constant trade count, or the sample-size effect will always manufactur
 base only produces ~170 trades per regime window; there is not enough data at that timeframe to
 support any conditioning at all, and at the timeframes with enough data (1m, 5m) the cost floor has
 already eaten the edge.
+
+---
+
+# PHASE 9 — The long side on a FAIR sample, and the retraction of the Phase-5 "winner"
+
+Longs were never skipped: every family is registered long and short, and longs ran through Phases 2,
+3, 4 and 5. But the window set was 2025-01 -> 2026-08, over which **BTC fell 32.8%**, two of the three
+windows being bear legs. The headline metric is the WORST window, so a long had to survive two bear
+markets while a short only had to survive one bull leg. Phase 8 then compounded it by running
+short-only. This was flagged in the log's own "what I would try next" and never acted on.
+
+Fixed here with nine windows spanning a real cycle (BTC 15m, 2022-2026):
+
+```
+2022H1 -57.4%   2022H2 -16.2%   2023H1 +84.3%   2023H2 +39.5%   2024H1 +47.4%
+2024H2 +49.6%   2025H1 +26.3%   2025H2 -24.5%   2026H1 -29.5%
+```
+
+Five bull, four bear. Long and short measured on the SAME windows with the SAME protocol.
+
+## ⛔ The Phase-5 winner was directional beta. Retracted.
+
+`wt_cross_short | atr2.5/rr1.5` — the best result of the entire search, +0.074/+0.148/+0.065 on the
+old three windows — across the full cycle:
+
+```
+2022H1  2022H2  2023H1  2023H2  2024H1  2024H2  2025H1  2025H2  2026H1
+ bear    bear    bull    bull    bull    bull    bull    bear    bear
++0.196  -0.043  -0.202  -0.092  -0.131  -0.079  +0.074  +0.148  +0.048
+```
+
+**It loses in four of the five bull windows,** including −0.202 in 2023H1. It scored well originally
+only because two of three windows were bear and the single bull window happened to be the one it
+survived. This is precisely the trap the harness was built to catch — a short-only setup that made
++294% in a −46% year — and it slipped through because the *window set itself* was unbalanced. The
+gate that would have caught it (works on a second instrument) did fire: gold said −0.129/−0.167.
+
+**Verdict: `wt_cross_short` is a short bias, not an edge. The earlier recommendation to paper-trade
+it is withdrawn.**
+
+## Long vs short, measured fairly
+
+```
+side   configs  all_min  all_mean  bull_min  bull_mean  bear_min  bear_mean  trades
+long        33  -0.2004   -0.0175   -0.1007    +0.0144   -0.1628    -0.0632    1006
+short       33  -0.1969   -0.0091   -0.1845    -0.0442   -0.0829    +0.0479    1101
+```
+
+Near-perfect mirror images: **longs make money in bull windows and lose in bear ones; shorts do the
+opposite; both are ~0 overall.** That is the definition of directional beta, and it is now measured on
+both sides rather than assumed. Neither side is inherently better — the earlier apparent superiority
+of shorts was an artifact of the sample.
+
+## The best LONG configuration
+
+`vwap_rev_long (2 sigma) | atr2.5/rr2` is the only config in the whole study positive in **all nine**
+windows: 990 trades, expR_min +0.0016, mean +0.0760, max drawdown 19.7%.
+
+It still fails. `expR_ex_top_min` is **−0.0197** — remove each window's single best trade and the
+worst window goes negative — and +0.0016 is zero to any useful precision.
+
+## Survivors
+
+**0 of 66** configs are positive in every one of the nine windows with >=300 trades, outlier-proof,
+and beating the null (whose ceiling across nine windows is −0.1092). Chance predicts ~0.13, so zero is
+unremarkable — the nine-window bar is simply very strict, and nothing came close.
+
+## The methodological lesson
+
+**Balance the window set before trusting a directional result.** Three windows chosen from a single
+falling market cannot distinguish "short edge" from "short beta", no matter how many robustness gates
+are stacked on top. Every gate in Phases 6 and 8 was applied to `wt_cross_short` and none of them
+caught this, because they all took the window set as given. The fix is not a better gate; it is a
+sample that contains both regimes in roughly equal measure.
