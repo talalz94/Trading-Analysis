@@ -877,3 +877,99 @@ that started it was a 9th-percentile day whose apparent violence was an artifact
   *exactly* 0.0000 — which reads as a clean negative result, not as a failure. Per-variant entry
   params now pass through `run()`, prepare-affecting overrides raise, and
   `test_sweep_shares_frames_without_leaking_params` locks it. Tests 234 to 239.
+
+---
+
+# PHASE 8 — Can the one survivor be improved? S/R zones, EMA bias, HH/HL structure, faster TFs
+
+`wt_cross_short` on BTC 15m was the best result of the search. Everything that might improve it had
+only ever been tested as a STANDALONE ENTRY, never as a gate on top of it. This phase closes that gap:
+base entry x 17 conditioners x 3 timeframes x 3 management combos, with the metronome carrying every
+conditioner so a filter that merely removes costly bars can be told apart from one that finds good ones.
+
+## 1. Faster timeframes make it WORSE, not better
+
+Unconditioned base, `atr2.5/rr1.5`:
+
+```
+tf     expR_min   trades
+15min   +0.0647      513
+ 5min   -0.0631     1534
+ 1min   -0.0555     8693
+```
+
+This is the cost floor doing exactly what it must: spread is 2.0% of R at 15m and 10.8% at 1m. The
+strategy is not "better if you trade it faster" — 15m is the slowest of the three and the only
+positive one.
+
+**On 1m every single conditioner is negative** (best five: −0.027 to −0.051). There is nothing to
+improve there.
+
+## 2. On 15m, every filter that keeps enough trades makes it worse
+
+Base = 513 trades, +0.0647. Sorted by how many trades survive the filter:
+
+```
+cond                    trades   expR_min   ex_top
+none                       513    +0.0647   +0.0549   <- the unfiltered base
+no_shock                   487    +0.0391   +0.0310
+reject_resistance          460    +0.0439   +0.0333
+above_ema200               444    +0.0382   +0.0299
+at_resistance_0.25         418    +0.0365   +0.0249
+trending                   378    +0.0269   +0.0165
+struct_up                  294    -0.0492   -0.0658
+at_resistance_0.1          218    +0.1088   +0.0871
+vol_high                   182    +0.0426   +0.0079
+far_from_support           142    -0.0718   -0.0989
+struct_down                 80    -0.1263   -0.1715
+below_ema200                71    +0.1169   +0.0444
+resist+below_ema            62    +0.2882   +0.2411
+resist+struct_down          60    -0.3053   -0.3804
+struct_down+below_ema       18    -0.1710   -0.3824
+resist+struct+ema           14    -0.5047   -1.0052
+below_ema50                 11    -1.0078   -1.0090
+```
+
+**Every filter retaining 294+ trades scores BELOW the unfiltered base.** Every filter that looks
+better does so on 62–218 trades. The apparent edge and the sample size move in opposite directions
+almost monotonically — which is the signature of noise, not of a filter that works: cut any sample
+hard enough and some subset looks excellent by chance.
+
+The `below_ema50` row is the reductio: **7 trades on 5m, expR +1.49**. It is not a strategy, it is
+seven coin flips.
+
+## 3. The decisive count
+
+Configs beating the unfiltered 15m base **with >=300 trades, positive in all three regimes, and still
+positive after removing each window's best trade: 1 of 153.**
+
+That one is `at_resistance_0.25 | atr2.5/rr2` — 402 trades, +0.0711 against the base's +0.0647. An
+improvement of **+0.006R**, against a per-window standard error of roughly 0.09. It is indistinguishable
+from the base, which is itself indistinguishable from zero.
+
+## 4. What the ideas DO show
+
+Fairly stated, they are not worthless — they are just far too weak to survive the sample cost.
+Net-of-null lift is positive and *consistent across timeframes* for two of them:
+
+```
+                  1min      5min     15min
+at_resistance   +0.058    +0.072    +0.206
+below_ema200    -0.049    +0.223    +0.033
+```
+
+`at_resistance` points the right way on all three timeframes, and `resist+below_ema` is positive on
+both 5m and 15m. So "short into resistance, below the 200-EMA" is directionally the right instinct.
+It simply does not produce enough effect per trade to pay for the trades it discards.
+
+## Verdict — Phase 8
+
+**No. S/R zones, EMA bias and HH/HL structure do not improve the strategy, and shorter timeframes make
+it worse.** The single best filtered configuration adds +0.006R on 402 trades. Everything that looks
+like a real improvement is running on 11–71 trades.
+
+The general lesson, which now applies to every future "add a filter" idea here: **a filter must be
+judged at constant trade count, or the sample-size effect will always manufacture a winner.** The 15m
+base only produces ~170 trades per regime window; there is not enough data at that timeframe to
+support any conditioning at all, and at the timeframes with enough data (1m, 5m) the cost floor has
+already eaten the edge.

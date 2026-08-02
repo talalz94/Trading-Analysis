@@ -56,6 +56,8 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | Bail-out rules as the sole exit | ✗ dies on costs | +0.025R at zero cost → −0.007R at 0.7 bp |
 | **Hybrid / conditional strategies** — volatility terciles, trend vs chop, range position, session, HTF bias (with *and* against) | ✗ | 3 survivors of 304, chance ~38. The metronome filtered to the US session scores +0.070 and clears the same bar |
 | **Volatility compression then breakout** (quiet range, big move off the 200-EMA) | x the filter HURTS | Paired control over 288 matched pairs: compression helped in **10.1%**, median delta **-0.045R**. Quiet periods are followed by *smaller* absolute moves (57 vs 103 bps); longer coils do NOT spring harder (flat 78-86 bps); release direction is a coin flip (47.8% up). Best configs *fade* the break and die on trim-top-K (5 trades of 351) |
+| **Improving the best strategy with S/R zones / EMA bias / HH-HL structure** | x no improvement | Phase 8: every filter keeping >=294 trades scored BELOW the unfiltered base; the ones that look better run on 11-71 trades. Only 1 of 153 configs beat the base at >=300 trades, by +0.006R |
+| **Faster timeframes for the best strategy** | x worse | Unconditioned `wt_cross_short`: 15m **+0.065**, 5m -0.063, 1m -0.056. On 1m *every* conditioner is negative |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -120,6 +122,9 @@ now standing rules:
 6. **A gate the metronome also passes is not a gate.** Rotating out-of-sample was passed by a random
    entry with a trailing stop, which retires that test for this payoff shape.
 
+7. **Judge a filter at constant trade count.** Apparent edge and sample size moved in opposite
+   directions almost monotonically in Phase 8 — cut any sample hard enough and some subset looks
+   excellent. A 7-trade configuration scored +1.49R.
 ---
 
 ## What would have to change
