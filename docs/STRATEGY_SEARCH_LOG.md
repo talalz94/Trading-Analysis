@@ -1174,3 +1174,159 @@ the sweep started.
 2. **Hit the target, then exit on the first opposite candle** beats both a plain target and any trail.
 3. **Breakeven at 1-1.5R with a 3R target** is the best simple improvement, +0.0095R over a plain 3R.
 4. **"The move kept going after I exited" is an illusion** — a random entry shows more continuation.
+
+---
+
+# PHASE 12-14 — What the patterns are actually worth
+
+81 patterns (62 candlestick, 19 chart) screened, then six different USES backtested, then the full
+gate battery on the one that survived. Nine-window balanced cycle, BTC 15m, metronome throughout.
+
+## 12. The screen — a very clean null
+
+Shuffling bars within a day keeps every candle's exact OHLC shape but destroys the ORDER. So a hammer
+is still a hammer but its trend context is gone, a morning star can only form by accident, and a
+double top forms from randomly ordered swings. Same candle-shape distribution, same daily drift and
+volatility, none of the sequence information the patterns claim to read.
+
+### Direction: nothing
+
+```
+family  h    patterns    edge   null_edge   excess     hit   hit_excess
+candle  5          44  -0.0062    0.0220   -0.0130  0.5011     -0.0029
+candle  10         44  -0.0021    0.0117   -0.0143  0.5033     -0.0032
+candle  20         44   0.0037    0.0021   -0.0096  0.5050     +0.0020
+candle  40         44  -0.0011    0.0533   -0.0091  0.5010     -0.0004
+chart   5          13   0.0864   -0.0132   +0.0751  0.4628     -0.0257
+chart   10         13   0.0468   -0.0581   +0.1260  0.4683     -0.0176
+chart   20         13   0.0144   -0.0712   +0.0419  0.4712     -0.0145
+```
+
+**Candlestick patterns hit 50.1-50.5% and score NEGATIVE excess at every horizon.** Chart patterns
+show a positive mean edge but a **sub-50% hit rate** — right less often than random, bigger when
+right. A positively skewed, breakout-shaped payoff.
+
+Across all 228 cells, **47.8% have positive excess — below the 50% chance rate.** Survivors under a
+strict consistency filter: 6, where chance predicts 4.5 (P(>=8 of 9 windows) x 228). Noise.
+
+### Expansion: a real effect
+
+```
+forward 20-bar travel, real vs typical bar      ATR units   PRICE terms
+ascending_triangle                                  1.125       1.186
+descending_triangle                                 1.188       1.182
+falling_wedge                                       1.213       1.184
+inverse_head_shoulders                              1.168       1.121
+symmetrical_triangle                                1.166       1.150
+```
+
+**Chart patterns are followed by 12-19% more range, and it survives measurement in PRICE terms.**
+That is the check that killed the Phase-7 compression result, where the ATR-normalised gradient was
+purely the denominator shrinking. Here both measures agree, and the shuffled null shows ~0.97, so
+randomly-placed shapes see nothing. This is a genuine, direction-agnostic property.
+
+### Patterns that INVERT
+
+Several classics reliably predict the opposite of their textbook direction (excess, h=40):
+`three_inside_down` -0.57, `hanging_man` -0.42, `advance_block` -0.31, `dragonfly_doji` -0.31,
+`ascending_triangle` -0.18 at a 41.6% hit rate.
+
+## 13. Six uses, backtested
+
+### The one hypothesis the screen implied, and it held
+
+A signal that is right under half the time but followed by an oversized move needs a WIDE target and
+will be destroyed by a tight one. Expectancy by target size:
+
+```
+target    metronome   chart patterns   pattern - null
+rr0.5      -0.0494        +0.0026          +0.0520
+rr1        -0.0284        +0.0064          +0.0348
+rr2        -0.0316        +0.0172          +0.0488
+rr3        -0.0450        +0.0228          +0.0678
+rr5        -0.0184        +0.0429          +0.0613
+rr8        +0.0110        +0.0640          +0.0531
+trail2%    -0.0500        +0.0634          +0.1134
+```
+
+**Monotonic, positive at every target, and the mechanism was predicted before the backtest ran.** The
+rarest thing in this project: a screen that made a falsifiable prediction the backtest then confirmed.
+
+### The other five
+
+```
+2. own geometry vs ATR   own_stop/rr3 +0.0820 but on 437 trades; atr/rr3 +0.0197 on 1905.
+                         The pattern stop is far more selective, not obviously better.
+3. candlestick entries   marubozu_bull +0.0568 (6/9 windows) is the ONLY positive one. Every
+                         classic reversal set is negative. Confirms the screen.
+4. patterns as exits     baseline rr2 +0.0760 beats opposite-candle +(-0.0317). Run-past-TP helps
+                         wt53_short (-0.0201 -> +0.0058), hurts vwapz2_long. Same as Phase 11.
+5. confluence            chart_long +0.0197 -> chart_long+SUPPORT +0.0495, at only -13% trades.
+                         Candlestick confirmation HURTS: chart_long+cdl -0.0055.
+6. fading the inverted   -0.0196. The screen's inversion finding does not survive costs.
+```
+
+## 14. The gates kill it
+
+### Trim-top-K, the gate that has killed everything
+
+```
+cfg                  n_min   drop0    drop1    drop5   drop10   drop5%  top1pct_share
+chart_long_rr8          81  -0.3684  -0.4538  -0.8132  -1.0086  -0.7205        369.7%
+chart_short_rr8         50  -0.1854  -0.2705  -0.6996  -1.0205  -0.5368         74.1%
+chart_long_trail2      152  -0.2784  -0.3254  -0.4545  -0.6264  -0.6264        278.3%
+NULL_long_rr8           58  -0.3273  -0.3875  -0.6869  -1.0083  -0.7434        498.3%
+```
+
+The worst window is **already negative before any trimming**, and the top 1% of trades supplies
+**74-370%** of all profit (above 100% means everything else nets negative). The wide target that made
+the mean look good also made the distribution a lottery.
+
+### The metronome gets the same benefit
+
+`NULL_long_rr8` scores **+0.0958** mean — better than `chart_long_rr8` at +0.0198. Widening the
+target helps a random entry as much as a pattern. Only the SHORT side shows a real margin
+(chart_short +0.1082 vs null -0.0739).
+
+### Cross-instrument: the sides flip
+
+```
+                   BTC expR_mean   GOLD expR_mean
+chart_long_trail2       +0.0917         +0.4523
+chart_short_trail2      +0.0352         -0.3053
+chart_short_rr8         +0.1082         -0.1929
+```
+
+Shorts work on BTC, longs work on gold. A real geometric effect would not swap sides with the
+instrument; a directional tilt would, and does.
+
+### Bootstrap and plateau
+
+No configuration has a positive 5th-percentile lower bound in every window, on either bootstrap.
+The parameter surface is non-monotonic across zigzag sensitivity (screened-8 scores +0.058, +0.064,
+-0.002, +0.086 at atr_mult 1.5 / 2 / 3 / 4) — noise, not a basin.
+
+## Verdict
+
+**Patterns do not predict direction, and the one thing they DO predict cannot be monetised here.**
+
+* Candlestick patterns are worthless directionally — 50.1-50.5% hit rates, negative excess over a
+  null that preserves their exact shapes. `marubozu_bull` is the sole exception and it is a momentum
+  bar, not a reversal shape.
+* Chart patterns genuinely predict **12-19% more forward range**, verified in price terms and against
+  a shuffled null. That is a real measurement and the most solid pattern result here.
+* Expansion without direction needs a wide target, the wide target works exactly as predicted, and
+  then the payoff becomes a lottery that fails trim-top-K, matches the metronome on the long side,
+  and flips sides between BTC and gold.
+
+**The one sub-result worth carrying forward:** a chart pattern breaking AT an S/R support zone scored
++0.0495 versus +0.0197 unfiltered, while giving up only 13% of its trades — the rare filter that
+improves a rule without starving it. It is not validated, but it is the only pattern configuration
+that improved on a like-for-like basis rather than by shrinking the sample.
+
+### Library bug found by this study
+
+`add_candle_patterns` called twice (a loader adds every pattern, a scenario then prepares a subset)
+left DUPLICATE columns, after which `df[col]` returns a 2-column DataFrame and every downstream
+boolean test silently misbehaves — every named-subset entry produced **zero trades with no error**.
+Fixed by dropping the columns being rewritten; two regression tests added.

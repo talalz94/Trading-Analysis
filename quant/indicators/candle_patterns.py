@@ -588,6 +588,13 @@ def add_candle_patterns(df: pd.DataFrame, patterns: Optional[Sequence[str]] = No
     for name in names:
         v = _BUILDERS[name](a, gap_mode=gap_mode, engulf_ratio=engulf_ratio)
         cols[f"{prefix}_{name}"] = np.nan_to_num(np.asarray(v, dtype=float), nan=0.0).astype(bool)
+    # Drop any columns we are about to write. Without this a second call (e.g. a loader adds every
+    # pattern, then a scenario prepares a subset) leaves DUPLICATE names, and `df[col]` then returns
+    # a 2-column DataFrame instead of a Series -- which silently breaks every downstream boolean
+    # test rather than raising.
+    dupes = [c for c in cols if c in out.columns]
+    if dupes:
+        out = out.drop(columns=dupes)
     out = pd.concat([out, pd.DataFrame(cols, index=out.index)], axis=1)
     if add_score:
         bull = [f"{prefix}_{p}" for p in names if PATTERN_DIRECTION[p] > 0]
