@@ -1063,3 +1063,114 @@ falling market cannot distinguish "short edge" from "short beta", no matter how 
 are stacked on top. Every gate in Phases 6 and 8 was applied to `wt_cross_short` and none of them
 caught this, because they all took the window set as given. The fix is not a better gate; it is a
 sample that contains both regimes in roughly equal measure.
+
+---
+
+# PHASE 10/11 — Exit design: the three-part close, diagnosed then swept
+
+The proposal: (1) plain stop, (2) a salvage rule that bails on m opposite candles while in profit
+once the trade has interacted with the EMA, (3) once the fixed TP is reached, don't just exit —
+breakeven, ratchet, trail, or hand the runner to a candle rule, to squeeze more from winners.
+
+Before sweeping, one theoretical constraint worth stating: **with a zero-edge entry, no exit rule can
+create positive expectancy.** Optional stopping says every rule for when to quit a fair game has the
+same expected value, minus costs. That is exactly why a trailing stop made even the *random* entry
+look positive in Phase 3 and then failed trim-top-K. Exits can still change the SHAPE of the
+distribution, and "am I leaving money in winners?" is a separate, measurable question.
+
+## Phase 10 — the diagnostic, and it reframes the problem
+
+Per-trade MFE (how far it went our way), MAE, realised R, and how much more was available AFTER the
+exit. Nine windows, 15m, with the metronome measured alongside.
+
+**Capture on winners** — realised / MFE:
+
+```
+exit design    capture   realised   MFE
+rr 1.5           0.89       1.49     1.68
+rr 3             0.93       2.99     3.22
+trail 1%         0.37       0.62     1.79
+```
+
+**Fixed targets already bank 87–93% of the favourable move. Trailing captures 37%** — it gives back
+nearly two thirds. So "hold longer with a trail" is the wrong direction, and this is measured rather
+than assumed.
+
+**Continuation after exit** looked like the opposite story — roughly +1.0R still available in the 30
+bars after a 1.5R exit — until the control:
+
+```
+              capture   cont30   cont60   cont120
+strategy       0.888     0.997    1.349    1.905
+NULL           0.873     1.071    1.466    2.049
+```
+
+**The metronome shows the same, slightly larger, continuation.** It is the max-of-a-random-walk
+effect: the maximum favourable excursion after ANY point in a volatile series is positive by
+construction. There is no evidence that winners specifically keep running.
+
+**Where the money actually leaks:**
+
+```
+mfe reached   trades   % of all   median realised   % that ENDED NEGATIVE
+   >= 1.0R    10687      44.8%          1.478              30.1%
+   >= 1.5R     8070      33.8%          1.493              15.2%
+   >= 2.0R     4319      18.1%          1.688              14.6%
+```
+
+**44.8% of all trades reach +1R, and 30.1% of those end up losing.** Losers show a median MFE of
++0.58R before reversing. The leak is not winners cut short; it is winners turning into losers.
+
+## Engine gap found and fixed
+
+A `TakeProfit` with `close_pct = 0` — the plain reading of "move the stop to breakeven at 1R, take no
+partial" — was **silently inert**: `if qc <= _TINY: continue` skipped the stop-move block, so the
+config ran byte-identically to having no level at all. Fixed so a zero-quantity level still moves the
+stop while booking no fill. Golden tests pass (levels that close something are untouched); two
+regression tests added. New TP method `be_ladder@v1` exposes `be_at_rr` / `be_scale_pct` / `tp_rr` /
+`be_trail_pct`.
+
+## Phase 11 — 29 exit designs x 5 entries x 9 windows
+
+```
+exit design            expR_mean   net vs NULL   trades    dd
+runpast_rr2_opp1        +0.0333      +0.0375      1256   24.3   <- part 3
+runpast_rr2_opp2        +0.0309      +0.0370      1256   25.8   <- part 3
+salvage_opp2_rr2        +0.0178      +0.0326      1498   20.8   <- part 2
+salvage_opp2_rr3        +0.0161      +0.0378      1495   21.3   <- part 2
+be0.5/rr3               +0.0140      +0.0176      1385   21.2
+base_rr3                -0.0018      +0.0414      1081   33.1
+base_trail1%            -0.0732      +0.0215      1549   36.2
+base_trail0.5%          -0.0859      +0.0119      1680   22.8
+```
+
+**Both proposed rules rank 1-4 of 29.** "Reach the target, don't close, exit on the first opposite
+candle" is the best exit design tested, and the salvage rule is third and fourth. Every trailing
+variant is at the bottom, consistent with the capture diagnostic.
+
+Against each entry's own plain-3R baseline, the improvements are real but small:
+
+```
+be1/rr3            +0.0095      scale50@1/rr3     -0.0117
+be1.5/rr3          +0.0076      base_trail1%      -0.0620
+runpast_rr2_opp1   +0.0076      base_trail0.5%    -0.0841
+```
+
+## Verdict
+
+**Survivors positive in all nine windows, >=300 trades, outlier-proof, beating the null: 0 of 87.**
+
+Two configs are positive in all nine windows before the outlier gate —
+`vwapz2_long|scale50@1.5/rr3` (947 trades, expR_min +0.0066, 17.8% drawdown) and
+`vwapz2_long|base_rr2` (+0.0016) — and both go negative once each window's best trade is removed.
+
+So: the exit design ideas are sound and measurably better than the alternatives, the ranking is
+stable and it agrees with the mechanism the diagnostic identified. They improve a losing system by
+about +0.01R. They do not make it a winning one, which is what optional stopping predicted before
+the sweep started.
+
+**The actionable findings, independent of any strategy:**
+1. **Trailing stops are the worst exit family tested** — 37% capture versus 87-93% for fixed targets.
+2. **Hit the target, then exit on the first opposite candle** beats both a plain target and any trail.
+3. **Breakeven at 1-1.5R with a 3R target** is the best simple improvement, +0.0095R over a plain 3R.
+4. **"The move kept going after I exited" is an illusion** — a random entry shows more continuation.

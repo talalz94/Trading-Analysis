@@ -59,6 +59,8 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Improving the best strategy with S/R zones / EMA bias / HH-HL structure** | x no improvement | Phase 8: every filter keeping >=294 trades scored BELOW the unfiltered base; the ones that look better run on 11-71 trades. Only 1 of 153 configs beat the base at >=300 trades, by +0.006R |
 | **Faster timeframes for the best strategy** | x worse | Unconditioned `wt_cross_short`: 15m **+0.065**, 5m -0.063, 1m -0.056. On 1m *every* conditioner is negative |
 | **Long side vs short side** | ~ mirror images, both beta | Phase 9, nine windows over a full cycle: longs +0.014 mean in bulls / -0.063 in bears; shorts -0.044 in bulls / +0.048 in bears. Neither is inherently better; the earlier apparent superiority of shorts was a biased sample |
+| **Trailing stops as an exit family** | x worst tested | Capture only **37%** of the favourable move vs **87-93%** for fixed targets; bottom of all 29 exit designs in Phase 11 |
+| **"The move keeps going after I exit"** | x illusion | The metronome shows MORE continuation than the strategy (cont30 1.07 vs 1.00) - it is the max-of-a-random-walk effect |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -68,6 +70,8 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Time stop** (new engine feature, `max_bars_in_trade`) | Median expR −0.045 → −0.027 at 15–30 bars, median drawdown 62.9% → 55.8%. It helps the **null entry** by about as much, so it is cutting cost-weighted dead time, not finding better exits. Keep it; don't count it as alpha. |
 | **Trailing stop** | Turns almost anything positive in-sample — including a random entry — by harvesting BTC's fat-tailed trend structure. Not an entry edge. |
 | **Higher timeframe for drawdown** | Median max drawdown 64% → 32% → 14% from 1m → 5m → 15m. Real, and unrelated to expectancy. |
+| **Hit the target, then exit on the first opposite candle** | Best of 29 exit designs (+0.0333 mean, +0.0375 over the metronome) and better than any trail. Real, but worth ~+0.01R - it improves a losing system, it does not make one win. |
+| **Breakeven at 1-1.5R with a 3R target** | +0.0095R over a plain 3R target, the best simple exit change. Needed an engine fix: a TakeProfit closing 0% was silently inert. |
 | **Smaller position size** | The ONLY risk control that works. 1% → 0.25% risk leaves `expR` identical and divides drawdown by the same factor — it buys nothing you couldn't get by trading smaller. |
 
 ## ✓ The one positive, actionable rule found
@@ -137,6 +141,7 @@ now standing rules:
    single falling market cannot separate "short edge" from "short beta". Every gate in Phases 6
    and 8 was applied to the eventual winner and none caught it, because they all took the window
    set as given. Phase 9's nine-window cycle retracted it in one table.
+9. **Measure capture before optimising exits.** "Am I leaving money in winners?" and "am I giving winners back?" have opposite fixes. Fixed targets already capture 87-93%; the real leak was that **30% of trades reaching +1R end up losing**.
 ---
 
 ## What would have to change

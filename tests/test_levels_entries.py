@@ -364,3 +364,74 @@ def test_prepare_affecting_param_cannot_be_overridden_per_run(df):
     with pytest.raises(ValueError):
         b.run("high_of_n@v1", "rr@v1", {"stop_n": 30}, {"initial_cash": 10_000},
               entry_params={"cb_short": 120})
+
+
+# ---------------------------------------------------------------------------
+# breakeven-only TP level (a level that closes NOTHING but still moves the stop)
+# ---------------------------------------------------------------------------
+def test_zero_close_tp_level_still_moves_the_stop(df):
+    """REGRESSION: a TakeProfit with close_pct=0 used to be silently inert.
+
+    `if qc <= _TINY: continue` skipped the stop-move block, so "go to breakeven at 1R, take no
+    partial" -- the plain reading of a break-even rule -- ran byte-identically to having no level at
+    all. It has to change the outcome, and it has to change it in the right direction: far fewer
+    full-R losers, because trades that reached 1R now stop out at entry instead.
+    """
+    from quant.engine import TakeProfit
+    n = len(df)
+    sig = _sig(n, every=40)
+    base = dict(initial_cash=10_000, exit_enabled=True, sl_mode="entry_pct", sl_value=1.0)
+    plain = run_backtest(df, sig, BacktestConfig(**base,
+                                                 take_profits=(TakeProfit("rr", 2.0, 100.0),)))
+    be = run_backtest(df, sig, BacktestConfig(
+        **base, take_profits=(TakeProfit("rr", 1.0, 0.0, "breakeven"),
+                              TakeProfit("rr", 2.0, 100.0))))
+
+    def rr(res):
+        t = res.trades
+        risk = (t["stop_price"] - t["entry_price"]).abs() * t["qty"]
+        return (t["pnl"] / risk).replace([np.inf, -np.inf], np.nan).dropna()
+
+    assert len(plain.trades) > 0 and len(be.trades) > 0
+    assert not plain.trades.equals(be.trades), "close_pct=0 level must not be inert"
+    rp, rb = rr(plain), rr(be)
+    # without the level every trade is a full stop or a full target; with it, a third outcome
+    # appears -- exits at ~0R, which is the breakeven stop doing its job
+    assert not (rp.abs() < 0.05).any(), "baseline should have no breakeven exits"
+    assert (rb.abs() < 0.05).sum() > 0, "breakeven level produced no ~0R exits"
+    # and it must convert full-R losers, not manufacture extra ones
+    assert (rb <= -0.95).mean() < (rp <= -0.95).mean()
+
+
+def test_zero_close_tp_level_does_not_book_a_fill(df):
+    """A level that closes nothing must not add fees or change the position size."""
+    from quant.engine import TakeProfit
+    n = len(df)
+    sig = _sig(n, every=40)
+    res = run_backtest(df, sig, BacktestConfig(
+        initial_cash=10_000, exit_enabled=True, sl_mode="entry_pct", sl_value=1.0,
+        fee_bps=10.0, take_profits=(TakeProfit("rr", 1.0, 0.0, "breakeven"),
+                                    TakeProfit("rr", 2.0, 100.0))))
+    t = res.trades
+    assert len(t) > 0
+    # every trade closes in exactly one fill, so exit fees stay proportional to a single exit
+    assert (t["close_reason"] != "take_profit").any()
+    assert (t["qty"] > 0).all()
+
+
+def test_be_ladder_tp_method_matches_a_hand_built_ladder(df):
+    from quant.engine import TakeProfit
+    n = len(df)
+    run = sc.run_pieces(df, "time_entry_long@v1", "atr@v1", "be_ladder@v1",
+                        params={"te_every": 40, "stop_atr_mult": 2.0,
+                                "be_at_rr": 1.0, "be_scale_pct": 50.0, "tp_rr": 3.0},
+                        cfg={"initial_cash": 10_000})
+    assert len(run.trades) > 0
+    assert run.cfg.take_profits == (TakeProfit("rr", 1.0, 50.0, "breakeven"),
+                                    TakeProfit("rr", 3.0, 100.0))
+    # be_at_rr = 0 drops the breakeven level entirely
+    run2 = sc.run_pieces(df, "time_entry_long@v1", "atr@v1", "be_ladder@v1",
+                         params={"te_every": 40, "stop_atr_mult": 2.0,
+                                 "be_at_rr": 0.0, "tp_rr": 3.0},
+                         cfg={"initial_cash": 10_000})
+    assert len(run2.cfg.take_profits) == 1

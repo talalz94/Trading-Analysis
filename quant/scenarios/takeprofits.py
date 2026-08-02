@@ -133,11 +133,49 @@ class _RRPartials(TPMethod):
         return dataclasses.replace(cfg, take_profits=tps)
 
 
+
+class _BeLadder(TPMethod):
+    """The three-part close, as one configurable ladder.
+
+    Part 1 is the plain stop (owned by the StopMethod). This piece owns parts 2 and 3:
+
+      `be_at_rr`     once the trade reaches this many R, MOVE THE STOP TO BREAKEVEN. Set 0 to skip.
+                     With `be_scale_pct` = 0 nothing is closed there -- it is purely a stop move,
+                     which is what "set stop to break even once we are up" actually means. That case
+                     used to be silently inert in the kernel (a level closing 0% skipped the stop
+                     move entirely); fixed, and covered by a regression test.
+      `be_scale_pct` optionally bank part of the position at the same level.
+      `tp_rr`        the final target for whatever is left.
+      `be_trail_pct` after the breakeven level is reached, also ratchet a trailing stop this %
+                     behind the high-water mark. 0 = no trail, so the runner is capped by `tp_rr`.
+
+    Combine with `secondary='run_past_tp@v1'` (and `sec_arm_on_tp`) to hand the runner to a
+    candle-based rule instead of a fixed target.
+    """
+    name, version = "be_ladder", "v1"
+    description = "breakeven (and optional partial) at N R, then a final target and/or a trail"
+    default_params = {"be_at_rr": 1.0, "be_scale_pct": 0.0, "tp_rr": 3.0, "be_trail_pct": 0.0}
+
+    def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
+        tps = []
+        be = float(p["be_at_rr"])
+        if be > 0:
+            tps.append(TakeProfit(mode="rr", value=be, close_pct=float(p["be_scale_pct"]),
+                                  move_stop_mode="breakeven"))
+        tps.append(TakeProfit(mode="rr", value=float(p["tp_rr"]), close_pct=100.0))
+        cfg = dataclasses.replace(cfg, take_profits=tuple(tps))
+        trail = float(p.get("be_trail_pct") or 0.0)
+        if trail > 0:
+            cfg = dataclasses.replace(cfg, trail_mode="pct", trail_value=trail)
+        return cfg
+
+
 register_tp(_NoTarget())
 register_tp(_RRTarget())
 register_tp(_FixedPctTarget())
 register_tp(_Trailing())
 register_tp(_NGreenExit())
+register_tp(_BeLadder())
 register_tp(_BackAboveEma())
 register_tp(_NextZoneSignal())
 register_tp(_OppositeCandle())
