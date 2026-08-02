@@ -32,7 +32,10 @@ import pandas as pd
 
 from .. import signals as S
 from ..data import build_mtf
-from ..indicators import add_atr, add_emas, add_heikin_ashi, add_smas, add_sr_zones, add_swings
+from ..indicators import (add_atr, add_candle_patterns, add_chart_patterns, add_emas,
+                          add_heikin_ashi, add_smas, add_sr_zones, add_swings)
+from ..indicators.candle_patterns import PATTERN_DIRECTION as _CDL_DIR
+from ..indicators.chart_patterns import PATTERN_DIRECTION as _PAT_DIR
 from ..indicators.overlays import ema as _ema_series
 from .indicators import HeikinAshi, Ind, SRZones, col_of
 
@@ -290,6 +293,16 @@ class Indicator:
         if self.kind == "atr":
             (period,) = self.args
             return add_atr(df, period)
+        if self.kind == "candle_patterns":
+            names, gap_mode, engulf_ratio, body_window, trend_window = self.args
+            return add_candle_patterns(df, list(names) if names else None, gap_mode=gap_mode,
+                                       engulf_ratio=engulf_ratio, body_window=body_window,
+                                       trend_window=trend_window)
+        if self.kind == "chart_patterns":
+            names, atr_mult, tol, lookback_pivots, max_wait = self.args
+            return add_chart_patterns(df, patterns=list(names) if names else None,
+                                      atr_mult=atr_mult, tol=tol,
+                                      lookback_pivots=lookback_pivots, max_wait=max_wait)
         if self.kind == "mtf_ema":
             tf, period, source = self.args
             p = int(period)
@@ -496,6 +509,84 @@ def swings(left: int = 12, right: int = 12) -> Indicator:
 
 def atr(period: int = 14) -> Indicator:
     return Indicator("atr", (int(period),))
+
+
+# ---------------------------------------------------------------------------
+# Candlestick / chart patterns
+# ---------------------------------------------------------------------------
+def candle_patterns(*names: str, gap_mode: str = "none", engulf_ratio: float = 1.0,
+                    body_window: int = 20, trend_window: int = 10) -> Indicator:
+    """Declare the candlestick columns a rule needs. No names = the whole library.
+
+    `gap_mode='none'` is the default because on a 24/7 market 0.000% of bars gap, so the textbook
+    gap tests can never fire (see `quant.indicators.candle_patterns`).
+    """
+    return Indicator("candle_patterns", (tuple(names), gap_mode, engulf_ratio,
+                                         body_window, trend_window))
+
+
+def chart_patterns(*names: str, atr_mult: float = 2.0, tol: float = 0.12,
+                   lookback_pivots: int = 6, max_wait: int = 150) -> Indicator:
+    """Declare the chart-pattern columns a rule needs. No names = every shape."""
+    return Indicator("chart_patterns", (tuple(names), atr_mult, tol, lookback_pivots, max_wait))
+
+
+def candle(name: str, *, prefix: str = "cdl") -> Cond:
+    """A specific candlestick pattern completed on this bar, e.g. `candle('engulfing_bull')`."""
+    if name not in _CDL_DIR:
+        raise KeyError(f"unknown candle pattern {name!r}; see quant.indicators.CANDLE_PATTERNS")
+    col = f"{prefix}_{name}"
+    return Cond(lambda df: df[col].to_numpy(bool), f"cdl:{name}")
+
+
+def candle_any(*names: str, prefix: str = "cdl") -> Cond:
+    """Any of the named candlestick patterns completed on this bar."""
+    for n in names:
+        if n not in _CDL_DIR:
+            raise KeyError(f"unknown candle pattern {n!r}")
+    cols = [f"{prefix}_{n}" for n in names]
+
+    def fn(df):
+        return np.logical_or.reduce([df[c].to_numpy(bool) for c in cols])
+
+    return Cond(fn, "cdl_any(" + ",".join(names) + ")")
+
+
+def candle_bias(direction: str = "bull", *, min_n: int = 1, net: bool = False,
+                prefix: str = "cdl") -> Cond:
+    """Use the whole library at once: at least `min_n` bullish (or bearish) patterns fired.
+
+    With `net=True` the requirement is on the NET score (bullish minus bearish), which suppresses
+    bars where conflicting patterns all fire together.
+    """
+    col = f"{prefix}_score" if net else f"{prefix}_{'bull' if direction == 'bull' else 'bear'}_n"
+    sign = 1 if direction == "bull" else -1
+
+    def fn(df):
+        v = df[col].to_numpy(float)
+        return (sign * v) >= min_n if net else v >= min_n
+
+    return Cond(fn, f"cdl_{direction}{'_net' if net else ''}>={min_n}")
+
+
+def chart_pattern(name: str, *, prefix: str = "pat") -> Cond:
+    """A specific chart pattern CONFIRMED on this bar (its neckline broke)."""
+    if name not in _PAT_DIR:
+        raise KeyError(f"unknown chart pattern {name!r}; see quant.indicators.CHART_PATTERNS")
+    col = f"{prefix}_{name}"
+    return Cond(lambda df: df[col].to_numpy(bool), f"pat:{name}")
+
+
+def chart_pattern_any(direction: Optional[str] = None, *, prefix: str = "pat") -> Cond:
+    """Any chart pattern confirmed on this bar, optionally filtered to 'bull' or 'bear'."""
+    if direction is None:
+        return Cond(lambda df: df[f"{prefix}_signal"].to_numpy(bool), "pat:any")
+    want = 1 if direction == "bull" else -1
+
+    def fn(df):
+        return df[f"{prefix}_signal"].to_numpy(bool) & (df[f"{prefix}_dir"].to_numpy(int) == want)
+
+    return Cond(fn, f"pat:any_{direction}")
 
 
 def apply_indicators(df: pd.DataFrame, indicators: Sequence[Indicator]) -> pd.DataFrame:

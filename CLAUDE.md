@@ -42,7 +42,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **190 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **265 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -78,6 +78,18 @@ quant/
 │   │                    #     (+ rsi_divergence_table; lag == `right` bars exactly, `left` is free)
 │   │                    #     and add_rsi_divergence_realtime (zero-lag but PROVISIONAL, ~53% ratified)
 │   ├── candles.py       #   add_heikin_ashi (recursive ha_open in numba)
+│   ├── candle_patterns.py #  62 CANDLESTICK PATTERNS as bool cols `cdl_<name>`, flagged on the bar
+│   │                    #     the pattern COMPLETES. Scale-free (ratios + a rolling avg body), with
+│   │                    #     trend context so hammer/hanging-man and inv-hammer/shooting-star are
+│   │                    #     separated. `gap_mode='none'` default: BTC has 0.000% true gaps, so the
+│   │                    #     textbook gap tests can never fire (7 patterns stay dead by design).
+│   │                    #     Adds cdl_bull_n / cdl_bear_n / cdl_score to use the whole set at once.
+│   ├── chart_patterns.py #   19 CHART PATTERNS (double/triple top+bottom, H&S + inverse, wedges,
+│   │                    #     triangles, rectangles, flags, pennants, broadening) over ZIGZAG pivots.
+│   │                    #     Two-stage and strictly causal: a shape is registered when its pivots
+│   │                    #     confirm, and fires only when price CLOSES through the neckline. Each
+│   │                    #     hit publishes pat_entry / pat_stop / pat_target (measured move) plus
+│   │                    #     forward-filled `_ff` copies for sl_mode='ref_col' and signal TPs.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
@@ -104,6 +116,9 @@ quant/
 │   │                    #     green/red/ha_red/big_candle/near_support/bounce_off_support…) +
 │   │                    #     indicator specs (ema[+smooth]/ma/mtf_ema/sr_zones/heikin_ashi/swings/
 │   │                    #     atr) + StopSpec builders (pct_stop/ref_col_stop/price_abs_stop)
+│   │                    #     candle(name) · candle_any(...) · candle_bias('bull', min_n, net=)
+│   │                    #     chart_pattern(name) · chart_pattern_any('bull'|'bear')
+│   │                    #     + candle_patterns()/chart_patterns() Indicator specs (auto-prepared)
 │   ├── regimes.py       #   REGIME CONDITIONERS as Conds (AND onto any entry via entry_filter=):
 │   │                    #     vol_regime(high/mid/low) · trendiness(trending/choppy, Kaufman ER) ·
 │   │                    #     vol_shock(within=N) = ANNOUNCEMENT PROXY · range_position · CONDITIONERS dict.
@@ -121,7 +136,9 @@ quant/
 │   ├── export.py        #   open_in_browser(fig), heikin_ashi_candles(df) — keeps notebooks helper-free
 │   ├── responsive.py    #   ResearchChart / price_chart / equity_chart (plotly-resampler; millions of pts)
 │   ├── charts.py        #   static price+trades, equity+drawdown (HTML-export safe)
-│   ├── studies.py       #   studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup
+│   ├── studies.py       #   add_pattern_overlays (candlestick + chart-pattern markers and their
+│   │                    #     entry/stop/target levels; one legend group per pattern, default OFF),
+│   │                    #     studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup
 │   │                    #     chart: candles+EMA line+S/R zones+entries/stops/exits+gradient pane,
 │   │                    #     ATR bands, HH/HL structure, RSI+divergence, HIGHER-TF EMA line+pane),
 │   │                    #     zoom_to_trade, CROSSHAIR_JS (full-height cross-pane cursor)
@@ -133,16 +150,21 @@ quant/
 │   │                    #     level_event (break/fade/sweep/retest of any level) · bos/choch (zigzag) ·
 │   │                    #     vol_thrust · squeeze · wt_cross · rsi_div · vwap_rev · grad_extreme ·
 │   │                    #     time_entry = NULL BENCHMARK (enter every N bars, no signal — any entry
-│   │                    #     that can't beat a metronome on the same exits contributed nothing)
+│   │                    #     that can't beat a metronome on the same exits contributed nothing) ·
+│   │                    #     candle_pattern (named subset or the whole library via its score) ·
+│   │                    #     chart_pattern (fires on the neckline break, not on shape completion)
 │   ├── support_break.py #   support_break_short v1.0 core / v1.1 +HH-HL structure / v1.2 no-structure
 │   │                    #     / v1.3 nearest-trough — short below a down-sloping smoothed 200-EMA on a
 │   │                    #     support break; entry_mode = break_close|wait_n|n_red|pullback (Q2);
 │   │                    #     LEVEL B exposed as `break_level` (latched per episode) + break_mode =
 │   │                    #     close_below|full_below; candle_src = real|ha for every candle test
-│   ├── stops.py         #   pct / swing_high / prev_high / leg_high / high_of_n / zone_top / atr
+│   ├── stops.py         #   pct / swing_high / prev_high / leg_high / high_of_n / zone_top / atr /
+│   │                    #     pattern_stop (the chart pattern's own invalidation level)
 │   │                    #     (Q1: where the stop goes — see the LAG note in §12)
 │   ├── takeprofits.py   #   rr / fixed_pct / trailing / opposite_candle / n_green_exit /
-│   │                    #     back_above_ema / next_zone / rr_partials  (Q3; signal- or cfg-based)
+│   │                    #     back_above_ema / next_zone / rr_partials / be_ladder (breakeven and/or
+│   │                    #     partial at N R, then a target and/or a trail) / pattern_target
+│   │                    #     (the chart pattern's measured move)  (Q3; signal- or cfg-based)
 │   └── secondaries.py   #   POST-ENTRY rules: shaky_trend_bail@v1 (arm when price closes above/touches
 │                        #     the EMA, then bail on the first opposite candle IF in profit)
 ├── optimize/
@@ -217,6 +239,9 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
   ladder for armed trades; the stop/trailing are never affected. Expresses "since THIS trade opened",
   which a global signal array cannot. With no `exit_alt_*` the whole branch is skipped —
   byte-identical (golden tests pass).
+- **Take-profit levels may close 0%** and still move the stop (`TakeProfit(mode, value, close_pct=0,
+  move_stop_mode='breakeven')`) — that is how a plain "go to breakeven at 1R" is expressed. Such a
+  level books no fill; levels that DO close something are unchanged (golden parity).
 - **Time stop (`max_bars_in_trade`)**: close any trade still open N bars after entry, at that bar's
   close. Checked AFTER stop/TP and exit signals, so a trade closing for a real reason keeps that
   reason. `0` = off and the whole block is skipped — byte-identical (golden tests pass).
@@ -313,12 +338,12 @@ parity, causal S/R zones, MTF bias, big-move, configurable MA, tagged indicator 
 entry, full stop×TP + entry-mode matrix, LEVEL-B exposure/latching + both break_modes, the pivot-lag
 property (leg_high <= swing_high), Heikin-Ashi candle source, engine-level secondary semantics
 (in-profit gate, arm-only-after-entry, sec_replace_tp), Preset JSON round-trip incl. `secondary`,
-shipped presets load+run), `test_levels_entries.py` (reference-level CAUSALITY — prev-day/week/session
+shipped presets load+run), `test_patterns.py` (candlestick shapes from hand-built candles, hammer vs hanging man separated by trend, three-candle patterns flagged on their LAST bar, gap patterns impossible without gaps, score columns consistent, **CAUSALITY by truncation** for both libraries — running on the first k bars must reproduce the full run's first k results — chart patterns confirm only past the neckline with a valid stop/target geometry, and the pattern scenarios/stop/TP run end to end), `test_levels_entries.py` (reference-level CAUSALITY — prev-day/week/session
 levels come from the completed prior period, running session extremes are expanding not final, the
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason). **234 total.**
+close reason). **265 total.**
 
 ## 12. Known limitations / honest caveats
 

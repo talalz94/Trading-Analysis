@@ -31,7 +31,8 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-from ..indicators import (add_atr, add_ema_gradient, add_emas, add_prev_day_levels, add_round_levels,
+from ..indicators import (add_atr, add_candle_patterns, add_chart_patterns,
+                          add_ema_gradient, add_emas, add_prev_day_levels, add_round_levels,
                           add_rsi_divergence, add_rsi_divergence_realtime, add_session_levels,
                           add_sr_zones, add_squeeze_momentum, add_volume_features, add_vwap,
                           add_wavetrend, add_week_levels, add_zigzag_structure, level_events)
@@ -405,3 +406,89 @@ CMP_LONG, CMP_SHORT = _both(
                 "isolates what the compression itself contributes.")
 
 ENTRY_FAMILIES.append("compression_break")
+
+
+# ---------------------------------------------------------------------------
+# 11/12. candlestick and chart patterns as primary triggers
+# ---------------------------------------------------------------------------
+_CDL_DEFAULTS = {"cdl_names": None, "cdl_min_n": 1, "cdl_net": False, "cdl_gap_mode": "none",
+                 "cdl_engulf_ratio": 1.0, "cdl_body_window": 20, "cdl_trend_window": 10}
+
+
+def _prep_cdl(df, p):
+    names = p.get("cdl_names")
+    return add_candle_patterns(df, list(names) if names else None,
+                               gap_mode=p["cdl_gap_mode"],
+                               engulf_ratio=float(p["cdl_engulf_ratio"]),
+                               body_window=int(p["cdl_body_window"]),
+                               trend_window=int(p["cdl_trend_window"]))
+
+
+def _ent_cdl(p, side):
+    """Either a named subset of patterns, or the whole library via its bullish/bearish score."""
+    names = p.get("cdl_names")
+    want = "bull" if side == "long" else "bear"
+    if names:
+        cols = [f"cdl_{n}" for n in names]
+        return raw(lambda df: np.logical_or.reduce([df[c].to_numpy(bool) for c in cols]),
+                   f"cdl_any({len(cols)})_{side}")
+    col = "cdl_score" if p["cdl_net"] else f"cdl_{want}_n"
+    sign = 1 if want == "bull" else -1
+    m = int(p["cdl_min_n"])
+    net = bool(p["cdl_net"])
+
+    def fn(df):
+        v = df[col].to_numpy(float)
+        return (sign * v >= m) if net else (v >= m)
+
+    return raw(fn, f"cdl_{want}>={m}")
+
+
+CDL_LONG, CDL_SHORT = _both(
+    "candle_pattern", _prep_cdl, _ent_cdl, defaults=_CDL_DEFAULTS,
+    prepare_keys=("cdl_names", "cdl_gap_mode", "cdl_engulf_ratio", "cdl_body_window",
+                  "cdl_trend_window"),
+    description="candlestick patterns as the trigger: a named subset, or the whole library through "
+                "its bull/bear score")
+
+
+_PAT_DEFAULTS = {"pat_names": None, "pat_atr_mult": 2.0, "pat_tol": 0.12,
+                 "pat_lookback_pivots": 6, "pat_max_wait": 150}
+
+
+def _prep_pat(df, p):
+    names = p.get("pat_names")
+    out = add_chart_patterns(df, patterns=list(names) if names else None,
+                             atr_mult=float(p["pat_atr_mult"]), tol=float(p["pat_tol"]),
+                             lookback_pivots=int(p["pat_lookback_pivots"]),
+                             max_wait=int(p["pat_max_wait"]))
+    # the shape's own protective level, carried per bar so `pattern_stop@v1` can read it
+    out["break_level"] = out["pat_entry_ff"].to_numpy(float)
+    return out
+
+
+def _ent_pat(p, side):
+    names = p.get("pat_names")
+    want = 1 if side == "long" else -1
+    if names:
+        cols = [f"pat_{n}" for n in names]
+
+        def fn(df):
+            hit = np.logical_or.reduce([df[c].to_numpy(bool) for c in cols])
+            return hit & (df["pat_dir"].to_numpy(int) == want)
+
+        return raw(fn, f"pat_any({len(cols)})_{side}")
+
+    def fn2(df):
+        return df["pat_signal"].to_numpy(bool) & (df["pat_dir"].to_numpy(int) == want)
+
+    return raw(fn2, f"pat_any_{side}")
+
+
+PAT_LONG, PAT_SHORT = _both(
+    "chart_pattern", _prep_pat, _ent_pat, defaults=_PAT_DEFAULTS,
+    prepare_keys=("pat_names", "pat_atr_mult", "pat_tol", "pat_lookback_pivots", "pat_max_wait"),
+    description="classical chart patterns (double top/bottom, H&S, wedges, triangles, flags) fired "
+                "on the bar their neckline BREAKS, never when the shape first looks complete")
+
+ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]

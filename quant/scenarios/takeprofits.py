@@ -16,11 +16,14 @@ Params (flat, read from the merged scenario params):
 """
 from __future__ import annotations
 
+import numpy as np
+
 import dataclasses
 
 from ..engine import BacktestConfig, TakeProfit
 from ..indicators import add_heikin_ashi, add_sr_zones
-from ..strategies.conditions import (above, below, green, near_resistance, near_support, red)
+from ..strategies.conditions import (above, below, green, near_resistance, near_support,
+                                     raw, red)
 from .base import TPMethod, register_tp
 
 
@@ -170,12 +173,36 @@ class _BeLadder(TPMethod):
         return cfg
 
 
+class _PatternTarget(TPMethod):
+    """Take profit at the chart pattern's MEASURED MOVE (`pat_target_ff`).
+
+    The classical projection: the pattern's height carried from the breakout point. Realised as an
+    exit SIGNAL rather than a config price, because the target differs per trade and the kernel's
+    take-profit ladder is fixed at entry.
+    """
+    name, version = "pattern_target", "v1"
+    description = "exit at the chart pattern's measured-move target"
+    default_params = {}
+
+    def exit(self, p: dict):
+        side = p.get("_side", "short")
+
+        def fn(df):
+            tgt = df["pat_target_ff"].to_numpy(float)
+            c = df["close"].to_numpy(float)
+            with np.errstate(invalid="ignore"):
+                return (c >= tgt) if side == "long" else (c <= tgt)
+
+        return raw(fn, "pattern_target")
+
+
 register_tp(_NoTarget())
 register_tp(_RRTarget())
 register_tp(_FixedPctTarget())
 register_tp(_Trailing())
 register_tp(_NGreenExit())
 register_tp(_BeLadder())
+register_tp(_PatternTarget())
 register_tp(_BackAboveEma())
 register_tp(_NextZoneSignal())
 register_tp(_OppositeCandle())
