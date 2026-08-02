@@ -394,16 +394,20 @@ def run_kernel(
                             cf = 0.0
                         qc = o_qty[j] * cf
                         o_tp_done[j] |= (1 << kk)
-                        if qc <= _TINY:
-                            continue
                         exit_px = _fill_px(tpx, side, slip, spread, 0)
-                        gross = side * (exit_px - o_entry_px[j]) * qc
-                        ef = _costs(exit_px, qc, fee, commission_per_lot, contract_size)
-                        cash += gross - ef
-                        t_gross[k] += gross
-                        t_exit_fee[k] += ef
-                        o_qty[j] -= qc
+                        if qc > _TINY:
+                            gross = side * (exit_px - o_entry_px[j]) * qc
+                            ef = _costs(exit_px, qc, fee, commission_per_lot, contract_size)
+                            cash += gross - ef
+                            t_gross[k] += gross
+                            t_exit_fee[k] += ef
+                            o_qty[j] -= qc
 
+                        # A level that closes NOTHING (close_pct = 0) may still MOVE THE STOP. That
+                        # is how a plain "go to breakeven once 1R is reached" rule is expressed, with
+                        # no partial taken. Previously `continue` skipped this block, so such a level
+                        # was silently inert and the config ran byte-identically to having no level
+                        # at all. Levels that do close something are unaffected.
                         mvmode = tp_move_modes[kk]
                         if mvmode != 0:
                             if mvmode == 1:
@@ -421,7 +425,7 @@ def run_kernel(
                                 if newstop < o_stop[j]:
                                     o_stop[j] = newstop
 
-                        if o_qty[j] <= _TINY:
+                        if qc > _TINY and o_qty[j] <= _TINY:
                             t_exit_i[k] = i
                             t_exit_px[k] = exit_px
                             t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
