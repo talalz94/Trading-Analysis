@@ -272,3 +272,95 @@ def test_time_stop_does_not_override_a_real_close_reason(df):
     t = res.trades
     assert (t["close_reason"] == "stop_loss").any()
     assert (t.loc[t["close_reason"] == "time_stop", "bars_held"] == 30).all()
+
+
+# ---------------------------------------------------------------------------
+# compression family + the sweep's prepared-frame sharing
+# ---------------------------------------------------------------------------
+def test_compression_columns_are_causal(df):
+    from quant.indicators import add_compression
+    out = add_compression(df, short=30, long=120, rank_window=200)
+    # the two range windows must not overlap, and cb_hi/cb_lo come from bars strictly before
+    # short=30 needs 30 bars; the prior block is rolling(120).shift(30), so the first bar that can
+    # have BOTH, with no overlap between them, is index 149
+    assert out["cmp_range_ratio"].iloc[:149].isna().all()
+    assert np.isfinite(out["cmp_range_ratio"].iloc[149])
+    assert (out["cmp_pct"].dropna().between(0, 1)).all()
+    assert (out["cmp_nr"].dropna().between(0, 1)).all()
+    # percentile rank is shifted, so a bar never ranks against itself
+    r = out["cmp_atr_ratio"]
+    ref = r.rolling(200, min_periods=50).rank(pct=True).shift(1)
+    ok = ref.notna() & out["cmp_pct"].notna()
+    assert np.allclose(ref[ok], out["cmp_pct"][ok])
+
+
+def test_compression_break_range_is_from_prior_bars(df):
+    run = sc.run_pieces(df, "compression_break_long@v1", "high_of_n@v1", "rr@v1",
+                        params={"cb_short": 30, "cb_long": 120, "cb_rank_window": 200,
+                                "cb_quiet_q": 1.0, "stop_n": 30, "tp_rr": 2.0},
+                        cfg={"initial_cash": 10_000})
+    d = run.df
+    hi = d["high"].rolling(30, min_periods=30).max().shift(1)
+    ok = d["cb_hi"].notna()
+    assert np.allclose(d.loc[ok, "cb_hi"], hi[ok])
+    assert len(run.trades) > 0
+
+
+def test_quiet_filter_reduces_trades(df):
+    """cb_quiet_q=1.0 disables the filter; a tighter threshold must take strictly fewer trades."""
+    base = dict(cb_short=30, cb_long=120, cb_rank_window=200, stop_n=30, tp_rr=2.0)
+    n_all = len(sc.run_pieces(df, "compression_break_short@v1", "high_of_n@v1", "rr@v1",
+                              params={**base, "cb_quiet_q": 1.0},
+                              cfg={"initial_cash": 10_000}).trades)
+    n_quiet = len(sc.run_pieces(df, "compression_break_short@v1", "high_of_n@v1", "rr@v1",
+                                params={**base, "cb_quiet_q": 0.2},
+                                cfg={"initial_cash": 10_000}).trades)
+    assert n_all > 0 and n_quiet <= n_all
+
+
+def test_sweep_shares_frames_without_leaking_params(df):
+    """REGRESSION: variants sharing a prepared frame must still use their OWN trigger/threshold.
+
+    Caching the whole EntryBundle by a prepare-only key once made every variant silently run with the
+    first one's parameters -- 288 configs came back with deltas of exactly 0.0000, which reads as a
+    clean negative result rather than as a bug.
+    """
+    from experiments.mgmt_sweep import sweep, EntryBundle
+    from experiments.search_harness import CFG_LEVERED
+    cfg = {**CFG_LEVERED, "spread": 0.0}
+    base = dict(cb_short=30, cb_long=120, cb_rank_window=200)
+    entries = [(f"{t}_{q}", "compression_break_short@v1",
+                {**base, "cb_trigger": t, "cb_quiet_q": q}, None)
+               for t in ("range_break", "ema_cross") for q in (0.2, 1.0)]
+    n_built = [0]
+    orig = EntryBundle.__init__
+
+    def counting(self, *a, **k):
+        n_built[0] += 1
+        return orig(self, *a, **k)
+
+    EntryBundle.__init__ = counting
+    try:
+        res = sweep({"w": df}, entries,
+                    [dict(stop="high_of_n@v1", tp="rr@v1",
+                          params={"stop_n": 30, "tp_rr": 2.0}, tag="m")],
+                    spread=0.0, verbose=False)
+    finally:
+        EntryBundle.__init__ = orig
+    assert n_built[0] == 1, "all four variants share one prepared frame"
+    assert res.n_total.nunique() > 1, "variants must not all produce identical trade counts"
+    # and each matches an independent run_pieces
+    for tag, key, ep, _ in entries:
+        want = len(sc.run_pieces(df, key, "high_of_n@v1", "rr@v1",
+                                 params={**ep, "stop_n": 30, "tp_rr": 2.0},
+                                 cfg=cfg).trades)
+        got = int(res.loc[res.entry == tag, "n_total"].iloc[0])
+        assert got == want, f"{tag}: sweep {got} != run_pieces {want}"
+
+
+def test_prepare_affecting_param_cannot_be_overridden_per_run(df):
+    from experiments.mgmt_sweep import EntryBundle
+    b = EntryBundle(df, "compression_break_short@v1", {"cb_short": 30, "cb_long": 120})
+    with pytest.raises(ValueError):
+        b.run("high_of_n@v1", "rr@v1", {"stop_n": 30}, {"initial_cash": 10_000},
+              entry_params={"cb_short": 120})

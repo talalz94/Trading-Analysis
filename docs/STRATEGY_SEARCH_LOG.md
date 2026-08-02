@@ -754,3 +754,126 @@ size, and size trades return for drawdown one-for-one.**
 
 Six independent counts, five of them **below** chance. A search that keeps returning fewer survivors
 than random selection would is not under-tuned; it is describing an empty space.
+
+---
+
+# PHASE 7 — The volatility-compression theory ("quiet range, then a big move off the 200-EMA")
+
+Proposed from a chart of **Saturday 2026-08-01**: BTC ranged all day in a very tight band, broke below
+the 1-minute 200-EMA around 15:00–16:00 UTC and then dropped hard. Hypothesis: compression predicts a
+big move, the EMA break gives the direction, and the trigger may be the US open on weekdays.
+
+New primitives: `add_compression` (`quant/indicators/volatility.py`) — range ratio, ATR ratio,
+generalised NR7 rank, Bollinger width, and a trailing PERCENTILE RANK of the ATR ratio (`cmp_pct`),
+which is the one to condition on because an absolute volatility cut silently becomes a date filter.
+New scenario family `compression_break_{long,short}@v1` with `cb_quiet_q = 1.0` disabling the filter —
+that switch is the control the whole phase turns on.
+
+## The instance itself
+
+Quantified, the chart is real: ATR(14) fell to **1.9** by hour 13 and reached **39.0** by hour 18, a
+20x expansion, with `cmp_pct` in the bottom 1–13% of its own history through hours 0–9.
+
+But ranked against history it is not a big move at all:
+
+```
+                       2026-08-01    median day
+daily range              139 bps       297 bps     -> 9th PERCENTILE of 578 days
+max 120-bar travel       121 bps        85 bps     -> 69th percentile
+```
+
+**It was one of the quietest days in the sample.** The visual drama comes from the price axis
+auto-scaling to a ~175 bps window, in which a 120 bps move fills the screen.
+
+## The theory has four claims. Three are false.
+
+**1. "Quiet then big move" — FALSE in absolute terms.** Forward 120-bar travel by compression decile:
+
+```
+decile 0 (quietest)  57.1 bps          decile 9 (loudest)  103.1 bps
+```
+
+Volatility is PERSISTENT, not mean-reverting. In ATR units the same data reads 19.14 vs 10.71 — a
+"1.79x expansion after quiet" — but that is the **denominator shrinking**, the identical trap that
+killed the Phase-1 screens. Net of the shuffled-null control the range-relative effect is **+4 to
++14%**, small but not zero.
+
+**2. "The longer it coils, the bigger the spring" — FALSE.** Over 3,622 compression episodes:
+
+```
+wait to release   <30   30-60  60-120  120-240  240-480  480+
+travel (bps)     78.5    84.3    85.5     84.9     81.7   85.8
+```
+
+Flat. A ten-hour compression releases no harder than a thirty-minute one.
+
+**3. The 200-EMA cross carries NO direction.** Releases resolve upward **47.8%** of the time; hit
+rates 46–53%, split along long/short lines — the residual short-bias artifact, not signal.
+
+**4. "The move comes at the US open" — TRUE, with a caveat.**
+
+```
+release hour (UTC)   12:00   13:00   14:00   typical other hour
+share of releases    13.3%   16.1%    5.4%          ~4%
+median travel        111     125     121 bps       60-90 bps
+```
+
+**35% of releases land in 12:00–14:00 UTC** (US cash open 13:30) and are ~40% bigger. But the weekend
+half is backwards: of 826 weekend compressions, **99.8% released while it was still the weekend** (2
+of 826 waited for Monday), and weekend releases are *smaller* — Sat 47 bps, Sun 64 bps, versus
+85–120 bps on weekdays.
+
+## The strategy: the compression filter SUBTRACTS value
+
+100 entry variants (2 triggers x breakout/fade x 4 quiet thresholds incl. OFF x 3 range lengths x
+both sides) x 12 management combos x 3 regimes = 1,200 configs.
+
+**The paired control — identical breakout, filter ON (q=0.2) vs OFF, same management, 288 pairs:**
+
+```
+compression HELPED in 29 of 288 pairs (10.1%)      median delta  -0.0452
+```
+
+It makes things worse nine times out of ten, by 4.5 percentage points of R. Median `expR_min` by
+threshold confirms it — every filtered variant is below the unfiltered one:
+
+```
+q            ALL      0.35     0.2      0.1
+breakout   -0.0670  -0.0857  -0.1116  -0.1334
+fade       -0.0291  -0.0556  -0.0842  -0.0677
+```
+
+The best configs are all `rangeF` — **FADING the range break**, i.e. the opposite of the proposed
+trade — and they are the familiar trailing-stop shape (`medR_min` -1.06, drawdowns 50–94%).
+Trim-top-K finishes them:
+
+```
+cfg                                 n_min   full   drop5  drop10  drop5%  top1pct_share
+rangeF_s120_q0.1_short                351  0.1768 -0.1049 -0.2775 -0.6772          99.2
+rangeF_s120_q0.35_short               954  0.1738  0.0422 -0.0608 -0.6739         101.4
+rangeF_s120_ALL_short (NO filter)    2490  0.1116  0.0529  0.0073 -0.6445         152.7
+NULL_short (metronome)               1041 -0.0039 -0.0713 -0.1270 -0.3672        5445.8
+```
+
+Deleting **five** trades out of 351 kills the best filtered config, whose top 1% of trades supply
+**99.2%** of its profit. Note also that the UNFILTERED version is the more robust of the two — more
+evidence the compression condition subtracts rather than adds.
+
+**Survivors: 49 of 1,152, where chance predicts ~144.** Below chance, for the seventh time.
+
+## Verdict — Phase 7
+
+**The compression breakout is not tradable, and the compression filter is actively harmful.** The one
+true part of the theory — releases cluster at the US open and are larger there — is a session-volume
+effect that applies to weekday compressions, not to the weekend setup that prompted it. And the chart
+that started it was a 9th-percentile day whose apparent violence was an artifact of axis scaling.
+
+### Engine / harness notes from this phase
+
+* `Scenario.prepare_keys` declares which params change `prepare()`'s output, so a sweep shares one
+  prepared frame across variants that differ only in trigger or threshold (100 prepares to 10 here).
+* **A bug worth recording:** caching the whole `EntryBundle` under that key made every variant run
+  with the FIRST variant's trigger and threshold. The sweep returned 288 pairs with deltas of
+  *exactly* 0.0000 — which reads as a clean negative result, not as a failure. Per-variant entry
+  params now pass through `run()`, prepare-affecting overrides raise, and
+  `test_sweep_shares_frames_without_leaking_params` locks it. Tests 234 to 239.

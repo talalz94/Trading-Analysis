@@ -31,7 +31,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-from ..indicators import (add_atr, add_ema_gradient, add_prev_day_levels, add_round_levels,
+from ..indicators import (add_atr, add_ema_gradient, add_emas, add_prev_day_levels, add_round_levels,
                           add_rsi_divergence, add_rsi_divergence_realtime, add_session_levels,
                           add_sr_zones, add_squeeze_momentum, add_volume_features, add_vwap,
                           add_wavetrend, add_week_levels, add_zigzag_structure, level_events)
@@ -48,11 +48,15 @@ class FnScenario(Scenario):
 
     def __init__(self, name: str, side: str, prep: Callable, ent: Callable, *,
                  version: str = "v1", description: str = "", defaults: Optional[dict] = None,
-                 rst: Optional[Callable] = None):
+                 rst: Optional[Callable] = None, prepare_keys: Optional[tuple] = None):
         self.name, self.version, self.side = name, version, side
         self.description = description
         self.default_params = dict(defaults or {})
         self._prep, self._ent, self._rst = prep, ent, rst
+        # Which params change prepare()'s OUTPUT. A sweep can then share one prepared frame across
+        # every variant that only differs in trigger/threshold params, which for the compression
+        # family is a ~30x saving (the rolling percentile rank over 300k bars dominates everything).
+        self.prepare_keys = prepare_keys
 
     def prepare(self, df: pd.DataFrame, p: dict) -> pd.DataFrame:
         return self._prep(df, p)
@@ -65,10 +69,11 @@ class FnScenario(Scenario):
 
 
 def _both(name: str, prep, ent, *, description: str = "", defaults: Optional[dict] = None,
-          rst=None, version: str = "v1"):
+          rst=None, version: str = "v1", prepare_keys: Optional[tuple] = None):
     """Register the long and the short version of a family under `<name>_long@v1` / `<name>_short@v1`."""
     return tuple(register_scenario(FnScenario(f"{name}_{s}", s, prep, ent, version=version,
-                                              description=description, defaults=defaults, rst=rst))
+                                              description=description, defaults=defaults, rst=rst,
+                                              prepare_keys=prepare_keys))
                  for s in ("long", "short"))
 
 
@@ -340,3 +345,63 @@ NULL_LONG, NULL_SHORT = _both(
 
 ENTRY_FAMILIES = ["level_event", "bos", "vol_thrust", "squeeze", "wt_cross", "rsi_div",
                   "vwap_rev", "grad_extreme", "time_entry"]
+
+
+# ---------------------------------------------------------------------------
+# 10. compression_break — the "quiet range then a big move" setup
+# ---------------------------------------------------------------------------
+_CMP_DEFAULTS = {"cb_short": 60, "cb_long": 480, "cb_rank_window": 2000,
+                 "cb_quiet_q": 0.2, "cb_trigger": "range_break", "cb_ema": 200,
+                 "cb_fade": False, "cb_buffer_bps": 0.0}
+
+
+def _prep_cmp(df, p):
+    from ..indicators import add_compression
+    out = add_compression(df, short=int(p["cb_short"]), long=int(p["cb_long"]),
+                          rank_window=int(p["cb_rank_window"]))
+    out = add_emas(out, [int(p["cb_ema"])])
+    s = int(p["cb_short"])
+    # the range being broken, from bars STRICTLY before this one
+    out["cb_hi"] = out["high"].rolling(s, min_periods=s).max().shift(1).to_numpy()
+    out["cb_lo"] = out["low"].rolling(s, min_periods=s).min().shift(1).to_numpy()
+    out["break_level"] = np.where(np.asarray(p["_side"] == "long"),
+                                  out["cb_hi"], out["cb_lo"])
+    return out
+
+
+def _ent_cmp(p, side):
+    q = float(p["cb_quiet_q"])
+    trig = p["cb_trigger"]
+    ema_col = f"ema_{int(p['cb_ema'])}"
+    fade = bool(p["cb_fade"])
+    buf = float(p["cb_buffer_bps"]) / 10000.0
+    want_up = (side == "long") != fade          # a fade takes the opposite side of the break
+
+    def fn(df):
+        c = df["close"].to_numpy(float)
+        prev = np.r_[np.nan, c[:-1]]
+        quiet = df["cmp_pct"].to_numpy(float) <= q
+        with np.errstate(invalid="ignore"):
+            if trig == "ema_cross":
+                e = df[ema_col].to_numpy(float)
+                pe = np.r_[np.nan, e[:-1]]
+                fired = ((c > e * (1 + buf)) & (prev <= pe) if want_up
+                         else (c < e * (1 - buf)) & (prev >= pe))
+            else:                                # range_break
+                lv = (df["cb_hi"] if want_up else df["cb_lo"]).to_numpy(float)
+                fired = ((c > lv * (1 + buf)) & (prev <= lv) if want_up
+                         else (c < lv * (1 - buf)) & (prev >= lv))
+            return fired & quiet & np.isfinite(c)
+
+    return raw(fn, f"cmp_{trig}_{'fade' if fade else 'go'}_{side}")
+
+
+CMP_LONG, CMP_SHORT = _both(
+    "compression_break", _prep_cmp, _ent_cmp, defaults=_CMP_DEFAULTS,
+    prepare_keys=("cb_short", "cb_long", "cb_rank_window", "cb_ema"),
+    description="break out of (or fade) a VOLATILITY-COMPRESSED range. `cb_quiet_q` is the trailing "
+                "percentile of ATR(short)/ATR(long) below which the market counts as quiet; set it "
+                "to 1.0 to disable the compression filter entirely, which is the control that "
+                "isolates what the compression itself contributes.")
+
+ENTRY_FAMILIES.append("compression_break")

@@ -55,6 +55,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | Support/resistance-break family (the original setup) | ✗ | Parameter spike with negative neighbours; 1 of 36 survivors where chance predicts ~4 |
 | Bail-out rules as the sole exit | ✗ dies on costs | +0.025R at zero cost → −0.007R at 0.7 bp |
 | **Hybrid / conditional strategies** — volatility terciles, trend vs chop, range position, session, HTF bias (with *and* against) | ✗ | 3 survivors of 304, chance ~38. The metronome filtered to the US session scores +0.070 and clears the same bar |
+| **Volatility compression then breakout** (quiet range, big move off the 200-EMA) | x the filter HURTS | Paired control over 288 matched pairs: compression helped in **10.1%**, median delta **-0.045R**. Quiet periods are followed by *smaller* absolute moves (57 vs 103 bps); longer coils do NOT spring harder (flat 78-86 bps); release direction is a coin flip (47.8% up). Best configs *fade* the break and die on trim-top-K (5 trades of 351) |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -67,6 +68,11 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Smaller position size** | The ONLY risk control that works. 1% → 0.25% risk leaves `expR` identical and divides drawdown by the same factor — it buys nothing you couldn't get by trading smaller. |
 
 ## ✓ The one positive, actionable rule found
+
+**Compression releases cluster at the US open.** 35% of 3,622 compression episodes release in
+12:00-14:00 UTC (cash open 13:30) and travel ~40% further there (111-125 bps vs 60-90). Real, but
+it is a session-volume effect and it did NOT convert into a tradable rule. The weekend version is
+backwards: 99.8% of weekend compressions resolve on the weekend, and they are *smaller*.
 
 **Do not trade into a volatility shock, and do not chase the hour after it.** Conditioning entries on
 the shock bar itself costs **−0.2596R** — the single largest effect measured anywhere in this search —
