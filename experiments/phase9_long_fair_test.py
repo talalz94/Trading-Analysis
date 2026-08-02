@@ -21,6 +21,7 @@ The last is the honest number for something you would actually run unattended.
 """
 from __future__ import annotations
 
+import sys
 import time
 
 import numpy as np
@@ -31,7 +32,7 @@ from quant.indicators import add_emas, add_sr_zones, add_zigzag_structure
 
 from experiments.mgmt_sweep import sweep
 
-TF = "15m"
+TF = sys.argv[1] if len(sys.argv) > 1 else "15m"   # timeframe under test
 WINDOWS = {
     "2022H1_bear": ("2022-01-01", "2022-07-01"),
     "2022H2_bear": ("2022-07-01", "2023-01-01"),
@@ -85,6 +86,7 @@ def load() -> dict:
 def main():
     pd.set_option("display.width", 260)
     w = load()
+    print(f"=== TIMEFRAME {TF} ===")
     print("WINDOWS (BTC move over each):")
     for k, d in w.items():
         print(f"  {k:12s} {len(d):>6,} bars   {100*(d.close.iloc[-1]/d.close.iloc[0]-1):+7.1f}%")
@@ -104,7 +106,7 @@ def main():
         cols = [f"expR_{k}" for k in keys if f"expR_{k}" in res.columns]
         res[f"expR_{lab}_min"] = res[cols].min(axis=1)
         res[f"expR_{lab}_mean"] = res[cols].mean(axis=1)
-    res.to_csv("experiments/results_phase9_long_fair.csv", index=False)
+    res.to_csv(f"experiments/results_phase9_long_fair_{TF}.csv", index=False)
     if res.error.astype(bool).any():
         print("ERRORS:", res[res.error.astype(bool)].error.value_counts().head(3).to_dict())
 

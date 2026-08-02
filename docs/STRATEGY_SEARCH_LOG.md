@@ -1040,6 +1040,22 @@ worst window goes negative — and +0.0016 is zero to any useful precision.
 and beating the null (whose ceiling across nine windows is −0.1092). Chance predicts ~0.13, so zero is
 unremarkable — the nine-window bar is simply very strict, and nothing came close.
 
+
+## Phase 9b — the same balanced test at 5m
+
+The 2022-2024 fetch also gave 5m for the full cycle, so the "does a faster timeframe help" question
+gets a fair answer too:
+
+```
+tf    best config                     expR_min   null ceiling   survivors
+15m   vwapz2_long|atr2.5/rr2           +0.0016      -0.1092       0 / 66
+ 5m   rtdiv_short|atr2.5/rr1.5         -0.0475      -0.0790       0 / 66
+```
+
+Nothing is positive at 5m at all, and `wt53_short` manages **1 of 5 bull windows** at both
+timeframes. The long mirror manages 1 of 5 too. On a balanced sample neither side, at either
+timeframe, produces anything.
+
 ## The methodological lesson
 
 **Balance the window set before trusting a directional result.** Three windows chosen from a single
