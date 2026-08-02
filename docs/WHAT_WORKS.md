@@ -61,6 +61,8 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Long side vs short side** | ~ mirror images, both beta | Phase 9, nine windows over a full cycle: longs +0.014 mean in bulls / -0.063 in bears; shorts -0.044 in bulls / +0.048 in bears. Neither is inherently better; the earlier apparent superiority of shorts was a biased sample |
 | **Trailing stops as an exit family** | x worst tested | Capture only **37%** of the favourable move vs **87-93%** for fixed targets; bottom of all 29 exit designs in Phase 11 |
 | **"The move keeps going after I exit"** | x illusion | The metronome shows MORE continuation than the strategy (cont30 1.07 vs 1.00) - it is the max-of-a-random-walk effect |
+| **Candlestick patterns** (62, incl. every classic reversal) | x no directional edge | Hit rate **50.1-50.5%**, NEGATIVE excess over a null that preserves their exact candle shapes and destroys only the order. Several INVERT (`three_inside_down` -0.57, `hanging_man` -0.42). Only `marubozu_bull` is consistent, and it is a momentum bar |
+| **Chart patterns as a directional trade** (19: double/triple tops, H&S, wedges, triangles, flags) | x fails the gates | Sub-50% hit rate with positive skew, so wide targets DO help (+0.0026 at 0.5R to +0.0640 at 8R, exactly as the screen predicted). But the metronome gains the same from wide targets, the top 1% of trades supply 74-370% of profit, and the working side FLIPS between BTC and gold |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -76,6 +78,8 @@ two to six percentage points — is the whole result. Nothing in the search clos
 
 ## ✓ The one positive, actionable rule found
 
+**Chart patterns predict EXPANSION, not direction.** Forward 20-bar range is **12-19% larger** after a triangle / wedge / H&S, and unlike the Phase-7 compression result this survives measurement in PRICE terms as well as ATR units (1.19 vs 1.13 for an ascending triangle), with the shuffled null at ~0.97. It is the most solid pattern measurement in the project. It still did not convert into a tradable rule, because exploiting expansion without direction requires a wide target and that turns the payoff into a lottery.
+
 **Compression releases cluster at the US open.** 35% of 3,622 compression episodes release in
 12:00-14:00 UTC (cash open 13:30) and travel ~40% further there (111-125 bps vs 60-90). Real, but
 it is a session-volume effect and it did NOT convert into a tradable rule. The weekend version is
@@ -89,6 +93,8 @@ this is the empirical form of "stay out of the release." It is a rule about when
 rather than an edge, but it is large, consistent, and the only Phase-4 result worth acting on.
 
 ## ? The only two things that are not obviously nothing
+
+**0. A chart pattern breaking AT an S/R support zone** — the only filter in the whole project that improved a rule on a like-for-like basis instead of by starving it: +0.0197 -> +0.0495 while giving up just 13% of its trades. Unvalidated, but the shape of the result is right.
 
 **1. `pdlow_fade_long` + trailing stop (BTC 1m)** — long on a fade of the previous day's low.
 Worst-window +0.136R against the null's +0.040R, survives 2× spread where the null does not, and is

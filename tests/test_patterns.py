@@ -260,3 +260,23 @@ def test_candle_pattern_table_lists_hits(rnd):
     tb = candle_pattern_table(out)
     assert set(tb.pattern.unique()) <= {"hammer", "engulfing_bull", "doji"}
     assert len(tb) == int(out[["cdl_hammer", "cdl_engulfing_bull", "cdl_doji"]].sum().sum())
+
+
+def test_calling_the_detector_twice_does_not_duplicate_columns(rnd):
+    """REGRESSION: a loader adding every pattern, then a scenario preparing a subset, used to leave
+    two columns of the same name — after which `df[col]` returns a DataFrame, every boolean test
+    silently misbehaves, and pattern entries produce ZERO trades with no error anywhere."""
+    once = add_candle_patterns(rnd)
+    twice = add_candle_patterns(once, ["hammer", "engulfing_bull"])
+    assert list(twice.columns).count("cdl_hammer") == 1
+    assert isinstance(twice["cdl_hammer"], pd.Series)
+    # and the recomputed values must match the first pass
+    pd.testing.assert_series_equal(once["cdl_hammer"], twice["cdl_hammer"])
+
+
+def test_named_subset_entry_actually_trades(rnd):
+    run = sc.run_pieces(rnd, "candle_pattern_long@v1", "atr@v1", "rr@v1",
+                        params={"cdl_names": ["hammer", "engulfing_bull"],
+                                "stop_atr_mult": 2.0, "tp_rr": 2.0},
+                        cfg={"initial_cash": 10_000})
+    assert len(run.trades) > 0
