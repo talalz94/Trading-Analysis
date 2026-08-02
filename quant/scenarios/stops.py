@@ -180,6 +180,22 @@ class _PrevHighStop(StopMethod):
         return _ref(cfg, p, "prev_pivot", **_buf(p))
 
 
+class _PatternStop(StopMethod):
+    """Stop at the CHART PATTERN's own protective level (the far side of the shape).
+
+    `pat_stop_ff` is the forward-filled level published by `add_chart_patterns`, so a trade opened on
+    a double bottom is stopped below that bottom, an H&S short above the right shoulder, and so on —
+    which is how these patterns are actually traded. Falls back to a percentage stop when no pattern
+    level is available.
+    """
+    name, version = "pattern_stop", "v1"
+    description = "the chart pattern's own invalidation level"
+    default_params = {"stop_buffer_pct": 0.05, "stop_max_risk_pct": 0.0, "stop_pct": 1.0}
+
+    def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
+        return _ref(cfg, p, "pat_stop_ff")
+
+
 class _AtrStop(StopMethod):
     name, version = "atr", "v1"
     description = "Tight volatility stop: entry + ATR × multiple (above, for a short)."
@@ -203,3 +219,4 @@ register_stop(_PrevHighStop())
 register_stop(_HighOfNStop())
 register_stop(_ZoneTopStop())
 register_stop(_AtrStop())
+register_stop(_PatternStop())

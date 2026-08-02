@@ -370,6 +370,100 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
     return s
 
 
+# ---------------------------------------------------------------------------
+# Pattern overlays (toggleable from any figure)
+# ---------------------------------------------------------------------------
+def add_pattern_overlays(fig, df, *, time_col: str = "t", row: int = 1, col: int = 1,
+                         candles=True, charts=True, candle_names=None,
+                         chart_names=None, cdl_prefix: str = "cdl", pat_prefix: str = "pat",
+                         show_levels: bool = True, max_labels: int = 400):
+    """Draw detected patterns onto an existing price figure.
+
+    Candlestick hits become small triangles under (bullish) or over (bearish) the bar, grouped into
+    ONE legend entry per pattern so each can be toggled on and off individually. Chart patterns get a
+    marker at the confirmation bar plus, with `show_levels`, their entry / stop / target as short
+    horizontal segments — the geometry the trade would actually use.
+
+    `candle_names` / `chart_names` restrict what is drawn; by default everything present is drawn,
+    which on a long series is a lot, so `max_labels` caps each pattern's markers to the most recent
+    ones.
+    """
+    import numpy as np
+    import plotly.graph_objects as go
+    from ..indicators.candle_patterns import PATTERN_DIRECTION as _CDL_DIR
+    from ..indicators.chart_patterns import PATTERN_DIRECTION as _PAT_DIR
+
+    t = df[time_col].to_numpy() if time_col in df.columns else np.arange(len(df))
+    hi, lo = df["high"].to_numpy(float), df["low"].to_numpy(float)
+    pad = (hi - lo)
+    pad = np.where(np.isfinite(pad) & (pad > 0), pad, 1.0) * 0.6
+
+    if candles:
+        names = candle_names or [n for n in _CDL_DIR if f"{cdl_prefix}_{n}" in df.columns]
+        for name in names:
+            c = f"{cdl_prefix}_{name}"
+            if c not in df.columns:
+                continue
+            idx = np.flatnonzero(df[c].to_numpy(bool))
+            if not len(idx):
+                continue
+            idx = idx[-max_labels:]
+            d = _CDL_DIR.get(name, 0)
+            up = d > 0
+            fig.add_trace(go.Scattergl(
+                x=t[idx], y=(lo[idx] - pad[idx]) if up else (hi[idx] + pad[idx]),
+                mode="markers", name=f"cdl {name}",
+                legendgroup=f"cdl_{name}", visible="legendonly",
+                marker=dict(symbol="triangle-up" if up else "triangle-down", size=8,
+                            color="#2ecc71" if up else ("#e74c3c" if d < 0 else "#f1c40f")),
+                hovertemplate=f"{name}<extra></extra>"), row=row, col=col)
+
+    if charts and f"{pat_prefix}_signal" in df.columns:
+        names = chart_names or [n for n in _PAT_DIR if f"{pat_prefix}_{n}" in df.columns]
+        entry = df.get(f"{pat_prefix}_entry")
+        stop = df.get(f"{pat_prefix}_stop")
+        target = df.get(f"{pat_prefix}_target")
+        for name in names:
+            c = f"{pat_prefix}_{name}"
+            if c not in df.columns:
+                continue
+            idx = np.flatnonzero(df[c].to_numpy(bool))
+            if not len(idx):
+                continue
+            idx = idx[-max_labels:]
+            d = _PAT_DIR.get(name, 0)
+            up = d > 0
+            fig.add_trace(go.Scattergl(
+                x=t[idx], y=(lo[idx] - 2 * pad[idx]) if up else (hi[idx] + 2 * pad[idx]),
+                mode="markers+text", name=f"pat {name}",
+                legendgroup=f"pat_{name}", visible="legendonly",
+                text=[name.replace("_", " ")] * len(idx), textposition="bottom center",
+                textfont=dict(size=9),
+                marker=dict(symbol="star", size=11,
+                            color="#2ecc71" if up else "#e74c3c"),
+                hovertemplate=f"{name}<extra></extra>"), row=row, col=col)
+            if show_levels and entry is not None:
+                seg_x, seg_y, tgt_x, tgt_y, stp_x, stp_y = [], [], [], [], [], []
+                span = max(len(df) // 200, 5)
+                for i in idx:
+                    j = min(i + span, len(df) - 1)
+                    for xs, ys, src in ((seg_x, seg_y, entry), (tgt_x, tgt_y, target),
+                                        (stp_x, stp_y, stop)):
+                        v = float(src.to_numpy(float)[i])
+                        xs += [t[i], t[j], None]
+                        ys += [v, v, None]
+                for xs, ys, lab, colr, dash in (
+                        (seg_x, seg_y, "entry", "#f39c12", "solid"),
+                        (tgt_x, tgt_y, "target", "#2ecc71", "dot"),
+                        (stp_x, stp_y, "stop", "#e74c3c", "dot")):
+                    fig.add_trace(go.Scattergl(
+                        x=xs, y=ys, mode="lines", name=f"pat {name} {lab}",
+                        legendgroup=f"pat_{name}", visible="legendonly", showlegend=False,
+                        line=dict(color=colr, width=1, dash=dash),
+                        hoverinfo="skip"), row=row, col=col)
+    return fig
+
+
 def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_right: int = 10,
                     cluster_pct: float = 0.15, title: Optional[str] = None, height: int = 900,
                     show_zones: bool = True, grad_band: Optional[float] = None,
