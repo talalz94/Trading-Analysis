@@ -37,12 +37,28 @@ class EntryBundle:
         self.entry_filter = entry_filter          # default; `run` may override per call
         p = {**self.scen.default_params, **self.entry_params, "_side": self.scen.side}
         self._df = self.scen.prepare(_prepare_mtf(df, p.get("mtf_emas")), p)
+        # Remember what the frame was actually built with, so a per-call override cannot silently
+        # disagree with the columns sitting in it.
+        pk = getattr(self.scen, "prepare_keys", None)
+        self._prep_sig = None if pk is None else {k: p.get(k) for k in pk}
 
     def run(self, stop: str, tp: str, params: Optional[dict] = None,
-            cfg: Optional[dict] = None, secondary=None, entry_filter=None):
+            cfg: Optional[dict] = None, secondary=None, entry_filter=None,
+            entry_params: Optional[dict] = None):
         st, tpm = resolve_stop(stop), resolve_tp(tp)
         secs = resolve_secondaries(secondary)
-        p = merged_params(self.scen, st, tpm, {**self.entry_params, **(params or {})}, secs)
+        # Entry params that do NOT affect prepare() (trigger choice, thresholds) may vary per call so
+        # one prepared frame serves many variants. Params that DO affect prepare() must not: the
+        # frame in hand was built with specific ones, and quietly ignoring an override here is
+        # exactly the bug that makes every variant return identical numbers.
+        ep = {**self.entry_params, **(entry_params or {})}
+        if self._prep_sig is not None:
+            bad = {k: v for k, v in (entry_params or {}).items()
+                   if k in self._prep_sig and v != self._prep_sig[k]}
+            if bad:
+                raise ValueError(f"{self.key}: {sorted(bad)} affect prepare() and cannot be "
+                                 f"overridden per run; build a separate EntryBundle")
+        p = merged_params(self.scen, st, tpm, {**ep, **(params or {})}, secs)
         p["_side"] = self.scen.side
         d = tpm.prepare(st.prepare(self._df, p), p)
         for s in secs:
@@ -86,8 +102,14 @@ def sweep(windows: Dict[str, pd.DataFrame], entries: List[tuple], mgmt: List[dic
     rows, t0 = [], time.time()
     cache: Dict[tuple, Dict[str, EntryBundle]] = {}
     for ei, (etag, skey, eparams, efilter) in enumerate(entries, 1):
-        # Entries that differ ONLY by their regime filter share one prepared frame.
-        ck = (skey, tuple(sorted((k, repr(v)) for k, v in (eparams or {}).items())))
+        # Entries that differ only by their regime filter, or by params the scenario says do not
+        # affect prepare(), share one prepared frame.
+        scen = resolve_scenario(skey)
+        pk = getattr(scen, "prepare_keys", None)
+        items = (eparams or {}).items()
+        if pk is not None:
+            items = [(k, v) for k, v in items if k in pk]
+        ck = (skey, tuple(sorted((k, repr(v)) for k, v in items)))
         if ck not in cache:
             cache[ck] = {w: EntryBundle(d, skey, eparams) for w, d in windows.items()}
         bundles = cache[ck]
@@ -98,7 +120,8 @@ def sweep(windows: Dict[str, pd.DataFrame], entries: List[tuple], mgmt: List[dic
                     per[w] = r_stats(b.run(m["stop"], m["tp"], m.get("params"),
                                            {**base_cfg, **m.get("cfg", {})},
                                            secondary=m.get("secondary"),
-                                           entry_filter=efilter))
+                                           entry_filter=efilter,
+                                           entry_params=eparams))
                 except Exception as exc:
                     per[w] = dict(n=0, error=f"{type(exc).__name__}: {exc}"[:90])
 
