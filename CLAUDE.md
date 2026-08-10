@@ -90,6 +90,8 @@ quant/
 │   │                    #     confirm, and fires only when price CLOSES through the neckline. Each
 │   │                    #     hit publishes pat_entry / pat_stop / pat_target (measured move) plus
 │   │                    #     forward-filled `_ff` copies for sl_mode='ref_col' and signal TPs.
+│   │                    #     chart_pattern_shapes() returns the PIVOT GEOMETRY per confirmed shape
+│   │                    #     (outline + upper/lower trendline points) so patterns can be drawn.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
@@ -136,7 +138,9 @@ quant/
 │   ├── export.py        #   open_in_browser(fig), heikin_ashi_candles(df) — keeps notebooks helper-free
 │   ├── responsive.py    #   ResearchChart / price_chart / equity_chart (plotly-resampler; millions of pts)
 │   ├── charts.py        #   static price+trades, equity+drawdown (HTML-export safe)
-│   ├── studies.py       #   add_pattern_overlays (candlestick + chart-pattern markers and their
+│   ├── studies.py       #   pattern_figure (candles + chart-pattern SHAPES: pivots, both trendlines,
+│   │                    #     neckline and measured-move target, one legend toggle each, + S/R zones),
+│   │                    #     add_pattern_overlays (candlestick + chart-pattern markers and their
 │   │                    #     entry/stop/target levels; one legend group per pattern, default OFF),
 │   │                    #     studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup
 │   │                    #     chart: candles+EMA line+S/R zones+entries/stops/exits+gradient pane,
@@ -177,7 +181,8 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study (Q1-Q9)
+notebooks/               # 14_pattern_viewer = chart-pattern SHAPES + S/R zones, toggled from the legend
+                         # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study (Q1-Q9)
                          #   · 04_trend_runner_leverage · 05_simple_1m_ema_breakout ·
                          #   06_ema_breakout_candles · 07_rule_builder · 08_sr_zones_view ·
                          #   09_squeeze_momentum · 10_scenario_lab (versioned setups + annotated chart)

@@ -373,6 +373,111 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 # ---------------------------------------------------------------------------
 # Pattern overlays (toggleable from any figure)
 # ---------------------------------------------------------------------------
+def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height: int = 820,
+                   sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
+                   cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
+                   atr_mult: float = 2.0, tol: float = 0.12, lookback_pivots: int = 6,
+                   max_wait: int = 150, extend: int = 12, start_visible=()):
+    """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
+
+    Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
+    GEOMETRY: the pivots the shape is built from, the upper and lower trendlines through them, the
+    neckline that had to break, and the measured-move target. That is what makes a triangle look like
+    a triangle rather than a dot.
+
+    Every pattern gets ONE legend entry controlling all of its drawing, so you can bring shapes in
+    and out one at a time. `start_visible` names the ones that should be on when the chart opens;
+    everything else starts in `legendonly`. S/R zones are their own toggle.
+
+    Nothing here is forward-looking: shapes are drawn from the bar the pattern CONFIRMED, using only
+    pivots that had already been confirmed by then.
+    """
+    import numpy as np
+    import plotly.graph_objects as go
+    from ..indicators import chart_pattern_shapes, sr_zone_table
+    from ..indicators.chart_patterns import PATTERN_DIRECTION as _PD
+
+    d = df.reset_index(drop=True)
+    t = d[time_col].to_numpy() if time_col in d.columns else np.arange(len(d))
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=t, open=d["open"], high=d["high"], low=d["low"], close=d["close"],
+        name="price", increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+        showlegend=False))
+
+    if sr_zones:
+        zt = sr_zone_table(d, left=zones_left, right=zones_right, cluster_pct=cluster_pct,
+                           max_zones=max_zones, time_col=time_col)
+        zt = zt[zt["touches"] >= min_touches]
+        xs, ys, widths = [], [], []
+        for r in zt.itertuples():
+            xs += [r.start_t, r.end_t, None]
+            ys += [r.price, r.price, None]
+            widths.append(r.touches)
+        if xs:
+            fig.add_trace(go.Scattergl(
+                x=xs, y=ys, mode="lines", name=f"S/R zones ({len(zt)})",
+                legendgroup="sr", line=dict(color="#8e9aa6", width=2),
+                opacity=0.55, hoverinfo="skip",
+                visible=True if "sr_zones" in start_visible else "legendonly"))
+
+    names = list(patterns) if patterns else list(_PD)
+    shapes = chart_pattern_shapes(d, patterns=names, atr_mult=atr_mult, tol=tol,
+                                  lookback_pivots=lookback_pivots, max_wait=max_wait)
+    for name in names:
+        sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
+        if not len(sub):
+            continue
+        up = _PD.get(name, 0) > 0
+        colr = "#2ecc71" if up else ("#e74c3c" if _PD.get(name, 0) < 0 else "#f0a30a")
+        vis = True if name in start_visible else "legendonly"
+        out_x, out_y = [], []          # the shape outline through its pivots
+        hi_x, hi_y, lo_x, lo_y = [], [], [], []
+        nk_x, nk_y, tg_x, tg_y = [], [], [], []
+        for r in sub.itertuples():
+            out_x += list(r.pivot_t) + [None]
+            out_y += list(r.pivot_price) + [None]
+            ci = int(r.confirm_i)
+            end = t[min(ci + extend, len(t) - 1)]
+            for src_t, src_p, X, Y in ((r.hi_t, r.hi_price, hi_x, hi_y),
+                                       (r.lo_t, r.lo_price, lo_x, lo_y)):
+                if len(src_t) >= 2:
+                    X += [src_t[0], src_t[-1], None]
+                    Y += [src_p[0], src_p[-1], None]
+            nk_x += [r.pivot_t[0], end, None]
+            nk_y += [r.entry, r.entry, None]
+            tg_x += [t[ci], end, None]
+            tg_y += [r.target, r.target, None]
+        label = name.replace("_", " ")
+        fig.add_trace(go.Scattergl(
+            x=out_x, y=out_y, mode="lines+markers", name=f"{label} ({len(sub)})",
+            legendgroup=name, visible=vis,
+            line=dict(color=colr, width=2), marker=dict(size=6, color=colr),
+            hovertemplate=f"{label}<extra></extra>"))
+        for X, Y, dash, wid in ((hi_x, hi_y, "dash", 1.5), (lo_x, lo_y, "dash", 1.5)):
+            if X:
+                fig.add_trace(go.Scattergl(
+                    x=X, y=Y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
+                    line=dict(color=colr, width=wid, dash=dash), hoverinfo="skip"))
+        if nk_x:
+            fig.add_trace(go.Scattergl(
+                x=nk_x, y=nk_y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
+                line=dict(color="#f0a30a", width=1.6), hoverinfo="skip"))
+        if tg_x:
+            fig.add_trace(go.Scattergl(
+                x=tg_x, y=tg_y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
+                line=dict(color=colr, width=1, dash="dot"), hoverinfo="skip"))
+
+    fig.update_layout(
+        title=title or "Chart patterns — click the legend to show/hide each one",
+        height=height, template="plotly_dark", xaxis_rangeslider_visible=False,
+        hovermode="x unified", legend=dict(orientation="v", x=1.01, y=1,
+                                           bgcolor="rgba(0,0,0,0.35)"),
+        margin=dict(l=50, r=210, t=60, b=40))
+    fig.update_yaxes(side="right")
+    return fig
+
+
 def add_pattern_overlays(fig, df, *, time_col: str = "t", row: int = 1, col: int = 1,
                          candles=True, charts=True, candle_names=None,
                          chart_names=None, cdl_prefix: str = "cdl", pat_prefix: str = "pat",
