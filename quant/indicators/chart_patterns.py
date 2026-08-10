@@ -113,13 +113,15 @@ def _detect(pv: List[_Pivot], *, tol: float, min_height_frac: float,
         if mid:
             neck = min(p.price for p in mid)
             top = max(h1.price, h2.price)
-            out.append(_Candidate("double_top", -1, neck, top, top - neck, formed, 0))
+            out.append(_Candidate("double_top", -1, neck, top, top - neck, formed, 0,
+                                  pivots=[h1] + mid[-1:] + [h2]))
     if _close(l1.price, l2.price, tol, scale) and l1.i < l2.i:
         mid = [p for p in highs if l1.i < p.i < l2.i]
         if mid:
             neck = max(p.price for p in mid)
             bot = min(l1.price, l2.price)
-            out.append(_Candidate("double_bottom", +1, neck, bot, neck - bot, formed, 0))
+            out.append(_Candidate("double_bottom", +1, neck, bot, neck - bot, formed, 0,
+                                  pivots=[l1] + mid[-1:] + [l2]))
 
     # ---- triple top / bottom --------------------------------------------------------
     if len(highs) >= 3:
@@ -129,7 +131,8 @@ def _detect(pv: List[_Pivot], *, tol: float, min_height_frac: float,
             if mid:
                 neck = min(p.price for p in mid)
                 top = max(a.price, b.price, c.price)
-                out.append(_Candidate("triple_top", -1, neck, top, top - neck, formed, 0))
+                out.append(_Candidate("triple_top", -1, neck, top, top - neck, formed, 0,
+                                      pivots=[a, b, c] + mid[-2:]))
     if len(lows) >= 3:
         a, b, c = lows[-3], lows[-2], lows[-1]
         if _close(a.price, b.price, tol, scale) and _close(b.price, c.price, tol, scale):
@@ -137,7 +140,8 @@ def _detect(pv: List[_Pivot], *, tol: float, min_height_frac: float,
             if mid:
                 neck = max(p.price for p in mid)
                 bot = min(a.price, b.price, c.price)
-                out.append(_Candidate("triple_bottom", +1, neck, bot, neck - bot, formed, 0))
+                out.append(_Candidate("triple_bottom", +1, neck, bot, neck - bot, formed, 0,
+                                      pivots=[a, b, c] + mid[-2:]))
 
     # ---- head & shoulders: 3 highs, middle highest, shoulders roughly level ----------
     if len(highs) >= 3 and len(lows) >= 2:
@@ -147,7 +151,8 @@ def _detect(pv: List[_Pivot], *, tol: float, min_height_frac: float,
                 and _close(ls.price, rs.price, tol * 1.5, scale) and len(troughs) >= 2):
             neck = float(np.mean([p.price for p in troughs[-2:]]))
             out.append(_Candidate("head_shoulders", -1, neck, head.price,
-                                  head.price - neck, formed, 0))
+                                  head.price - neck, formed, 0,
+                                  pivots=[ls] + troughs[-2:] + [head, rs]))
     if len(lows) >= 3 and len(highs) >= 2:
         ls, head, rs = lows[-3], lows[-2], lows[-1]
         peaks = [p for p in highs if ls.i < p.i < rs.i]
@@ -155,7 +160,8 @@ def _detect(pv: List[_Pivot], *, tol: float, min_height_frac: float,
                 and _close(ls.price, rs.price, tol * 1.5, scale) and len(peaks) >= 2):
             neck = float(np.mean([p.price for p in peaks[-2:]]))
             out.append(_Candidate("inverse_head_shoulders", +1, neck, head.price,
-                                  neck - head.price, formed, 0))
+                                  neck - head.price, formed, 0,
+                                  pivots=[ls] + peaks[-2:] + [head, rs]))
 
     # ---- triangles, wedges, rectangles: compare the two trendlines -------------------
     if len(highs) >= 2 and len(lows) >= 2:
@@ -169,30 +175,36 @@ def _detect(pv: List[_Pivot], *, tol: float, min_height_frac: float,
 
         if abs(sh) <= flat and sl > flat:
             out.append(_Candidate("ascending_triangle", +1, max(h1.price, h2.price),
-                                  l2.price, height, formed, 0))
+                                  l2.price, height, formed, 0, pivots=[h1, h2, l1, l2]))
         elif abs(sl) <= flat and sh < -flat:
             out.append(_Candidate("descending_triangle", -1, min(l1.price, l2.price),
-                                  h2.price, height, formed, 0))
+                                  h2.price, height, formed, 0, pivots=[h1, h2, l1, l2]))
         elif sh < -flat and sl > flat and converging:
             # symmetrical: breaks either way, registered on both sides
             out.append(_Candidate("symmetrical_triangle", +1, h2.price, l2.price,
-                                  height, formed, 0))
+                                  height, formed, 0, pivots=[h1, h2, l1, l2]))
             out.append(_Candidate("symmetrical_triangle", -1, l2.price, h2.price,
-                                  height, formed, 0))
+                                  height, formed, 0, pivots=[h1, h2, l1, l2]))
         elif sh > flat and sl > flat and converging:
             out.append(_Candidate("rising_wedge", -1, min(l1.price, l2.price),
-                                  max(h1.price, h2.price), height, formed, 0))
+                                  max(h1.price, h2.price), height, formed, 0,
+                                  pivots=[h1, h2, l1, l2]))
         elif sh < -flat and sl < -flat and converging:
             out.append(_Candidate("falling_wedge", +1, max(h1.price, h2.price),
-                                  min(l1.price, l2.price), height, formed, 0))
+                                  min(l1.price, l2.price), height, formed, 0,
+                                  pivots=[h1, h2, l1, l2]))
         elif abs(sh) <= flat and abs(sl) <= flat:
-            out.append(_Candidate("rectangle_bull", +1, hi_lvl, lo_lvl, height, formed, 0))
-            out.append(_Candidate("rectangle_bear", -1, lo_lvl, hi_lvl, height, formed, 0))
+            out.append(_Candidate("rectangle_bull", +1, hi_lvl, lo_lvl, height, formed, 0,
+                                  pivots=[h1, h2, l1, l2]))
+            out.append(_Candidate("rectangle_bear", -1, lo_lvl, hi_lvl, height, formed, 0,
+                                  pivots=[h1, h2, l1, l2]))
         elif sh > flat and sl < -flat:
             out.append(_Candidate("broadening_top", -1, min(l1.price, l2.price),
-                                  max(h1.price, h2.price), height, formed, 0))
+                                  max(h1.price, h2.price), height, formed, 0,
+                                  pivots=[h1, h2, l1, l2]))
             out.append(_Candidate("broadening_bottom", +1, max(h1.price, h2.price),
-                                  min(l1.price, l2.price), height, formed, 0))
+                                  min(l1.price, l2.price), height, formed, 0,
+                                  pivots=[h1, h2, l1, l2]))
     return out
 
 
@@ -214,7 +226,8 @@ def add_chart_patterns(df: pd.DataFrame, *, atr_mult: float = 2.0, atr_period: i
                        tol: float = 0.12, lookback_pivots: int = 6, max_wait: int = 150,
                        min_height_frac: float = 1.0, pole_mult: float = 1.5,
                        patterns: Optional[Sequence[str]] = None,
-                       prefix: str = "pat") -> pd.DataFrame:
+                       prefix: str = "pat",
+                       _collect: Optional[List[dict]] = None) -> pd.DataFrame:
     """Detect classical chart patterns and publish their entry / stop / target levels.
 
     Adds, all NaN or False except on the bar a pattern CONFIRMS:
@@ -257,6 +270,7 @@ def add_chart_patterns(df: pd.DataFrame, *, atr_mult: float = 2.0, atr_period: i
     e_name = np.empty(n, dtype=object)
 
     live: List[_Candidate] = []
+    confirmed: List[dict] = []
     pi = 0
     for i in range(n):
         # 1) register candidates from every pivot CONFIRMED on this bar
@@ -302,6 +316,17 @@ def add_chart_patterns(df: pd.DataFrame, *, atr_mult: float = 2.0, atr_period: i
                 still.append(cand)
                 continue
             hits[cand.name][i] = True
+            pv = sorted(cand.pivots, key=lambda q: q.i)
+            confirmed.append(dict(
+                confirm_i=i, formed_i=cand.formed_i, pattern=cand.name,
+                direction=cand.direction, entry=cand.neckline, stop=cand.stop,
+                target=(cand.neckline + cand.height if cand.direction > 0
+                        else cand.neckline - cand.height),
+                pivot_i=[q.i for q in pv], pivot_price=[q.price for q in pv],
+                hi_i=[q.i for q in pv if q.kind > 0],
+                hi_price=[q.price for q in pv if q.kind > 0],
+                lo_i=[q.i for q in pv if q.kind < 0],
+                lo_price=[q.price for q in pv if q.kind < 0]))
             e_entry[i] = cand.neckline
             e_stop[i] = cand.stop
             e_target[i] = (cand.neckline + cand.height if cand.direction > 0
@@ -322,6 +347,34 @@ def add_chart_patterns(df: pd.DataFrame, *, atr_mult: float = 2.0, atr_period: i
     for c in ("entry", "stop", "target", "dir"):
         src = out[f"{prefix}_{c}"]
         out[f"{prefix}_{c}_ff"] = src.replace(0, np.nan).ffill() if c == "dir" else src.ffill()
+    if _collect is not None:
+        _collect.extend(confirmed)
+    return out
+
+
+def chart_pattern_shapes(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """The GEOMETRY of every confirmed pattern — the pivot coordinates that make up the shape.
+
+    `add_chart_patterns` returns per-bar columns, which is what a strategy needs but not enough to
+    DRAW a triangle: for that you need the pivots the two trendlines pass through. This returns one
+    row per confirmed pattern with `pivot_i`/`pivot_price` (the full outline, in time order) plus
+    `hi_*` and `lo_*` (the upper and lower trendline points), alongside entry / stop / target.
+
+    Accepts the same tuning arguments as `add_chart_patterns`.
+    """
+    shapes: List[dict] = []
+    add_chart_patterns(df, _collect=shapes, **kwargs)
+    out = pd.DataFrame(shapes)
+    if not len(out):
+        return pd.DataFrame(columns=["confirm_i", "formed_i", "pattern", "direction", "entry",
+                                     "stop", "target", "pivot_i", "pivot_price", "hi_i",
+                                     "hi_price", "lo_i", "lo_price"])
+    if "t" in df.columns:
+        tv = df["t"].to_numpy()
+        out["t"] = tv[out["confirm_i"].to_numpy(int)]
+        out["pivot_t"] = [list(tv[np.asarray(v, int)]) for v in out["pivot_i"]]
+        out["hi_t"] = [list(tv[np.asarray(v, int)]) if len(v) else [] for v in out["hi_i"]]
+        out["lo_t"] = [list(tv[np.asarray(v, int)]) if len(v) else [] for v in out["lo_i"]]
     return out
 
 
