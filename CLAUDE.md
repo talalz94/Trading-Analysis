@@ -87,11 +87,17 @@ quant/
 │   ├── chart_patterns.py #   19 CHART PATTERNS (double/triple top+bottom, H&S + inverse, wedges,
 │   │                    #     triangles, rectangles, flags, pennants, broadening) over ZIGZAG pivots.
 │   │                    #     Two-stage and strictly causal: a shape is registered when its pivots
-│   │                    #     confirm, and fires only when price CLOSES through the neckline. Each
+│   │                    #     confirm, and fires only when price CLOSES through its boundary (which
+│   │                    #     may SLOPE - a triangle breaks its rising line, not a flat proxy). Each
 │   │                    #     hit publishes pat_entry / pat_stop / pat_target (measured move) plus
 │   │                    #     forward-filled `_ff` copies for sl_mode='ref_col' and signal TPs.
-│   │                    #     chart_pattern_shapes() returns the PIVOT GEOMETRY per confirmed shape
-│   │                    #     (outline + upper/lower trendline points) so patterns can be drawn.
+│   │                    #     TRENDLINES ARE FITTED, not assumed: _best_line runs RANSAC over pivot
+│   │                    #     pairs, counts pivots within line_tol_atr as TOUCHES, and requires an
+│   │                    #     ENVELOPE (nothing pokes through). A line through 2 points is not a
+│   │                    #     trendline - two points always fit - and that was the original bug.
+│   │                    #     PatternSpec + resolve_specs give PER-PATTERN strictness, with
+│   │                    #     sensitivity='major'|'normal'|'minor' as the coarse dial.
+│   │                    #     chart_pattern_shapes() returns the fitted boundaries for drawing.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +

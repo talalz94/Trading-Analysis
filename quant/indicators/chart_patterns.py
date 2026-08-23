@@ -472,7 +472,8 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                        pole_mult: float = 1.5, overlap_frac: float = 0.5,
                        patterns: Optional[Sequence[str]] = None,
                        prefix: str = "pat",
-                       _collect: Optional[List[dict]] = None) -> pd.DataFrame:
+                       _collect: Optional[List[dict]] = None,
+                       **removed) -> pd.DataFrame:
     """Detect classical chart patterns and publish their entry / stop / target levels.
 
     Adds, all NaN or False except on the bar a pattern CONFIRMS:
@@ -493,6 +494,21 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
     shape waits for its break; `overlap_frac` is how much two same-name detections may overlap
     before the weaker is dropped.
     """
+    if removed:
+        # These knobs were replaced when trendlines became fitted rather than assumed. Say so
+        # explicitly: the bare "unexpected keyword argument" is a confusing thing to hit from a
+        # notebook that a kernel is still holding an older copy of.
+        moved = {"tol": "level_tol (via settings={name: {...}}) — the old meaning was the "
+                        "equal-highs tolerance",
+                 "min_height_frac": "min_height_atr (via settings=)",
+                 "min_span_frac": "min_span_bars / span_cap_frac (via settings=)"}
+        bits = [f"{k!r} -> {moved.get(k, 'no longer used')}" for k in sorted(removed)]
+        raise TypeError(
+            "add_chart_patterns: " + "; ".join(bits)
+            + ". Strictness is now per-pattern: sensitivity='major'|'normal'|'minor' plus "
+              "settings={'ascending_triangle': dict(min_touches_upper=4), ...}. "
+              "If this came from notebook 14, reload it from disk — the kernel is holding an "
+              "older copy of the cell.")
     names = list(patterns) if patterns is not None else ALL_PATTERNS
     unknown = [p for p in names if p not in PATTERN_DIRECTION]
     if unknown:

@@ -40,8 +40,9 @@ from experiments.phase9_long_fair_test import WINDOWS
 TF = "15m"
 
 # patterns the screen liked, and the ones it says are INVERTED
-GOOD_CHART = ["double_bottom", "inverse_head_shoulders", "falling_wedge", "descending_triangle",
-              "head_shoulders", "rising_wedge", "broadening_top", "broadening_bottom"]
+# the shapes the re-run screen actually produces in usable numbers on the fixed detector
+GOOD_CHART = ["head_shoulders", "inverse_head_shoulders", "symmetrical_triangle",
+              "triple_top", "triple_bottom", "rising_wedge"]
 INVERTED_CDL = ["hanging_man", "three_inside_down", "dragonfly_doji", "advance_block",
                 "counterattack_bull", "matching_low"]
 MOMENTUM_CDL = ["marubozu_bull", "marubozu_bear"]
