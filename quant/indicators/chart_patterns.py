@@ -59,9 +59,11 @@ class PatternSpec:
     `min_touches_*`  how many pivots each boundary must pass through. THREE is the meaningful
                      minimum: two points define a line exactly, so a 2-touch "trendline" carries no
                      information and is what made the old detector produce arbitrary shapes.
-    `min_span_frac`  the shape must cover at least this fraction of the loaded chart, so the same
-                     setting behaves sensibly whether you load a day or a year.
-    `min_span_bars`  an absolute floor as well (0 = only use `min_span_frac`).
+    `min_span_bars`  how wide the shape must be, IN BARS. Absolute on purpose: a triangle is a
+                     triangle whether you loaded two days or two years, so scaling this with the
+                     size of the loaded window would make the same setting mean different things.
+    `span_cap_frac`  never demand more than this fraction of the loaded chart, so a short load can
+                     still find something instead of silently returning nothing.
     `min_height_atr` reject shapes shorter than this many ATR — noise rather than structure.
     `line_tol_atr`   how far off the fitted line a pivot may sit and still count as a touch.
     `flat_tol_atr`   a boundary is "flat" if it moves less than this many ATR across the whole span.
@@ -70,8 +72,8 @@ class PatternSpec:
     """
     min_touches_upper: int = 3
     min_touches_lower: int = 3
-    min_span_frac: float = 0.06
-    min_span_bars: int = 30
+    min_span_bars: int = 80
+    span_cap_frac: float = 0.25
     min_height_atr: float = 3.0
     line_tol_atr: float = 1.0
     flat_tol_atr: float = 1.0
@@ -88,10 +90,10 @@ DEFAULT_SPECS: Dict[str, PatternSpec] = {
     "triple_top": _LEVEL_SPEC, "triple_bottom": _LEVEL_SPEC,
     "head_shoulders": _LEVEL_SPEC, "inverse_head_shoulders": _LEVEL_SPEC,
     # flags and pennants are by definition short consolidations after a pole
-    "bull_flag": PatternSpec(min_span_frac=0.02, min_span_bars=15),
-    "bear_flag": PatternSpec(min_span_frac=0.02, min_span_bars=15),
-    "bull_pennant": PatternSpec(min_span_frac=0.02, min_span_bars=15),
-    "bear_pennant": PatternSpec(min_span_frac=0.02, min_span_bars=15),
+    "bull_flag": PatternSpec(min_span_bars=25),
+    "bear_flag": PatternSpec(min_span_bars=25),
+    "bull_pennant": PatternSpec(min_span_bars=25),
+    "bear_pennant": PatternSpec(min_span_bars=25),
 }
 
 #: coarse dial. Multipliers on span/height, and an offset on the touch requirement.
@@ -115,7 +117,6 @@ def resolve_specs(sensitivity: str = "normal",
             base,
             min_touches_upper=max(2, base.min_touches_upper + pre["touch_delta"]),
             min_touches_lower=max(2, base.min_touches_lower + pre["touch_delta"]),
-            min_span_frac=base.min_span_frac * pre["span_mult"],
             min_span_bars=int(base.min_span_bars * pre["span_mult"]),
             min_height_atr=base.min_height_atr * pre["height_mult"])
         over = (settings or {}).get(name)
@@ -265,9 +266,12 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
     x0, x1 = min(p.i for p in pv), max(p.i for p in pv)
     out: List[_Candidate] = []
 
-    def gate(spec: PatternSpec, height: float) -> bool:
-        need = max(spec.min_span_bars, int(spec.min_span_frac * n_bars))
-        return span >= need and height >= spec.min_height_atr * atr
+    def gate(spec: PatternSpec, height: float, pts: Sequence[_Pivot]) -> bool:
+        # measure the SHAPE, not the search window that contained it -- a head-and-shoulders built
+        # from five pivots inside a twenty-pivot window is as wide as its own five pivots.
+        w = max(p.i for p in pts) - min(p.i for p in pts)
+        need = min(spec.min_span_bars, max(1, int(spec.span_cap_frac * n_bars)))
+        return w >= need and height >= spec.min_height_atr * atr
 
     # ---- fitted-boundary shapes: triangles, wedges, rectangles, broadening ----------
     tol_ref = max((specs[n].line_tol_atr for n in names if n in specs), default=0.6) * atr
@@ -313,7 +317,7 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
             spec = specs.get(name)
             if spec is None or name not in names:
                 return
-            if not touches_ok(spec) or not gate(spec, height):
+            if not touches_ok(spec) or not gate(spec, height, pv):
                 return
             out.append(_Candidate(name, direction, boundary.slope, boundary.intercept, stop,
                                   height, formed, 0, upper=up, lower=lo, pivots=list(pv)))
@@ -343,7 +347,7 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
     def emit_level(name: str, direction: int, neck: float, stop: float, height: float,
                    pts: List[_Pivot]):
         spec = specs.get(name)
-        if spec is None or name not in names or not gate(spec, height):
+        if spec is None or name not in names or not gate(spec, height, pts):
             return
         out.append(_Candidate(name, direction, 0.0, neck, stop, height, formed, 0,
                               pivots=sorted(pts, key=lambda q: q.i)))
