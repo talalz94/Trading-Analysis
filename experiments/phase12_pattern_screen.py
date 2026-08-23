@@ -34,7 +34,7 @@ from experiments.phase9_long_fair_test import WINDOWS                   # noqa: 
 TF = "15m"
 HORIZONS = [5, 10, 20, 40]
 N_NULL = 2
-MIN_HITS = 40          # below this a per-window number is noise and is dropped
+MIN_HITS = 25          # patterns are far more selective now; below this a per-window number is noise
 
 
 def prepare(d: pd.DataFrame) -> pd.DataFrame:

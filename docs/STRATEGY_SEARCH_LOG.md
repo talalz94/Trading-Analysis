@@ -1330,3 +1330,117 @@ that improved on a like-for-like basis rather than by shrinking the sample.
 left DUPLICATE columns, after which `df[col]` returns a 2-column DataFrame and every downstream
 boolean test silently misbehaves — every named-subset entry produced **zero trades with no error**.
 Fixed by dropping the columns being rewritten; two regression tests added.
+
+---
+
+# PHASE 12-14 RE-RUN — on properly fitted trendlines
+
+Everything above in Phase 12-14 was computed on a detector that called any two pivots a trendline,
+so its "patterns" were 26-bar noise shapes. That is fixed (see the detector note below), and the
+whole study was re-run. **The conclusions hold in kind; two of the numbers move a lot.**
+
+## What the fix changed
+
+```
+                        old detector   fixed detector
+patterns (1m, 2 days)             81               14
+points defining a trendline        2                3
+median span                 26 bars          98 bars
+widest span                 43 bars         427 bars
+patterns per 15m window          ~40              ~72 (all 19 shapes)
+usable shapes for research         8                6
+```
+
+## Direction — verdict UNCHANGED
+
+```
+family  h    edge   null_edge   excess     hit
+candle  20  0.0187    0.0021   +0.0008  0.5048
+chart   20  0.2103   -0.0623   +0.2403  0.5000
+chart   40  0.2639   -0.1985   +0.9007  0.4983
+```
+
+The chart-family excess looks enormous, but the per-pattern detail shows why it is not evidence:
+the biggest cells rest on 26-79 hits in 1-3 windows (`falling_wedge` +2.40 on 26 hits;
+`rising_wedge` +2.19 on 79 hits across 3 windows), and `pos_windows` for the well-sampled shapes is
+3-6 of 9. Hit rates are 0.40-0.64 with a median of 0.50.
+
+**Across all 220 cells, 47.7% beat their null — still below the 50% chance rate. Consistent
+survivors: 5, where chance predicts 4.3.** Noise, exactly as before.
+
+## Expansion — STRONGER, and still not an artifact
+
+```
+forward 20-bar travel vs a typical bar   ATR units   PRICE terms
+head_shoulders                               1.093        1.230
+inverse_head_shoulders                       1.170        1.116
+rising_wedge                                 1.079        1.091
+symmetrical_triangle                         1.288        1.192
+triple_bottom                                1.312        1.284
+triple_top                                   1.164        1.316
+mean                                         1.184        1.205
+```
+
+Both measures agree (1.18 vs 1.21), so this is not the ATR-denominator trap that killed the Phase-7
+compression result. Median chart travel-excess over null at h=20 is **+0.215** against **+0.020** for
+candlesticks. Properly fitted shapes made this **cleaner**, not weaker.
+
+## The skew prescription — confirmed again, 2.4x stronger
+
+```
+target    metronome   chart patterns   pattern - null
+rr0.5      -0.0494        +0.0124          +0.0618
+rr1        -0.0284        +0.0227          +0.0511
+rr2        -0.0316        +0.0616          +0.0932
+rr3        -0.0450        +0.0486          +0.0936
+rr5        -0.0184        +0.0721          +0.0905
+rr8        +0.0110        +0.1523          +0.1413
+trail2%    -0.0500        +0.1432          +0.1931
+```
+
+Still monotonic and positive at every target, and roughly 2.4x the old figures (+0.064 -> +0.152 at
+8R). The mechanism the screen predicted before the backtest ran continues to hold.
+
+## The gates — better, but still not passed
+
+**Per-window (nine regimes):** `chart_short_rr8` is positive in **8 of 9** windows (was 7), against
+its metronome's 2 of 9. `chart_short_trail2` 6 of 9.
+
+**Cost sensitivity — genuinely robust:**
+```
+cfg                      x1       x2       x4
+chart_short_rr8      +0.1672  +0.1655  +0.1228
+chart_short_trail2   +0.1565  +0.1314  +0.0842
+NULL_short_rr8       -0.0739  -0.0976  -0.1681
+```
+Still +0.12 at **four times** the spread, while the metronome is deeply negative. That is the
+strongest cost result anywhere in this project.
+
+**Trim-top-K — still fails:**
+```
+cfg                  n_min   drop0    drop1    drop5   drop5%  top1pct_share
+chart_long_rr8          41 -0.1232  -0.2608  -1.0084  -0.5502          74.3
+chart_short_rr8         49 -0.1010  -0.2694  -1.0186  -0.4450          43.1
+chart_long_trail2       46 -0.4015  -0.5596  -0.8681  -0.7776         199.1
+```
+The worst window is negative before any trimming, and deleting five trades takes it to -1.0.
+
+**Bootstrap:** no configuration has a positive 5th-percentile lower bound in every window, on either
+the IID or the moving-block resample.
+
+**Cross-instrument: now INCONCLUSIVE rather than failed.** The stricter detector is selective enough
+that only **1 of 9** gold windows clears the 40-trade floor, so the test that retracted the previous
+winner cannot run. Not a pass — an absence of evidence.
+
+## The binding constraint is now sample size
+
+`n_min` is **41-52 trades per window**. At that count the standard error on expR is roughly
+1.2/sqrt(45) ≈ **0.18**, which swamps every effect measured above. The fix made the patterns real and
+the point estimates better, and simultaneously cut the sample by ~6x — so nothing here can be
+established either way on this data.
+
+**Verdict: unchanged in substance.** Patterns still do not predict direction. The expansion effect is
+real, slightly stronger, and confirmed in price terms. The directional monetisation is now
+better-behaved and strikingly cost-robust, but it fails trim-top-K and the bootstrap, and there are
+too few trades to settle it. To resolve it properly would need far more data — more instruments, or
+years rather than the 2022-2026 cycle — not another parameter sweep.
