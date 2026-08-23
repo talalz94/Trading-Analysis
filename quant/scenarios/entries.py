@@ -452,14 +452,16 @@ CDL_LONG, CDL_SHORT = _both(
                 "its bull/bear score")
 
 
-_PAT_DEFAULTS = {"pat_names": None, "pat_atr_mult": 2.0, "pat_tol": 0.12,
-                 "pat_lookback_pivots": 6, "pat_max_wait": 150}
+_PAT_DEFAULTS = {"pat_names": None, "pat_sensitivity": "normal", "pat_settings": None,
+                 "pat_atr_mult": 3.5, "pat_lookback_pivots": 24, "pat_max_wait": 150}
 
 
 def _prep_pat(df, p):
     names = p.get("pat_names")
     out = add_chart_patterns(df, patterns=list(names) if names else None,
-                             atr_mult=float(p["pat_atr_mult"]), tol=float(p["pat_tol"]),
+                             sensitivity=p["pat_sensitivity"],
+                             settings=p.get("pat_settings"),
+                             atr_mult=float(p["pat_atr_mult"]),
                              lookback_pivots=int(p["pat_lookback_pivots"]),
                              max_wait=int(p["pat_max_wait"]))
     # the shape's own protective level, carried per bar so `pattern_stop@v1` can read it
@@ -487,7 +489,8 @@ def _ent_pat(p, side):
 
 PAT_LONG, PAT_SHORT = _both(
     "chart_pattern", _prep_pat, _ent_pat, defaults=_PAT_DEFAULTS,
-    prepare_keys=("pat_names", "pat_atr_mult", "pat_tol", "pat_lookback_pivots", "pat_max_wait"),
+    prepare_keys=("pat_names", "pat_sensitivity", "pat_settings", "pat_atr_mult",
+                  "pat_lookback_pivots", "pat_max_wait"),
     description="classical chart patterns (double top/bottom, H&S, wedges, triangles, flags) fired "
                 "on the bar their neckline BREAKS, never when the shape first looks complete")
 

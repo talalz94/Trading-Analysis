@@ -299,9 +299,9 @@ class Indicator:
                                        engulf_ratio=engulf_ratio, body_window=body_window,
                                        trend_window=trend_window)
         if self.kind == "chart_patterns":
-            names, atr_mult, tol, lookback_pivots, max_wait = self.args
+            names, sensitivity, atr_mult, lookback_pivots, max_wait = self.args
             return add_chart_patterns(df, patterns=list(names) if names else None,
-                                      atr_mult=atr_mult, tol=tol,
+                                      sensitivity=sensitivity, atr_mult=atr_mult,
                                       lookback_pivots=lookback_pivots, max_wait=max_wait)
         if self.kind == "mtf_ema":
             tf, period, source = self.args
@@ -525,10 +525,15 @@ def candle_patterns(*names: str, gap_mode: str = "none", engulf_ratio: float = 1
                                          body_window, trend_window))
 
 
-def chart_patterns(*names: str, atr_mult: float = 2.0, tol: float = 0.12,
-                   lookback_pivots: int = 6, max_wait: int = 150) -> Indicator:
-    """Declare the chart-pattern columns a rule needs. No names = every shape."""
-    return Indicator("chart_patterns", (tuple(names), atr_mult, tol, lookback_pivots, max_wait))
+def chart_patterns(*names: str, sensitivity: str = "normal", atr_mult: float = 3.5,
+                   lookback_pivots: int = 24, max_wait: int = 150) -> Indicator:
+    """Declare the chart-pattern columns a rule needs. No names = every shape.
+
+    `sensitivity` is the coarse strictness dial ('major' | 'normal' | 'minor'); for per-pattern
+    control call `add_chart_patterns(..., settings={...})` directly.
+    """
+    return Indicator("chart_patterns",
+                     (tuple(names), sensitivity, atr_mult, lookback_pivots, max_wait))
 
 
 def candle(name: str, *, prefix: str = "cdl") -> Cond:
