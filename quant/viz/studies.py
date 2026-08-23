@@ -112,7 +112,7 @@ def studies_figure(df: pd.DataFrame, *, time_col: str = "t",
                   row=1, col=1)
     for p in (emas or []):
         fig.add_trace(go.Scatter(x=x, y=_ema(d["close"], p), name=f"EMA{p}", mode="lines",
-                                 line=dict(width=1)), row=1, col=1)
+                                 line=dict(width=1)))
 
     # ---- Squeeze Momentum pane ----
     if squeeze:
@@ -252,7 +252,7 @@ def _add_mtf_emas(fig, d, x, spec, row, atr_period=14):
         fig.add_trace(go.Scatter(
             x=x, y=series, mode="lines", name=f"EMA{int(per)} ({tf})",
             legendgroup=f"mtf{tf}{per}", line=dict(width=1.7, color=shades[k % len(shades)]),
-            hovertemplate=f"EMA{int(per)} {tf}: %{{y:.2f}}<extra></extra>"), row=1, col=1)
+            hovertemplate=f"EMA{int(per)} {tf}: %{{y:.2f}}<extra></extra>"))
     if row is not None and first:
         _add_mtf_distance_pane(fig, d, x, first[0], first[1], row, atr_period)
 
@@ -352,7 +352,7 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
             text=[str(v) for v in lab[m]], textposition="top center",
             textfont=dict(size=9, color=[colors.get(str(v), "#666") for v in lab[m]]),
             marker=dict(size=5, color=[colors.get(str(v), "#666") for v in lab[m]]),
-            hovertext=txt, hoverinfo="text"), row=1, col=1)
+            hovertext=txt, hoverinfo="text"))
     # trend ribbon along the bottom of the price pane
     tr = s[trend_col].to_numpy()
     lo = float(np.nanmin(d["low"])) if len(d) else 0.0
@@ -366,7 +366,7 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
                 x=x[sel], y=np.full(int(sel.sum()), ybase), mode="markers",
                 name=f"Trend: {nm}", legendgroup="trendribbon",
                 marker=dict(size=3, color=colr, symbol="square"),
-                hoverinfo="name"), row=1, col=1)
+                hoverinfo="name"))
     return s
 
 
@@ -376,8 +376,7 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height: int = 820,
                    sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
-                   atr_mult: float = 2.0, tol: float = 0.12, lookback_pivots: int = 6,
-                   max_wait: int = 150, extend: int = 12, start_visible=()):
+                   extend: int = 12, start_visible=(), detect_kwargs=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -422,8 +421,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 visible=True if "sr_zones" in start_visible else "legendonly"))
 
     names = list(patterns) if patterns else list(_PD)
-    shapes = chart_pattern_shapes(d, patterns=names, atr_mult=atr_mult, tol=tol,
-                                  lookback_pivots=lookback_pivots, max_wait=max_wait)
+    shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
+    n = len(d)
     for name in names:
         sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
         if not len(sub):
@@ -431,42 +430,46 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         up = _PD.get(name, 0) > 0
         colr = "#2ecc71" if up else ("#e74c3c" if _PD.get(name, 0) < 0 else "#f0a30a")
         vis = True if name in start_visible else "legendonly"
-        out_x, out_y = [], []          # the shape outline through its pivots
-        hi_x, hi_y, lo_x, lo_y = [], [], [], []
-        nk_x, nk_y, tg_x, tg_y = [], [], [], []
+        lx, ly = [], []          # the two fitted boundaries, extended across the shape
+        mx, my = [], []          # the pivots those lines are fitted through
+        nx, ny = [], []          # the boundary that broke
+        tx, ty = [], []          # measured-move target
+        sx, sy = [], []          # protective stop
         for r in sub.itertuples():
-            out_x += list(r.pivot_t) + [None]
-            out_y += list(r.pivot_price) + [None]
-            ci = int(r.confirm_i)
-            end = t[min(ci + extend, len(t) - 1)]
-            for src_t, src_p, X, Y in ((r.hi_t, r.hi_price, hi_x, hi_y),
-                                       (r.lo_t, r.lo_price, lo_x, lo_y)):
-                if len(src_t) >= 2:
-                    X += [src_t[0], src_t[-1], None]
-                    Y += [src_p[0], src_p[-1], None]
-            nk_x += [r.pivot_t[0], end, None]
-            nk_y += [r.entry, r.entry, None]
-            tg_x += [t[ci], end, None]
-            tg_y += [r.target, r.target, None]
+            a, b = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
+            xa, xb = t[a], t[b]
+            # Draw the LINE, not the segment between its two end pivots: evaluate the fit across the
+            # whole pattern. Level shapes (H&S, double tops) have no fitted boundaries, only a neckline.
+            for sl, ic in ((r.upper_slope, r.upper_intercept), (r.lower_slope, r.lower_intercept)):
+                if sl == sl and ic == ic:                       # not NaN
+                    lx += [xa, xb, None]
+                    ly += [sl * r.start_i + ic, sl * (b) + ic, None]
+            mx += list(r.pivot_t) + [None]
+            my += list(r.pivot_price) + [None]
+            nx += [xa, xb, None]
+            ny += [r.boundary_slope * r.start_i + r.boundary_intercept,
+                   r.boundary_slope * b + r.boundary_intercept, None]
+            tx += [t[int(r.confirm_i)], xb, None]
+            ty += [r.target, r.target, None]
+            sx += [t[int(r.confirm_i)], xb, None]
+            sy += [r.stop, r.stop, None]
         label = name.replace("_", " ")
         fig.add_trace(go.Scattergl(
-            x=out_x, y=out_y, mode="lines+markers", name=f"{label} ({len(sub)})",
+            x=lx or nx, y=ly or ny, mode="lines", name=f"{label} ({len(sub)})",
             legendgroup=name, visible=vis,
-            line=dict(color=colr, width=2), marker=dict(size=6, color=colr),
+            line=dict(color=colr, width=2.6),
             hovertemplate=f"{label}<extra></extra>"))
-        for X, Y, dash, wid in ((hi_x, hi_y, "dash", 1.5), (lo_x, lo_y, "dash", 1.5)):
+        fig.add_trace(go.Scattergl(
+            x=mx, y=my, mode="markers", legendgroup=name, visible=vis, showlegend=False,
+            marker=dict(size=7, color=colr, line=dict(width=1, color="#111")),
+            hovertemplate=f"{label} touch<extra></extra>"))
+        for X, Y, colr2, dash, wid in ((nx, ny, "#f0a30a", "solid", 2.0),
+                                       (tx, ty, colr, "dot", 1.4),
+                                       (sx, sy, "#888888", "dot", 1.2)):
             if X:
                 fig.add_trace(go.Scattergl(
                     x=X, y=Y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
-                    line=dict(color=colr, width=wid, dash=dash), hoverinfo="skip"))
-        if nk_x:
-            fig.add_trace(go.Scattergl(
-                x=nk_x, y=nk_y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
-                line=dict(color="#f0a30a", width=1.6), hoverinfo="skip"))
-        if tg_x:
-            fig.add_trace(go.Scattergl(
-                x=tg_x, y=tg_y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
-                line=dict(color=colr, width=1, dash="dot"), hoverinfo="skip"))
+                    line=dict(color=colr2, width=wid, dash=dash), hoverinfo="skip"))
 
     fig.update_layout(
         title=title or "Chart patterns — click the legend to show/hide each one",
@@ -647,7 +650,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
         _add_mtf_emas(fig, d, x, _mtf_pairs, mtf_row, atr_period)
     if line_col in d.columns:
         fig.add_trace(go.Scatter(x=x, y=d[line_col], name="EMA line", mode="lines",
-                                 line=dict(width=1.4, color="#d32f2f", dash="dot")), row=1, col=1)
+                                 line=dict(width=1.4, color="#d32f2f", dash="dot")))
 
     # ---- S/R zones (causal segments) ----
     if show_zones and {"sr_support", "sr_resistance"}.issubset(d.columns):
@@ -664,7 +667,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
             if seg[kind][0]:
                 fig.add_trace(go.Scatter(x=seg[kind][0], y=seg[kind][1], mode="lines", name=label,
                                          legendgroup=kind, line=dict(width=2, color=color),
-                                         opacity=0.55, hoverinfo="y"), row=1, col=1)
+                                         opacity=0.55, hoverinfo="y"))
 
     # ---- trades: entries, stop levels, exits ----
     tr = run.trades
@@ -675,7 +678,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
                                              line=dict(width=1, color="#7f0000")),
                                  hovertext=[f"#{i} entry {ep:.2f}" for i, ep in
                                             zip(tr.index, tr["entry_price"])],
-                                 hoverinfo="text"), row=1, col=1)
+                                 hoverinfo="text"))
         # stop levels: one dotted segment per trade from entry to exit
         sx, sy = [], []
         for _, t in tr.iterrows():
@@ -685,7 +688,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
         if sx:
             fig.add_trace(go.Scatter(x=sx, y=sy, mode="lines", name="Stop", legendgroup="stop",
                                      line=dict(width=1, color="#c62828", dash="dot"),
-                                     opacity=0.7, hoverinfo="skip"), row=1, col=1)
+                                     opacity=0.7, hoverinfo="skip"))
         # LEVEL B: the level this trade actually broke, held for the trade's life. Own legend group
         # so it toggles independently of the stop lines.
         if "break_level" in d.columns:
@@ -725,7 +728,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
                                              marker=dict(symbol="triangle-up-open", size=11,
                                                          color="#6a1b9a",
                                                          line=dict(width=2, color="#6a1b9a")),
-                                             hovertext=atxt, hoverinfo="text"), row=1, col=1)
+                                             hovertext=atxt, hoverinfo="text"))
 
         # exits coloured by reason
         for reason, (color, symbol, label) in _EXIT_STYLE.items():
@@ -738,7 +741,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
                                          hovertext=[f"#{i} {reason} {xp:.2f}  pnl {pn:.2f}"
                                                     for i, xp, pn in
                                                     zip(sub.index, sub["exit_price"], sub["pnl"])],
-                                         hoverinfo="text"), row=1, col=1)
+                                         hoverinfo="text"))
 
     # ---- row 2: gradient oscillator ----
     if grad_col in d.columns:
@@ -786,7 +789,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
                                          legendgroup=f"div{kind}",
                                          line=dict(width=1.6, color=colr),
                                          marker=dict(size=5, color=colr),
-                                         hoverinfo="skip"), row=1, col=1)
+                                         hoverinfo="skip"))
                 fig.add_trace(go.Scatter(x=rs_x, y=rs_y, mode="lines+markers", name=nm,
                                          legendgroup=f"div{kind}", showlegend=False,
                                          line=dict(width=1.6, color=colr, dash="dot"),
@@ -807,7 +810,7 @@ def scenario_figure(run, *, time_col: str = "t", zones_left: int = 10, zones_rig
                 fig.add_trace(go.Scatter(
                     x=x[mk], y=yv[mk], mode="markers", name=nm, legendgroup=f"rt{col_flag}",
                     marker=dict(symbol="circle-open", size=8, color=colr, line=dict(width=1.5)),
-                    hovertemplate=nm + " (zero-lag) %{y:.2f}<extra></extra>"), row=1, col=1)
+                    hovertemplate=nm + " (zero-lag) %{y:.2f}<extra></extra>"))
 
     # Title on the top line, legend on its own line beneath it — with enough top margin for both.
     # (A shared band made the title and the legend entries overlap.)
@@ -833,7 +836,7 @@ def zoom_to_trade(fig, run, trade_i: int, *, pad_bars: int = 60, time_col: str =
     win = d.iloc[lo_i:hi_i + 1]
     pad = (win["high"].max() - win["low"].min()) * 0.08
     fig.update_xaxes(range=[x0, x1])
-    fig.update_yaxes(range=[win["low"].min() - pad, win["high"].max() + pad], row=1, col=1)
+    fig.update_yaxes(range=[win["low"].min() - pad, win["high"].max() + pad])
     fig.update_layout(title_text=f"trade #{trade_i}  {t['side']}  "
                                  f"{t['entry_price']:.2f} → {t['exit_price']:.2f}  "
                                  f"({t['close_reason']}, pnl {t['pnl']:.2f})")

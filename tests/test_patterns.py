@@ -13,6 +13,7 @@ import pytest
 
 from quant import scenarios as sc
 from quant.indicators import (add_candle_patterns, add_chart_patterns, candle_pattern_table,
+                              chart_pattern_shapes,
                               chart_pattern_table, CANDLE_PATTERNS, CANDLE_PATTERN_DIRECTION,
                               CHART_PATTERNS, CHART_PATTERN_DIRECTION)
 
@@ -280,3 +281,115 @@ def test_named_subset_entry_actually_trades(rnd):
                                 "stop_atr_mult": 2.0, "tp_rr": 2.0},
                         cfg={"initial_cash": 10_000})
     assert len(run.trades) > 0
+
+
+# ---------------------------------------------------------------------------
+# fitted trendlines — the shape must be a real structure, not any two pivots
+# ---------------------------------------------------------------------------
+def _zigzag_frame(turns, *, bars_per_leg=40, noise=0.0, seed=0) -> pd.DataFrame:
+    """Build a price path that walks through `turns` (prices), so the zigzag emits those pivots."""
+    rng = np.random.default_rng(seed)
+    closes = []
+    for a, b in zip(turns[:-1], turns[1:]):
+        closes += list(np.linspace(a, b, bars_per_leg, endpoint=False))
+    closes.append(turns[-1])
+    c = np.asarray(closes, float)
+    if noise:
+        c = c + rng.normal(0, noise, len(c))
+    o = np.r_[c[0], c[:-1]]
+    hi = np.maximum(o, c) + 0.05
+    lo = np.minimum(o, c) - 0.05
+    t = pd.date_range("2026-01-01", periods=len(c), freq="1min", tz="UTC")
+    return pd.DataFrame({"open_time": t, "t": t, "open": o, "high": hi, "low": lo,
+                         "close": c, "volume": 1.0})
+
+
+def _ascending_triangle_frame(bars_per_leg=40):
+    """Flat highs at 100, lows rising 88 -> 96, then a break above the resistance."""
+    turns = [88, 100, 90, 100, 92, 100, 94, 100, 96, 108]
+    return _zigzag_frame(turns, bars_per_leg=bars_per_leg)
+
+
+def test_ascending_triangle_is_detected_with_real_touches():
+    df = _ascending_triangle_frame()
+    sh = chart_pattern_shapes(df, patterns=["ascending_triangle"], sensitivity="normal",
+                              atr_mult=2.0)
+    assert len(sh) > 0, "a textbook ascending triangle must be detected"
+    r = sh.iloc[0]
+    assert r.touches_upper >= 3, "the flat resistance must be fitted through 3+ highs"
+    assert r.touches_lower >= 3, "the rising support must be fitted through 3+ lows"
+    assert r.direction == 1
+    # the flat boundary really is flat, the support really rises
+    assert abs(r.upper_slope) < abs(r.lower_slope)
+    assert r.lower_slope > 0
+    assert r.span_bars > 5 * 40 * 0.5
+
+
+def test_two_point_lines_are_rejected():
+    """A window offering only two highs and two lows must not produce a fitted-boundary shape.
+
+    This is the whole bug: two points define a line exactly, so the old detector called every pivot
+    pair a trendline. With 3 touches required, a 2-swing window yields nothing.
+    """
+    df = _zigzag_frame([90, 100, 92, 101], bars_per_leg=40)
+    sh = chart_pattern_shapes(df, sensitivity="normal", atr_mult=2.0)
+    fitted = {"ascending_triangle", "descending_triangle", "symmetrical_triangle",
+              "rising_wedge", "falling_wedge", "rectangle_bull", "rectangle_bear"}
+    assert set(sh.pattern) & fitted == set()
+
+
+def test_small_shapes_are_rejected_by_min_span():
+    """The same triangle squeezed into a few bars is noise, not structure."""
+    big = _ascending_triangle_frame(bars_per_leg=40)
+    small = _ascending_triangle_frame(bars_per_leg=4)
+    n_big = len(chart_pattern_shapes(big, patterns=["ascending_triangle"],
+                                     sensitivity="normal", atr_mult=2.0))
+    n_small = len(chart_pattern_shapes(small, patterns=["ascending_triangle"],
+                                       sensitivity="normal", atr_mult=2.0,
+                                       settings={"ascending_triangle": dict(min_span_bars=200)}))
+    assert n_big > 0 and n_small == 0
+
+
+def test_overlapping_duplicates_are_collapsed(rnd):
+    loose = chart_pattern_shapes(rnd, sensitivity="minor", overlap_frac=1.01)
+    tight = chart_pattern_shapes(rnd, sensitivity="minor", overlap_frac=0.3)
+    assert len(tight) <= len(loose)
+    # nothing that survives may sit almost on top of another detection of the same pattern
+    for name, sub in tight.groupby("pattern"):
+        iv = sorted(zip(sub.start_i, sub.confirm_i))
+        for (a0, a1), (b0, b1) in zip(iv, iv[1:]):
+            inter = max(0, min(a1, b1) - max(a0, b0))
+            shorter = max(1, min(a1 - a0, b1 - b0))
+            assert inter / shorter <= 0.3 + 1e-9
+
+
+def test_per_pattern_settings_only_affect_that_pattern(rnd):
+    base = chart_pattern_shapes(rnd, sensitivity="minor")
+    tuned = chart_pattern_shapes(rnd, sensitivity="minor",
+                                 settings={"symmetrical_triangle": dict(min_touches_upper=6)})
+    b = base.pattern.value_counts()
+    t = tuned.pattern.value_counts()
+    assert t.get("symmetrical_triangle", 0) < b.get("symmetrical_triangle", 1)
+    for name in set(b.index) - {"symmetrical_triangle"}:
+        assert t.get(name, 0) == b.get(name, 0), f"{name} should be untouched"
+
+
+def test_sensitivity_is_monotonic(rnd):
+    n = {s: len(chart_pattern_shapes(rnd, sensitivity=s)) for s in ("major", "normal", "minor")}
+    assert n["minor"] >= n["normal"] >= n["major"]
+
+
+def test_unknown_sensitivity_and_spec_field_raise(rnd):
+    with pytest.raises(KeyError):
+        add_chart_patterns(rnd, sensitivity="enormous")
+    with pytest.raises(KeyError):
+        add_chart_patterns(rnd, settings={"double_top": dict(not_a_field=1)})
+
+
+def test_boundary_may_slope(rnd):
+    """A triangle confirms on a break of its SLOPING line, not a horizontal proxy."""
+    sh = chart_pattern_shapes(rnd, sensitivity="minor")
+    tri = sh[sh.pattern.isin(["symmetrical_triangle", "ascending_triangle",
+                              "descending_triangle", "rising_wedge", "falling_wedge"])]
+    if len(tri):
+        assert (tri.boundary_slope.abs() > 0).any(), "no sloping boundary anywhere"
