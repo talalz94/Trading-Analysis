@@ -217,34 +217,51 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int) ->
     x = np.array([p.i for p in pivots], float)
     y = np.array([p.price for p in pivots], float)
     total_span = max(x.max() - x.min(), 1.0)
-    best: Optional[_Fit] = None
-    best_key = None
-    for a in range(n):
-        for b in range(a + 1, n):
-            dx = x[b] - x[a]
-            if dx <= 0:
-                continue
-            slope = (y[b] - y[a]) / dx
-            intercept = y[a] - slope * x[a]
-            resid = y - (slope * x + intercept)
-            # envelope: nothing may poke through the line by more than the tolerance
-            if side > 0 and np.any(resid > tol):
-                continue
-            if side < 0 and np.any(resid < -tol):
-                continue
-            inl = np.abs(resid) <= tol
-            if int(inl.sum()) < min_touches:
-                continue
-            # the touches must span a real stretch of the window, not a cluster
-            xi = x[inl]
-            if (xi.max() - xi.min()) < 0.5 * total_span:
-                continue
-            sl2, ic2 = np.polyfit(xi, y[inl], 1) if int(inl.sum()) > 2 else (slope, intercept)
-            dev = float(np.abs(y[inl] - (sl2 * xi + ic2)).max())
-            key = (int(inl.sum()), float(xi.max() - xi.min()), -dev)
-            if best_key is None or key > best_key:
-                best_key, best = key, _Fit(float(sl2), float(ic2), int(inl.sum()), dev)
-    return best
+
+    # Every pivot pair proposes a line. Done as one vectorised batch rather than a Python double
+    # loop: this runs ~20k times per detection pass and the loop version made a parameter sweep
+    # take hours.
+    ii, jj = np.triu_indices(n, k=1)
+    dx = x[jj] - x[ii]
+    good = dx > 0
+    if not good.any():
+        return None
+    ii, jj, dx = ii[good], jj[good], dx[good]
+    slope = (y[jj] - y[ii]) / dx
+    intercept = y[ii] - slope * x[ii]
+    resid = y[None, :] - (slope[:, None] * x[None, :] + intercept[:, None])   # (pairs, pivots)
+
+    # envelope: for an upper line nothing may poke more than `tol` above it, and vice versa —
+    # which is what "resistance" and "support" actually mean
+    if side > 0:
+        keep = ~(resid > tol).any(axis=1)
+    elif side < 0:
+        keep = ~(resid < -tol).any(axis=1)
+    else:
+        keep = np.ones(len(slope), bool)
+    if not keep.any():
+        return None
+
+    inl = np.abs(resid) <= tol
+    counts = inl.sum(axis=1)
+    xs = np.where(inl, x[None, :], np.nan)
+    with np.errstate(invalid="ignore"):
+        spans = np.nanmax(xs, axis=1) - np.nanmin(xs, axis=1)
+    keep &= counts >= min_touches
+    keep &= spans >= 0.5 * total_span        # touches must cover the window, not cluster
+    if not keep.any():
+        return None
+
+    order = np.lexsort((spans[keep], counts[keep]))[::-1]         # most touches, then widest
+    pick = np.flatnonzero(keep)[order[0]]
+    sel = inl[pick]
+    xi, yi = x[sel], y[sel]
+    if sel.sum() > 2:
+        sl2, ic2 = np.polyfit(xi, yi, 1)
+    else:
+        sl2, ic2 = slope[pick], intercept[pick]
+    dev = float(np.abs(yi - (sl2 * xi + ic2)).max())
+    return _Fit(float(sl2), float(ic2), int(sel.sum()), dev)
 
 
 def _level_ok(a: float, b: float, tol: float, scale: float) -> bool:
@@ -410,14 +427,14 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
 
 def _detect(pivots: List[_Pivot], upto: int, *, specs: Dict[str, PatternSpec], atr: float,
             n_bars: int, names: Sequence[str], min_pivots: int,
-            lookback_pivots: int) -> List[_Candidate]:
+            lookback_pivots: int, pivot_step: int = 1) -> List[_Candidate]:
     """Search several pivot windows ending at the newest pivot and keep the best shape per name.
 
     Trying a range of window sizes is what lets a large structure be found: the old code looked only
     at the last two highs and two lows, which can never span more than a handful of swings.
     """
     best: Dict[Tuple[str, int], _Candidate] = {}
-    for k in range(min_pivots, lookback_pivots + 1):
+    for k in range(min_pivots, lookback_pivots + 1, pivot_step):
         if k > upto + 1:
             break
         window = pivots[upto + 1 - k: upto + 1]
@@ -468,7 +485,8 @@ def _dedupe(rows: List[dict], *, overlap_frac: float) -> List[dict]:
 def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                        settings: Optional[Dict[str, dict]] = None,
                        atr_mult: float = 3.5, atr_period: int = 14,
-                       min_pivots: int = 4, lookback_pivots: int = 24, max_wait: int = 150,
+                       min_pivots: int = 4, lookback_pivots: int = 24, pivot_step: int = 2,
+                       max_wait: int = 150,
                        pole_mult: float = 1.5, overlap_frac: float = 0.5,
                        patterns: Optional[Sequence[str]] = None,
                        prefix: str = "pat",
@@ -539,7 +557,8 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
         while pi < len(pivots) and pivots[pi].confirm_i == i:
             a = atr_s[i] if np.isfinite(atr_s[i]) else 0.0
             for cand in _detect(pivots, pi, specs=specs, atr=a, n_bars=n, names=names,
-                                min_pivots=min_pivots, lookback_pivots=lookback_pivots):
+                                min_pivots=min_pivots, lookback_pivots=lookback_pivots,
+                                pivot_step=pivot_step):
                 pole = _flagpole(pivots[:pi + 1], cand, pole_mult=pole_mult)
                 if pole and cand.name in ("symmetrical_triangle", "rectangle_bull",
                                           "rectangle_bear"):
