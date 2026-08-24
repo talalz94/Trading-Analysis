@@ -45,17 +45,26 @@ TRAIL = 20             # trailing window for the momentum match
 NBIN = 5               # quantile bins per axis of the matched control
 OUT = "experiments/results_phase15b_controls.csv"
 
-#: the per-pattern winners from Phase 15 section A
+#: per-pattern settings chosen WITHOUT looking at the score. The quality knobs come from the
+#: pooled scan over all 13 patterns x 9 windows (min_touches=3, line_tol_atr=0.6 -- both of which
+#: also match the prior argument, since two points define a line exactly); the rest is the
+#: STRICTEST atr_mult/span/height still yielding >=10 detections per window in every window.
+#: Selecting on the argmax instead is not defensible here: re-running the grid on the fixed
+#: detector moved the winning cell for 13 of 13 patterns, so the argmax is noise.
 FINALISTS = {
-    "rising_wedge":           dict(atr_mult=2.5, min_touches=2, min_span_bars=40,  min_height_atr=4.0, line_tol_atr=1.2),
-    "falling_wedge":          dict(atr_mult=5.0, min_touches=2, min_span_bars=200, min_height_atr=2.0, line_tol_atr=1.2),
-    "descending_triangle":    dict(atr_mult=2.5, min_touches=2, min_span_bars=200, min_height_atr=2.0, line_tol_atr=1.2),
-    "broadening_bottom":      dict(atr_mult=3.5, min_touches=3, min_span_bars=100, min_height_atr=2.0, line_tol_atr=1.2),
-    "symmetrical_triangle":   dict(atr_mult=3.5, min_touches=3, min_span_bars=40,  min_height_atr=4.0, line_tol_atr=0.6),
-    "triple_top":             dict(atr_mult=5.0, min_touches=3, min_span_bars=40,  min_height_atr=4.0, line_tol_atr=1.2),
-    "head_shoulders":         dict(atr_mult=5.0, min_touches=3, min_span_bars=40,  min_height_atr=2.0, line_tol_atr=0.6),
-    "ascending_triangle":     dict(atr_mult=5.0, min_touches=2, min_span_bars=100, min_height_atr=4.0, line_tol_atr=1.2),
-    "inverse_head_shoulders": dict(atr_mult=5.0, min_touches=2, min_span_bars=40,  min_height_atr=4.0, line_tol_atr=1.2),
+    "rising_wedge":          dict(atr_mult=3.5, min_touches=3, min_span_bars=200, min_height_atr=4.0, line_tol_atr=0.6),
+    "inverse_head_shoulders":dict(atr_mult=5.0, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "triple_top":            dict(atr_mult=5.0, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "head_shoulders":        dict(atr_mult=5.0, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "triple_bottom":         dict(atr_mult=5.0, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "falling_wedge":         dict(atr_mult=3.5, min_touches=3, min_span_bars=200, min_height_atr=4.0, line_tol_atr=0.6),
+    "broadening_bottom":     dict(atr_mult=2.5, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "double_top":            dict(atr_mult=5.0, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "descending_triangle":   dict(atr_mult=2.5, min_touches=3, min_span_bars=40, min_height_atr=4.0, line_tol_atr=0.6),
+    "symmetrical_triangle":  dict(atr_mult=3.5, min_touches=3, min_span_bars=200, min_height_atr=4.0, line_tol_atr=0.6),
+    "broadening_top":        dict(atr_mult=2.5, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "double_bottom":         dict(atr_mult=5.0, min_touches=3, min_span_bars=100, min_height_atr=4.0, line_tol_atr=0.6),
+    "ascending_triangle":    dict(atr_mult=2.5, min_touches=3, min_span_bars=40, min_height_atr=4.0, line_tol_atr=0.6),
 }
 
 
