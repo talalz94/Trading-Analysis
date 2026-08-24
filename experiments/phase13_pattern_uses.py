@@ -40,9 +40,13 @@ from experiments.phase9_long_fair_test import WINDOWS
 TF = "15m"
 
 # patterns the screen liked, and the ones it says are INVERTED
-# the shapes the re-run screen actually produces in usable numbers on the fixed detector
-GOOD_CHART = ["head_shoulders", "inverse_head_shoulders", "symmetrical_triangle",
-              "triple_top", "triple_bottom", "rising_wedge"]
+# Chosen from the phase-12 re-run on the CAUSAL detector, ranked by EXPANSION rather than by
+# direction -- expansion is the finding that survived (travel_ratio 1.18-1.42 against a null of
+# 0.97), while every one of these has a sub-50% directional hit rate. rising_wedge and
+# falling_wedge are excluded: they show no expansion at all (1.01, 0.97) on only 52-80 hits,
+# despite rising_wedge having been the headline of the pre-fix Phase-15 run.
+GOOD_CHART = ["triple_bottom", "triple_top", "head_shoulders", "symmetrical_triangle",
+              "inverse_head_shoulders"]
 INVERTED_CDL = ["hanging_man", "three_inside_down", "dragonfly_doji", "advance_block",
                 "counterattack_bull", "matching_low"]
 MOMENTUM_CDL = ["marubozu_bull", "marubozu_bear"]
