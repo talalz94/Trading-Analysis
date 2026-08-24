@@ -8,6 +8,28 @@
 
 ---
 
+> ## ⚠ CORRECTION 2026-08-24 — every CHART-pattern number below is under re-measurement
+>
+> `_dedupe` in `quant/indicators/chart_patterns.py` ranked all detections globally by how well-formed
+> they were, so a pattern confirming at bar 5,000 could delete one that had already fired at bar
+> 2,997. **A past signal therefore depended on future bars.** Fixed in `cd70932` (overlaps now resolve
+> in confirmation order); the truncation test that should have caught it checked a single boundary at
+> sparse settings, where no clash ever straddled it.
+>
+> Measured impact at the settings phases 12-14 used, over all nine windows: **21% of firings changed**
+> — `rising_wedge` 45%, `symmetrical_triangle` 55%, both of which are in the `GOOD_CHART` set that
+> drove the phase-13 conclusions. On the Phase-15 tuning run the effect was much larger, because those
+> settings are denser: `rising_wedge` went from a drift-adjusted **1.34 ATR at a 56.7% hit rate to
+> 0.53 ATR at 51.8%** — a coin flip.
+>
+> **Unaffected:** everything about candlesticks, levels, entry families, exits, regimes, the cost
+> floor and the metronome comparisons. `add_candle_patterns` has no de-duplication step, and no other
+> phase used chart patterns.
+>
+> Phases 12, 13, 14 and 15 are being re-run. Rows below marked **[RE-RUN]** are not to be relied on.
+
+---
+
 ## The one-paragraph answer
 
 **No entry rule tested in this project has a validated edge.** Nine entry families, both directions,
@@ -62,7 +84,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Trailing stops as an exit family** | x worst tested | Capture only **37%** of the favourable move vs **87-93%** for fixed targets; bottom of all 29 exit designs in Phase 11 |
 | **"The move keeps going after I exit"** | x illusion | The metronome shows MORE continuation than the strategy (cont30 1.07 vs 1.00) - it is the max-of-a-random-walk effect |
 | **Candlestick patterns** (62, incl. every classic reversal) | x no directional edge | Hit rate **50.1-50.5%**, NEGATIVE excess over a null that preserves their exact candle shapes and destroys only the order. Several INVERT (`three_inside_down` -0.57, `hanging_man` -0.42). Only `marubozu_bull` is consistent, and it is a momentum bar |
-| **Chart patterns as a directional trade** (19: double/triple tops, H&S, wedges, triangles, flags) | x unresolved, fails the gates it can run | Re-run on FITTED trendlines. Wide targets help monotonically (+0.012 at 0.5R to **+0.152 at 8R**, vs a metronome at +0.011) and it is cost-robust to **4x spread** (+0.123). But it fails trim-top-K (deleting 5 trades of ~45 takes the worst window to -1.0), no bootstrap lower bound is positive in every window, and the stricter detector leaves only 1 of 9 gold windows with enough trades so the cross-instrument test cannot run. **41-52 trades per window puts the standard error near 0.18** - too few to settle either way |
+| **Chart patterns as a directional trade** (19: double/triple tops, H&S, wedges, triangles, flags) | **[RE-RUN]** x unresolved, fails the gates it can run | Re-run on FITTED trendlines. Wide targets help monotonically (+0.012 at 0.5R to **+0.152 at 8R**, vs a metronome at +0.011) and it is cost-robust to **4x spread** (+0.123). But it fails trim-top-K (deleting 5 trades of ~45 takes the worst window to -1.0), no bootstrap lower bound is positive in every window, and the stricter detector leaves only 1 of 9 gold windows with enough trades so the cross-instrument test cannot run. **41-52 trades per window puts the standard error near 0.18** - too few to settle either way |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -78,7 +100,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 
 ## ✓ The one positive, actionable rule found
 
-**Chart patterns predict EXPANSION, not direction.** Forward 20-bar range is **9-32% larger** after a triangle / wedge / H&S (mean 1.18), and unlike the Phase-7 compression result this survives measurement in PRICE terms as well as ATR units (mean 1.21 vs 1.18), with the shuffled null at ~0.97. Re-measured on properly fitted trendlines it came out *cleaner*, not weaker. It is the most solid pattern measurement in the project. It still did not convert into a tradable rule, because exploiting expansion without direction requires a wide target and that turns the payoff into a lottery.
+**[RE-RUN] Chart patterns predict EXPANSION, not direction.** Forward 20-bar range is **9-32% larger** after a triangle / wedge / H&S (mean 1.18), and unlike the Phase-7 compression result this survives measurement in PRICE terms as well as ATR units (mean 1.21 vs 1.18), with the shuffled null at ~0.97. Re-measured on properly fitted trendlines it came out *cleaner*, not weaker. It is the most solid pattern measurement in the project. It still did not convert into a tradable rule, because exploiting expansion without direction requires a wide target and that turns the payoff into a lottery.
 
 **Compression releases cluster at the US open.** 35% of 3,622 compression episodes release in
 12:00-14:00 UTC (cash open 13:30) and travel ~40% further there (111-125 bps vs 60-90). Real, but
@@ -94,7 +116,7 @@ rather than an edge, but it is large, consistent, and the only Phase-4 result wo
 
 ## ? The only two things that are not obviously nothing
 
-**0. A chart pattern breaking AT an S/R support zone** — the only filter in the whole project that improved a rule on a like-for-like basis instead of by starving it: +0.0197 -> +0.0495 while giving up just 13% of its trades. Unvalidated, but the shape of the result is right.
+**0. [RE-RUN] A chart pattern breaking AT an S/R support zone** — the only filter in the whole project that improved a rule on a like-for-like basis instead of by starving it: +0.0197 -> +0.0495 while giving up just 13% of its trades. Unvalidated, but the shape of the result is right.
 
 **1. `pdlow_fade_long` + trailing stop (BTC 1m)** — long on a fade of the previous day's low.
 Worst-window +0.136R against the null's +0.040R, survives 2× spread where the null does not, and is
