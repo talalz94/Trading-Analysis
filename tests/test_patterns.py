@@ -158,6 +158,28 @@ def test_chart_patterns_are_causal(rnd):
                                   part[cols].reset_index(drop=True))
 
 
+@pytest.mark.parametrize("k", [700, 1100, 1500, 1900, 2300, 2700])
+def test_chart_pattern_dedupe_cannot_delete_a_signal_that_already_fired(rnd, k):
+    """Truncation at MANY points, at settings loose enough that detections actually overlap.
+
+    De-duplication is where causality dies quietly. Ranking the whole set by quality and keeping the
+    best-formed shape lets a pattern confirming at bar 5,000 remove one that fired at bar 2,997 — the
+    single-truncation-point version of this test missed exactly that, because at default (sparse)
+    settings no overlap clash ever straddled the one boundary it checked. These settings produce
+    dense, overlapping wedges, which is the regime that exposes it.
+    """
+    loose = dict(min_touches_upper=2, min_touches_lower=2, min_span_bars=40,
+                 min_height_atr=4.0, line_tol_atr=1.2)
+    names = ["rising_wedge", "falling_wedge"]
+    kw = dict(patterns=names, atr_mult=2.5, settings={p: loose for p in names})
+    cols = [f"pat_{p}" for p in names]
+    full = add_chart_patterns(rnd, **kw)
+    part = add_chart_patterns(rnd.iloc[:k].copy(), **kw)
+    assert full[cols].to_numpy().sum() > 20, "fixture must actually produce overlapping detections"
+    pd.testing.assert_frame_equal(full[cols].iloc[:k].reset_index(drop=True),
+                                  part[cols].reset_index(drop=True))
+
+
 # ---------------------------------------------------------------------------
 # chart patterns
 # ---------------------------------------------------------------------------
