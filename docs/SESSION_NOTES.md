@@ -532,3 +532,101 @@ Session/time-of-day genuinely helps; short side and candle-confirm do not.
 
 NOT yet done: band-width / cut-through-rate, day-of-week, MTF-crossover (fast on 1TF vs slow on
 higher TF), adaptive walk-forward re-optimisation. Small-TF needs deep data to validate.
+
+---
+---
+
+# SESSION 2026-08-24 — systematic strategy search, then the pattern libraries
+
+Everything below supersedes the exploratory notes above. Read
+[`WHAT_WORKS.md`](WHAT_WORKS.md) first for the verdicts and
+[`STRATEGY_SEARCH_LOG.md`](STRATEGY_SEARCH_LOG.md) for the evidence; this is the working context.
+
+## The headline
+
+**No entry rule tested in this project has a validated edge**, and the binding constraint is
+arithmetic rather than signal quality. Spread is **10.8% of one R** on BTC 1m at a 1.5xATR stop,
+which requires a **36.9% win rate at 2R** to break even; every entry family measured **31-35%**.
+
+## Methodology rules now in force (each earned by a wrong result)
+
+1. **Difference every forward-return screen against a within-day-shuffled null**
+   (`experiments/null_control.py`). Two independent, plausible control schemes both MANUFACTURED
+   edges of exactly the size being hunted; shuffled data with no structure produced larger ones.
+2. **Every entry competes against a metronome** — `time_entry_{long,short}@v1` enters on a fixed
+   schedule with no signal, through the same stops, targets, costs and windows. Most "real" entries
+   lose to it.
+3. **Count survivors against chance** (`n_configs x 0.5^n_windows`, and use the right binomial tail
+   for "k of n windows" filters — getting this wrong once made 6 survivors look like 15x chance when
+   it was 1.35x).
+4. **Trim the top K trades, not just the top one.** Fat-tailed payoffs pass every conventional gate;
+   deleting the best 10 of 600-2,300 turned every Phase-3 survivor negative.
+5. **Bootstrap per window, never pooled.** Pooling showed `p_neg ~ 0.0001` when no individual
+   window's lower bound cleared zero.
+6. **A gate the metronome also passes is not a gate.** Rotating out-of-sample was passed by a random
+   entry with a trailing stop, which retires that test for fat-tailed payoffs.
+7. **Judge a filter at constant trade count.** Apparent edge and sample size moved in opposite
+   directions almost monotonically; a 7-trade configuration scored +1.49R.
+8. **Balance the window set before trusting a directional result.** Three windows from one falling
+   market cannot separate "short edge" from "short beta" — this retracted the eventual winner.
+9. **Measure capture before optimising exits.** Fixed targets already capture 87-93%; the real leak
+   was that 30% of trades reaching +1R end up losing.
+10. **Check ATR-normalised results in PRICE terms.** A "1.79x expansion after quiet" was entirely the
+    denominator shrinking. The pattern-expansion result was re-checked this way and survived.
+
+## Window sets
+
+`experiments/phase9_long_fair_test.WINDOWS` is the **balanced nine-window cycle** (BTC 15m,
+2022-2026): five bull (+26% to +84%) and four bear (-16% to -57%). Use this, not the old three-window
+set from `search_harness.make_windows`, which was 2/3 bear and produced a retracted result.
+
+## What was built
+
+* `quant/indicators/levels.py` — prev-day/week/session levels, opening range, session VWAP + bands,
+  volume features (first use in this project), round numbers, `level_events()`.
+* `quant/indicators/candle_patterns.py` — 62 candlestick patterns.
+* `quant/indicators/chart_patterns.py` — 19 chart patterns over fitted trendlines.
+* `quant/strategies/regimes.py` — regime conditioners with rolling-quantile thresholds.
+* `quant/scenarios/entries.py` — 12 entry families, each long AND short, incl. the metronome.
+* Engine: `max_bars_in_trade` time stop; a TakeProfit closing 0% now still moves the stop (that was
+  silently inert, so "breakeven at 1R" did nothing). Golden parity preserved throughout.
+* `experiments/mgmt_sweep.py` — prepares an entry once and reuses it; identical trades to
+  `run_pieces`, ~9x faster.
+
+## Bugs found the hard way — worth not repeating
+
+* **`EntryBundle` cached under a prepare-only key** made every variant run with the FIRST variant's
+  trigger and threshold. 288 configs returned deltas of *exactly* 0.0000, which reads as a clean
+  negative rather than a failure. Locked by `test_sweep_shares_frames_without_leaking_params`.
+* **`add_candle_patterns` called twice** left duplicate columns; `df[col]` then returns a DataFrame
+  and every boolean test silently misbehaves — named-subset entries produced ZERO trades, no error.
+* **Chart patterns called any two pivots a trendline.** Two points define a line exactly, so every
+  pair "fit". Now RANSAC + envelope with a touch requirement.
+* **An open Jupyter autosaved a stale notebook over a fix, and `git add -A` committed the revert.**
+  Check the diff when committing alongside an open notebook.
+
+## Current state of the pattern work
+
+Detector fixed and re-validated; phases 12-14 re-run on it. Direction verdict unchanged (47.7% of
+cells beat their null, below the 50% chance rate). The **expansion** finding survived and strengthened:
+forward 20-bar range is **9-32% larger** after a confirmed chart pattern, mean 1.18 in ATR units and
+1.21 in price terms — both agreeing, so not the denominator trap.
+
+`chart_short_rr8` is positive in 8 of 9 windows and survives **4x spread** at +0.123 (the strongest
+cost result in the project) but still fails trim-top-K, no bootstrap lower bound is positive in every
+window, and the cross-instrument test is now INCONCLUSIVE (only 1 of 9 gold windows clears the
+40-trade floor). **The binding constraint is sample size: 41-52 trades per window puts the standard
+error near 0.18.**
+
+## In flight
+
+`experiments/phase15_pattern_tuning.py` — per-pattern DETECTOR settings judged on direction alone
+(drift-adjusted signed forward move + hit rate), 108 settings x 9 windows x 13 patterns.
+`min_touches=2` is in the grid deliberately as a control: it is the setting that produced the broken
+shapes, so if it scores as well as 3-4 the touch requirement is not doing real work.
+
+## Not done / next
+
+* Phase 15 finalists still need the shuffled-null confirmation before being trusted.
+* Cross-instrument for chart patterns needs more gold data (or more instruments) to be answerable.
+* The parked ideas in `memory/parked-strategy-ideas.md` remain parked.
