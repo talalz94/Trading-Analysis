@@ -460,9 +460,16 @@ def _flagpole(pv: List[_Pivot], cand: _Candidate, *, pole_mult: float) -> Option
 
 
 def _dedupe(rows: List[dict], *, overlap_frac: float) -> List[dict]:
-    """Collapse detections of the SAME pattern that describe the same stretch of price action."""
+    """Collapse detections of the SAME pattern that describe the same stretch of price action.
+
+    CAUSAL, and that is the whole subtlety. Detections are resolved in CONFIRMATION ORDER, and a new
+    one is dropped when it overlaps something already kept. Ranking the full set by quality instead —
+    keeping the best-formed shape wherever it sits — lets a pattern confirming at bar 5,000 delete one
+    that already fired at bar 2,997, which makes a past signal depend on future bars. It is also the
+    wrong semantics for a trader, who has already acted on the earlier signal and cannot un-take it.
+    """
     kept: List[dict] = []
-    for r in sorted(rows, key=lambda z: (-z["touches"], -z["span_bars"], z["confirm_i"])):
+    for r in sorted(rows, key=lambda z: (z["confirm_i"], -z["touches"], -z["span_bars"])):
         a0, a1 = r["start_i"], r["confirm_i"]
         clash = False
         for k in kept:
@@ -476,7 +483,7 @@ def _dedupe(rows: List[dict], *, overlap_frac: float) -> List[dict]:
                 break
         if not clash:
             kept.append(r)
-    return sorted(kept, key=lambda z: z["confirm_i"])
+    return kept                      # already in confirmation order
 
 
 # ---------------------------------------------------------------------------
