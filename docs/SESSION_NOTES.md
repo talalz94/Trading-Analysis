@@ -605,28 +605,85 @@ set from `search_harness.make_windows`, which was 2/3 bear and produced a retrac
 * **An open Jupyter autosaved a stale notebook over a fix, and `git add -A` committed the revert.**
   Check the diff when committing alongside an open notebook.
 
-## Current state of the pattern work
+## Current state of the pattern work  (rewritten 2026-08-24 evening)
 
-Detector fixed and re-validated; phases 12-14 re-run on it. Direction verdict unchanged (47.7% of
-cells beat their null, below the 50% chance rate). The **expansion** finding survived and strengthened:
-forward 20-bar range is **9-32% larger** after a confirmed chart pattern, mean 1.18 in ATR units and
-1.21 in price terms — both agreeing, so not the denominator trap.
+### The de-duplication lookahead — read this before trusting any older pattern number
 
-`chart_short_rr8` is positive in 8 of 9 windows and survives **4x spread** at +0.123 (the strongest
-cost result in the project) but still fails trim-top-K, no bootstrap lower bound is positive in every
-window, and the cross-instrument test is now INCONCLUSIVE (only 1 of 9 gold windows clears the
-40-trade floor). **The binding constraint is sample size: 41-52 trades per window puts the standard
-error near 0.18.**
+`_dedupe` ranked every detection globally by how well-formed it was, so a pattern confirming at bar
+5,000 could delete one that had already fired at bar 2,997. **A past signal depended on future bars.**
+Fixed in `cd70932`; overlaps now resolve in confirmation order, which is also what a trader
+experiences (the earlier signal is already taken and cannot be un-taken).
+
+The truncation test missed it for a year because it checked ONE boundary at default sparse settings,
+where no overlap clash ever straddled that point. Now parametrized over six boundaries at settings
+dense enough to generate overlapping wedges, plus an assertion that the fixture really produces them.
+
+What it was worth, BTC 15m 2022H1, `rising_wedge` at its own best settings: detections 67 -> 83,
+drift-adjusted move **1.34 -> 0.53 ATR**, hit rate **56.7% -> 51.8%**. At phase 12-14 settings across
+all nine windows, **21% of firings changed** (rising_wedge 45%, symmetrical_triangle 55%).
+
+### The verdict, from the clean re-run
+
+The metric itself is sound: on within-day-shuffled bars the same 108-setting grid scores **+0.011**
+with 51.0% of cells positive, so a positive result on real data is signal, not measurement artifact.
+
+**Direction is dead, three independent ways.** Paired against its own shuffled twin per window,
+**0 of 13** patterns beat the null in >=8 of 9 windows (chance 0.3; best three reach 7 of 9, p=0.09).
+Median hit rate **0.480 real vs 0.500 null** — real data is WORSE than shuffled. The real hit rate
+exceeds 50% in **1 of 9** windows.
+
+**Expansion survived and grew.** Forward 20-bar range against a null of ~0.97: triple_bottom **1.42**,
+triple_top 1.25, symmetrical_triangle 1.22, head_shoulders 1.21, inverse_head_shoulders 1.18. The old
+figure was 9-32%; it is now 18-42%. Removing the hindsight de-dup STRENGTHENED it, consistent with the
+old path diluting the effect by keeping shapes selected after the fact. **A chart pattern says a big
+move is coming, not which way.**
+
+Effect size is 0.17-0.36% over 20 bars against a 0.007% spread — **10-25x the cost floor**. Unusually
+for this project, cost is not the binding constraint here; the sub-50% hit rate is.
+
+### "Best settings per pattern" has no stable answer — this is the methodology lesson
+
+Re-running the identical grid on the fixed detector **moved the winning cell for 13 of 13 patterns**,
+including patterns whose rank correlation across all 108 settings is 0.98-0.999. The surface is flat
+and the argmax is decided by noise. **Never hand over a per-pattern argmax table.**
+
+`experiments/phase15b_pattern_controls.py` therefore selects settings on SAMPLE SIZE (outcome-blind:
+strictest setting still yielding >=10 detections/window in all 9 windows), with the quality knobs taken
+from the pooled scan over 13 patterns x 9 windows. That scan independently landed on
+**min_touches=3**, and the planted **min_touches=2 control now scores WORST** — so the touch
+requirement is doing real work, which it was not able to show before the fix.
+
+### Methodology rule 11 (new)
+
+**Re-run the whole search after fixing a detector bug, and compare the argmax, not just the mean.** A
+21% perturbation of the signal set left rank correlations at 0.98+ while relocating every single
+winner. Stability of the ranking says nothing about stability of the optimum.
 
 ## In flight
 
-`experiments/phase15_pattern_tuning.py` — per-pattern DETECTOR settings judged on direction alone
-(drift-adjusted signed forward move + hit rate), 108 settings x 9 windows x 13 patterns.
-`min_touches=2` is in the grid deliberately as a control: it is the setting that produced the broken
-shapes, so if it scores as well as 3-4 the touch requirement is not doing real work.
+`experiments/phase13_pattern_uses.py` then `phase14_pattern_gates.py`, launched 19:52 on 2026-08-24
+via a chained background job, output to the session scratchpad (`p13.txt`, `p14.txt`). If they did not
+finish, just re-run them — everything they depend on is committed:
+
+```
+PYTHONPATH=. python -m experiments.phase13_pattern_uses
+PYTHONPATH=. python -m experiments.phase14_pattern_gates
+```
+
+`GOOD_CHART` in phase 13 was rebuilt from the corrected screen, ranked by EXPANSION rather than
+direction, dropping both wedges — `rising_wedge` was the pre-fix headline at 1.26 ATR and shows no
+expansion whatever (1.01) on 80 hits.
+
+Phase 13 Test 1 (the target ladder) is the one that matters: if the payoff is expansion plus a
+sub-50% hit rate, wide targets should help monotonically. That is the direct test of the skew story.
 
 ## Not done / next
 
-* Phase 15 finalists still need the shuffled-null confirmation before being trusted.
-* Cross-instrument for chart patterns needs more gold data (or more instruments) to be answerable.
+* Phases 13 + 14 results, then rewrite the [RE-RUN]-marked rows in `WHAT_WORKS.md` and the pattern
+  sections of `STRATEGY_SEARCH_LOG.md` with the corrected numbers.
+* `chart_short_rr8` (8 of 9 windows, survives 4x spread) was measured on the AFFECTED detector and has
+  not yet been re-tested. Treat as unverified.
+* The user asked to PLOT the tuned settings once found — the outcome-blind table is in
+  `phase15b_pattern_controls.FINALISTS` and is ready to draw with `notebooks/14_pattern_viewer.ipynb`.
+* Cross-instrument for chart patterns still needs more gold data to be answerable.
 * The parked ideas in `memory/parked-strategy-ideas.md` remain parked.
