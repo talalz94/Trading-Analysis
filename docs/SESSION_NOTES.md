@@ -661,29 +661,17 @@ winner. Stability of the ranking says nothing about stability of the optimum.
 
 ## In flight
 
-`experiments/phase13_pattern_uses.py` then `phase14_pattern_gates.py`, launched 19:52 on 2026-08-24
-via a chained background job, output to the session scratchpad (`p13.txt`, `p14.txt`). If they did not
-finish, just re-run them — everything they depend on is committed:
-
-```
-PYTHONPATH=. python -m experiments.phase13_pattern_uses
-PYTHONPATH=. python -m experiments.phase14_pattern_gates
-```
-
-`GOOD_CHART` in phase 13 was rebuilt from the corrected screen, ranked by EXPANSION rather than
-direction, dropping both wedges — `rising_wedge` was the pre-fix headline at 1.26 ATR and shows no
-expansion whatever (1.01) on 80 hits.
-
-Phase 13 Test 1 (the target ladder) is the one that matters: if the payoff is expansion plus a
-sub-50% hit rate, wide targets should help monotonically. That is the direct test of the skew story.
+Nothing. Phases 12, 13, 14 and 15 have all re-run on the causal detector and their results are
+committed, raw CSVs included, so nothing needs a two-hour re-run to re-derive.
 
 ## Not done / next
 
-* Phases 13 + 14 results, then rewrite the [RE-RUN]-marked rows in `WHAT_WORKS.md` and the pattern
-  sections of `STRATEGY_SEARCH_LOG.md` with the corrected numbers.
-* `chart_short_rr8` (8 of 9 windows, survives 4x spread) was measured on the AFFECTED detector and has
-  not yet been re-tested. Treat as unverified.
-* The user asked to PLOT the tuned settings once found — the outcome-blind table is in
-  `phase15b_pattern_controls.FINALISTS` and is ready to draw with `notebooks/14_pattern_viewer.ipynb`.
-* Cross-instrument for chart patterns still needs more gold data to be answerable.
+* **The user's next request is to PLOT the tuned settings.** The outcome-blind table lives in
+  `experiments/phase15b_pattern_controls.FINALISTS` and draws with `notebooks/14_pattern_viewer.ipynb`.
+  It is unaffected by the retractions, because those settings were selected on sample size rather
+  than on score.
+* Rewrite the pattern sections of `STRATEGY_SEARCH_LOG.md` — `WHAT_WORKS.md` is already corrected,
+  the phase-by-phase log is not.
+* Cross-instrument for chart patterns still needs more gold data to be answerable (1 of 9 windows
+  clears the 40-trade floor).
 * The parked ideas in `memory/parked-strategy-ideas.md` remain parked.
