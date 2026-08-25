@@ -8,25 +8,22 @@
 
 ---
 
-> ## ⚠ CORRECTION 2026-08-24 — every CHART-pattern number below is under re-measurement
+> ## CORRECTION 2026-08-24 — the chart-pattern re-measurement is COMPLETE
 >
 > `_dedupe` in `quant/indicators/chart_patterns.py` ranked all detections globally by how well-formed
 > they were, so a pattern confirming at bar 5,000 could delete one that had already fired at bar
-> 2,997. **A past signal therefore depended on future bars.** Fixed in `cd70932` (overlaps now resolve
-> in confirmation order); the truncation test that should have caught it checked a single boundary at
-> sparse settings, where no clash ever straddled it.
+> 2,997 — **a past signal depending on future bars**. Fixed in `cd70932`. Phases 12-15 were re-run on
+> the causal detector and the rows below now carry the corrected numbers.
 >
-> Measured impact at the settings phases 12-14 used, over all nine windows: **21% of firings changed**
-> — `rising_wedge` 45%, `symmetrical_triangle` 55%, both of which are in the `GOOD_CHART` set that
-> drove the phase-13 conclusions. On the Phase-15 tuning run the effect was much larger, because those
-> settings are denser: `rising_wedge` went from a drift-adjusted **1.34 ATR at a 56.7% hit rate to
-> 0.53 ATR at 51.8%** — a coin flip.
+> **Retracted:** `chart_short_rr8` (8 of 9 windows -> **5 of 9**, the same as the metronome) and the
+> monotonic target ladder (+0.012 rising to +0.152 -> **no trend at all**). Both were the lookahead.
 >
-> **Unaffected:** everything about candlesticks, levels, entry families, exits, regimes, the cost
-> floor and the metronome comparisons. `add_candle_patterns` has no de-duplication step, and no other
-> phase used chart patterns.
+> **Strengthened:** the expansion finding, from 9-32% to **18-42%** more forward range. Removing a
+> hindsight filter made it bigger, which fits — the old path kept shapes selected after the fact.
 >
-> Phases 12, 13, 14 and 15 are being re-run. Rows below marked **[RE-RUN]** are not to be relied on.
+> **Unaffected:** candlesticks, levels, entry families, exits, regimes, the cost floor, every
+> metronome comparison. `add_candle_patterns` has no de-duplication step and no other phase used
+> chart patterns.
 
 ---
 
@@ -84,7 +81,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Trailing stops as an exit family** | x worst tested | Capture only **37%** of the favourable move vs **87-93%** for fixed targets; bottom of all 29 exit designs in Phase 11 |
 | **"The move keeps going after I exit"** | x illusion | The metronome shows MORE continuation than the strategy (cont30 1.07 vs 1.00) - it is the max-of-a-random-walk effect |
 | **Candlestick patterns** (62, incl. every classic reversal) | x no directional edge | Hit rate **50.1-50.5%**, NEGATIVE excess over a null that preserves their exact candle shapes and destroys only the order. Several INVERT (`three_inside_down` -0.57, `hanging_man` -0.42). Only `marubozu_bull` is consistent, and it is a momentum bar |
-| **Chart patterns as a directional trade** (19: double/triple tops, H&S, wedges, triangles, flags) | **[RE-RUN]** x unresolved, fails the gates it can run | Re-run on FITTED trendlines. Wide targets help monotonically (+0.012 at 0.5R to **+0.152 at 8R**, vs a metronome at +0.011) and it is cost-robust to **4x spread** (+0.123). But it fails trim-top-K (deleting 5 trades of ~45 takes the worst window to -1.0), no bootstrap lower bound is positive in every window, and the stricter detector leaves only 1 of 9 gold windows with enough trades so the cross-instrument test cannot run. **41-52 trades per window puts the standard error near 0.18** - too few to settle either way |
+| **Chart patterns as a directional trade** (19: double/triple tops, H&S, wedges, triangles, flags) | x **settled: no directional edge** | Re-measured on the causal detector against a shuffled null that the metric handles correctly (null scores +0.011, 51.0% of cells positive). Median hit rate **0.480 real vs 0.500 null** — real data is WORSE than shuffled — and the real hit rate exceeds 50% in **1 of 9** windows. Paired per window, **0 of 13** patterns beat their own null in >=8 of 9 (chance 0.3). `chart_short_rr8` fell from 8 of 9 windows to **5 of 9**, matching the metronome; trim-top-K takes every configuration to about -1.0 after 5 trades; no bootstrap lower bound is positive in any window. The monotonic target ladder is gone |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
@@ -100,7 +97,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 
 ## ✓ The one positive, actionable rule found
 
-**[RE-RUN] Chart patterns predict EXPANSION, not direction.** Forward 20-bar range is **9-32% larger** after a triangle / wedge / H&S (mean 1.18), and unlike the Phase-7 compression result this survives measurement in PRICE terms as well as ATR units (mean 1.21 vs 1.18), with the shuffled null at ~0.97. Re-measured on properly fitted trendlines it came out *cleaner*, not weaker. It is the most solid pattern measurement in the project. It still did not convert into a tradable rule, because exploiting expansion without direction requires a wide target and that turns the payoff into a lottery.
+**Chart patterns predict EXPANSION, not direction — and this is the one pattern finding that survived.** Forward 20-bar range after a confirmed shape, against a shuffled null sitting at **0.97** (i.e. no expansion, exactly as it must): `triple_bottom` **1.42**, `triple_top` 1.25, `symmetrical_triangle` 1.22, `head_shoulders` 1.21, `inverse_head_shoulders` 1.18. Previously reported as 9-32% on the superseded detector; removing the hindsight de-duplication made it **larger**, which fits the mechanism — the old path kept shapes selected after the fact and diluted the effect. It survives in PRICE terms as well as ATR units, so it is not the denominator trap. The effect is 0.17-0.36% over 20 bars against a 0.007% spread, **10-25x the cost floor** — unusually for this project, cost is not what stops it. The **sub-50% hit rate** is: exploiting expansion without direction needs a wide target, and phase 14 shows every such configuration collapsing to about -1.0 once the best 5 trades of ~45 are removed. Useful as a **risk signal** — size down, widen stops, expect a move — not as a trade.
 
 **Compression releases cluster at the US open.** 35% of 3,622 compression episodes release in
 12:00-14:00 UTC (cash open 13:30) and travel ~40% further there (111-125 bps vs 60-90). Real, but
@@ -116,7 +113,7 @@ rather than an edge, but it is large, consistent, and the only Phase-4 result wo
 
 ## ? The only two things that are not obviously nothing
 
-**0. [RE-RUN] A chart pattern breaking AT an S/R support zone** — the only filter in the whole project that improved a rule on a like-for-like basis instead of by starving it: +0.0197 -> +0.0495 while giving up just 13% of its trades. Unvalidated, but the shape of the result is right.
+**0. A chart pattern breaking AT an S/R support zone** (measured on the superseded detector; not re-tested) — the only filter in the whole project that improved a rule on a like-for-like basis instead of by starving it: +0.0197 -> +0.0495 while giving up just 13% of its trades. Unvalidated, but the shape of the result is right.
 
 **1. `pdlow_fade_long` + trailing stop (BTC 1m)** — long on a fade of the previous day's low.
 Worst-window +0.136R against the null's +0.040R, survives 2× spread where the null does not, and is
