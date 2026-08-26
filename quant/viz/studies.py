@@ -376,7 +376,8 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height: int = 820,
                    sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
-                   extend: int = 12, start_visible=(), detect_kwargs=None):
+                   extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
+                   per_pattern=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -388,12 +389,18 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     and out one at a time. `start_visible` names the ones that should be on when the chart opens;
     everything else starts in `legendonly`. S/R zones are their own toggle.
 
+    `tuned=True` draws every pattern at its own calibrated settings (`TUNED_SPECS`) instead of one
+    shared configuration — which needs several detection passes, because those settings disagree on
+    `atr_mult` and that sizes the zigzag for the whole pass. `per_pattern={name: {...}}` does the
+    same with settings you supply. Both override `detect_kwargs` for pattern detection.
+
     Nothing here is forward-looking: shapes are drawn from the bar the pattern CONFIRMED, using only
     pivots that had already been confirmed by then.
     """
     import numpy as np
     import plotly.graph_objects as go
     from ..indicators import chart_pattern_shapes, sr_zone_table
+    from ..indicators.chart_patterns import chart_pattern_shapes_tuned, tuned_specs
     from ..indicators.chart_patterns import PATTERN_DIRECTION as _PD
 
     d = df.reset_index(drop=True)
@@ -420,8 +427,14 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 opacity=0.55, hoverinfo="skip",
                 visible=True if "sr_zones" in start_visible else "legendonly"))
 
-    names = list(patterns) if patterns else list(_PD)
-    shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
+    if tuned or per_pattern:
+        spec = per_pattern or tuned_specs()
+        names = list(patterns) if patterns else list(spec)
+        shapes = chart_pattern_shapes_tuned(d, specs=spec, patterns=names,
+                                            **(detect_kwargs or {}))
+    else:
+        names = list(patterns) if patterns else list(_PD)
+        shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
     n = len(d)
     for name in names:
         sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
