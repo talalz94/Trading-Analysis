@@ -10,6 +10,8 @@ from .candle_patterns import (add_candle_patterns, candle_pattern_table,
                               ALL_PATTERNS as CANDLE_PATTERNS,
                               PATTERN_DIRECTION as CANDLE_PATTERN_DIRECTION)
 from .chart_patterns import (add_chart_patterns, chart_pattern_shapes, chart_pattern_table,
+                             chart_pattern_shapes_tuned, tuned_specs,
+                             TUNED_SPECS, TUNED_COMMON,
                              ALL_PATTERNS as CHART_PATTERNS,
                              PATTERN_DIRECTION as CHART_PATTERN_DIRECTION)
 from .volatility import add_atr, add_compression, add_supertrend, atr
@@ -26,6 +28,7 @@ __all__ = [
     "add_candle_patterns", "candle_pattern_table", "CANDLE_PATTERNS",
     "CANDLE_PATTERN_DIRECTION",
     "add_chart_patterns", "chart_pattern_table", "chart_pattern_shapes", "CHART_PATTERNS",
+    "chart_pattern_shapes_tuned", "tuned_specs", "TUNED_SPECS", "TUNED_COMMON",
     "CHART_PATTERN_DIRECTION",
     "atr", "add_atr", "add_compression", "add_supertrend",
     "add_swings", "add_pivot_points", "add_sr_zones", "sr_zone_table", "add_trend_structure", "add_zigzag_structure",

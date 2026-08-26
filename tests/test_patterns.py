@@ -415,3 +415,65 @@ def test_boundary_may_slope(rnd):
                               "descending_triangle", "rising_wedge", "falling_wedge"])]
     if len(tri):
         assert (tri.boundary_slope.abs() > 0).any(), "no sloping boundary anywhere"
+
+
+# ---------------------------------------------------------------------------
+# tuned per-pattern settings (notebook 15)
+# ---------------------------------------------------------------------------
+def test_tuned_specs_cover_every_pattern_they_claim_and_reject_unknown_names():
+    from quant.indicators import tuned_specs, TUNED_COMMON
+    s = tuned_specs()
+    assert len(s) == 13
+    for name, cfg in s.items():
+        assert name in CHART_PATTERNS
+        assert "atr_mult" in cfg
+        # the shared quality knobs must reach every pattern
+        for k, v in TUNED_COMMON.items():
+            assert cfg[k] == v, f"{name} lost {k}"
+        # three touches is the point: two points define a line exactly
+        assert cfg["min_touches_upper"] >= 3 and cfg["min_touches_lower"] >= 3
+    assert set(tuned_specs(["rising_wedge"])) == {"rising_wedge"}
+    with pytest.raises(KeyError):
+        tuned_specs(["not_a_pattern"])
+
+
+def test_tuned_shapes_merge_the_separate_atr_mult_passes(rnd):
+    """The whole reason this helper exists: `atr_mult` sizes the zigzag for a whole pass, so
+    patterns calibrated to different values cannot come out of one call."""
+    from quant.indicators import chart_pattern_shapes, chart_pattern_shapes_tuned, tuned_specs
+    spec = tuned_specs()
+    assert len({c["atr_mult"] for c in spec.values()}) > 1, "fixture assumes differing atr_mult"
+
+    got = chart_pattern_shapes_tuned(rnd)
+    assert list(got["confirm_i"]) == sorted(got["confirm_i"]), "must come back in time order"
+
+    # each pattern's rows must match what its OWN single-atr_mult pass produces
+    for name in ("rising_wedge", "head_shoulders"):
+        cfg = dict(spec[name])
+        am = cfg.pop("atr_mult")
+        one = chart_pattern_shapes(rnd, patterns=[name], atr_mult=am, settings={name: cfg})
+        mine = got[got["pattern"] == name]
+        assert len(mine) == len(one)
+        assert sorted(mine["confirm_i"]) == sorted(one["confirm_i"])
+
+
+def test_tuned_shapes_stay_causal(rnd):
+    from quant.indicators import chart_pattern_shapes_tuned
+    k = 2200
+    full = chart_pattern_shapes_tuned(rnd)
+    part = chart_pattern_shapes_tuned(rnd.iloc[:k].copy())
+    a = sorted(zip(full["confirm_i"], full["pattern"]))
+    a = [x for x in a if x[0] < k]
+    assert a == sorted(zip(part["confirm_i"], part["pattern"]))
+
+
+def test_pattern_figure_tuned_draws_without_a_shared_detect_config(rnd):
+    from quant.viz.studies import pattern_figure
+    fig = pattern_figure(rnd, tuned=True, sr_zones=False)
+    drawn = {t.legendgroup for t in fig.data if t.legendgroup}
+    assert drawn, "tuned figure drew nothing"
+    assert drawn <= set(CHART_PATTERNS), f"unexpected legend groups: {drawn - set(CHART_PATTERNS)}"
+    # and the per_pattern route must reach the same place as tuned=True
+    from quant.indicators import tuned_specs
+    same = pattern_figure(rnd, per_pattern=tuned_specs(), sr_zones=False)
+    assert {t.legendgroup for t in same.data if t.legendgroup} == drawn

@@ -104,6 +104,58 @@ SENSITIVITY_PRESETS: Dict[str, dict] = {
 }
 
 
+#: Per-pattern detector calibration from the Phase-15 sweep (108 settings x 9 windows x 13 patterns,
+#: BTCUSDT 15m 2022-2026), re-run on the causal detector.
+#:
+#: WHAT THESE ARE: settings that produce well-formed shapes in usable numbers — at least ten
+#: detections per window in every one of the nine windows, at the strictest geometry that still
+#: clears that floor. The quality knobs (`min_touches=3`, `line_tol_atr=0.6`) come from a scan pooled
+#: over all thirteen patterns, and both land where the prior argument says they should: two points
+#: define a line exactly, so three touches is the meaningful minimum.
+#:
+#: WHAT THESE ARE NOT: settings that predict direction, and they must not be read that way. They were
+#: chosen deliberately WITHOUT looking at forward returns, because selecting on the score is not
+#: defensible here — re-running the identical grid after fixing a lookahead moved the best-scoring
+#: cell for 13 of 13 patterns, including patterns whose rank correlation across all 108 settings was
+#: 0.98-0.999. At these settings the measured directional hit rate is **0.48, below a coin flip**.
+#: What a confirmed pattern does predict is EXPANSION: 18-42% more forward range than normal, against
+#: a shuffled null at 0.97. Use these to SEE the shapes and to size risk; see `docs/WHAT_WORKS.md`
+#: before trading one.
+TUNED_SPECS: Dict[str, dict] = {
+    # atr_mult 5.0 — the level shapes, which need big, clean pivots
+    "head_shoulders":         dict(atr_mult=5.0, min_span_bars=100),
+    "inverse_head_shoulders": dict(atr_mult=5.0, min_span_bars=100),
+    "triple_top":             dict(atr_mult=5.0, min_span_bars=100),
+    "triple_bottom":          dict(atr_mult=5.0, min_span_bars=100),
+    "double_top":             dict(atr_mult=5.0, min_span_bars=100),
+    "double_bottom":          dict(atr_mult=5.0, min_span_bars=100),
+    # atr_mult 3.5 — wedges and the symmetrical triangle, which need a long span to be real
+    "rising_wedge":           dict(atr_mult=3.5, min_span_bars=200),
+    "falling_wedge":          dict(atr_mult=3.5, min_span_bars=200),
+    "symmetrical_triangle":   dict(atr_mult=3.5, min_span_bars=200),
+    # atr_mult 2.5 — the rarer shapes, which need a finer zigzag to appear at all
+    "ascending_triangle":     dict(atr_mult=2.5, min_span_bars=40),
+    "descending_triangle":    dict(atr_mult=2.5, min_span_bars=40),
+    "broadening_top":         dict(atr_mult=2.5, min_span_bars=100),
+    "broadening_bottom":      dict(atr_mult=2.5, min_span_bars=100),
+}
+#: shared by every entry above — kept separate so the table shows only what actually differs
+TUNED_COMMON: dict = dict(min_touches_upper=3, min_touches_lower=3,
+                          min_height_atr=4.0, line_tol_atr=0.6)
+
+
+def tuned_specs(patterns: Optional[Sequence[str]] = None) -> Dict[str, dict]:
+    """`TUNED_SPECS` merged with `TUNED_COMMON`, optionally restricted to `patterns`."""
+    out = {k: {**TUNED_COMMON, **v} for k, v in TUNED_SPECS.items()}
+    if patterns is not None:
+        missing = set(patterns) - set(out)
+        if missing:
+            raise KeyError(f"no tuned settings for {sorted(missing)}; "
+                           f"available: {sorted(out)}")
+        out = {k: v for k, v in out.items() if k in patterns}
+    return out
+
+
 def resolve_specs(sensitivity: str = "normal",
                   settings: Optional[Dict[str, dict]] = None) -> Dict[str, PatternSpec]:
     """`DEFAULT_SPECS` -> `sensitivity` preset -> per-pattern `settings` override (most specific wins)."""
@@ -679,6 +731,33 @@ def chart_pattern_shapes(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         out["start_t"] = tv[out["start_i"].to_numpy(int)]
         out["pivot_t"] = [list(tv[np.asarray(v, int)]) for v in out["pivot_i"]]
     return out
+
+
+def chart_pattern_shapes_tuned(df: pd.DataFrame, *, specs: Optional[Dict[str, dict]] = None,
+                               patterns: Optional[Sequence[str]] = None,
+                               **kwargs) -> pd.DataFrame:
+    """Shape geometry with PER-PATTERN settings, including a per-pattern `atr_mult`.
+
+    `atr_mult` sizes the zigzag, so it is a property of the whole detection pass rather than of one
+    pattern — patterns calibrated to different values genuinely cannot come out of a single call, and
+    that is why `chart_pattern_shapes` alone cannot draw `TUNED_SPECS`. This groups the patterns by
+    `atr_mult`, runs one pass per group and concatenates the results. Patterns sharing an `atr_mult`
+    still share a pass, so the cost is one detection per DISTINCT value — three for `TUNED_SPECS`,
+    not thirteen.
+    """
+    spec = tuned_specs(patterns) if specs is None else {
+        k: dict(v) for k, v in specs.items() if patterns is None or k in patterns}
+    groups: Dict[float, Dict[str, dict]] = {}
+    for name, cfg in spec.items():
+        cfg = dict(cfg)
+        groups.setdefault(float(cfg.pop("atr_mult", 3.5)), {})[name] = cfg
+    frames = [chart_pattern_shapes(df, patterns=list(per), atr_mult=am, settings=per, **kwargs)
+              for am, per in groups.items()]
+    full = [f for f in frames if len(f)]
+    if not full:
+        return frames[0] if frames else pd.DataFrame()
+    out = pd.concat(full, ignore_index=True)
+    return out.sort_values("confirm_i").reset_index(drop=True)
 
 
 def chart_pattern_table(df: pd.DataFrame, *, prefix: str = "pat") -> pd.DataFrame:

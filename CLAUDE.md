@@ -97,7 +97,12 @@ quant/
 │   │                    #     trendline - two points always fit - and that was the original bug.
 │   │                    #     PatternSpec + resolve_specs give PER-PATTERN strictness, with
 │   │                    #     sensitivity='major'|'normal'|'minor' as the coarse dial.
-│   │                    #     chart_pattern_shapes() returns the fitted boundaries for drawing.
+│   │                    #     chart_pattern_shapes() returns the fitted boundaries for drawing;
+│   │                    #     TUNED_SPECS / tuned_specs() are the Phase-15 per-pattern calibration and
+│   │                    #     chart_pattern_shapes_tuned() merges the passes they need (atr_mult sizes
+│   │                    #     the zigzag per PASS, so differing values cannot share one call).
+│   │                    #     They are tuned for WELL-FORMED, FREQUENT shapes, NOT for direction:
+│   │                    #     hit rate 0.48, below a coin flip. See docs/WHAT_WORKS.md.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
@@ -187,7 +192,9 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 14_pattern_viewer = chart-pattern SHAPES + S/R zones, toggled from the legend
+notebooks/               # 15_tuned_pattern_viewer = all 13 chart patterns at their CALIBRATED
+                         #   per-pattern settings (quant.indicators.TUNED_SPECS), one legend toggle each
+                         # 14_pattern_viewer = chart-pattern SHAPES + S/R zones, toggled from the legend
                          # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study (Q1-Q9)
                          #   · 04_trend_runner_leverage · 05_simple_1m_ema_breakout ·
                          #   06_ema_breakout_candles · 07_rule_builder · 08_sr_zones_view ·
@@ -330,7 +337,8 @@ print(res.stats)
   `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `06_ema_breakout_candles_demo`
   (candle chart + HA toggle) · `07_rule_builder` (declarative
   RuleStrategy) · `08_sr_zones_view` (200-MA strategy + causal S/R zone overlay) ·
-  `09_squeeze_momentum` (SQZMOM + WaveTrend + crosshair) · `10_scenario_lab` (versioned
+  `09_squeeze_momentum` (SQZMOM + WaveTrend + crosshair) · `14_pattern_viewer` (one shared
+  detector config) · `15_tuned_pattern_viewer` (per-pattern calibrated settings) · `10_scenario_lab` (versioned
   Scenario×Stop×TP setups, fully-annotated `scenario_figure`, variant sweep answering the 3 Qs, Preset I/O).
 - CLI: `quant backtest --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy ema_ribbon --params '{"fast":50,"slow":200,"confirm_n":5}'`
 - Demo: `python examples/gold_ema_demo.py` · Tests: `python -m pytest tests/`
