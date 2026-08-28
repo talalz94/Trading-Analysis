@@ -457,8 +457,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 if sl == sl and ic == ic:                       # not NaN
                     lx += [xa, xb, None]
                     ly += [sl * r.start_i + ic, sl * (b) + ic, None]
-            mx += list(r.pivot_t) + [None]
-            my += list(r.pivot_price) + [None]
+            # the pivots the lines were FITTED THROUGH, not every swing in the search window
+            mx += list(r.touch_t) + [None]
+            my += list(r.touch_price) + [None]
             nx += [xa, xb, None]
             ny += [r.boundary_slope * r.start_i + r.boundary_intercept,
                    r.boundary_slope * b + r.boundary_intercept, None]

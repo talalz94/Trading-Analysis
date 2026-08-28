@@ -477,3 +477,70 @@ def test_pattern_figure_tuned_draws_without_a_shared_detect_config(rnd):
     from quant.indicators import tuned_specs
     same = pattern_figure(rnd, per_pattern=tuned_specs(), sr_zones=False)
     assert {t.legendgroup for t in same.data if t.legendgroup} == drawn
+
+
+# ---------------------------------------------------------------------------
+# what the chart draws as a "touch" must BE a touch
+# ---------------------------------------------------------------------------
+def test_touch_pivots_are_the_fitted_inliers_not_the_whole_search_window(rnd):
+    """The dots on the chart claim to be touches, so they must be the pivots the lines were fitted
+    through — `pivot_i` is the whole lookback window and is about twice as long."""
+    s = chart_pattern_shapes(rnd)
+    assert len(s)
+    trend = s[s["upper_slope"].notna() & s["lower_slope"].notna()]
+    assert len(trend), "fixture must produce trendline shapes"
+    for r in trend.itertuples():
+        assert len(r.touch_i) == r.touches_upper + r.touches_lower - _shared(r)
+        assert set(r.touch_i) <= set(r.pivot_i), "a touch must come from the search window"
+        assert len(r.touch_i) <= len(r.pivot_i)
+    # level shapes have no fitted lines; their defining extremes are the touches
+    lvl = s[s["upper_slope"].isna() & s["lower_slope"].isna()]
+    for r in lvl.itertuples():
+        assert len(r.touch_i) > 0
+
+
+def _shared(r) -> int:
+    """A pivot can be an inlier of both boundaries; it is one dot, counted once."""
+    return len(r.touch_i) and (r.touches_upper + r.touches_lower) - len(set(r.touch_i))
+
+
+def test_every_drawn_touch_actually_sits_on_one_of_the_boundaries(rnd):
+    from quant.indicators import add_atr
+    d = add_atr(rnd, 14)
+    atr = float(d["atr_14"].median())
+    s = chart_pattern_shapes(rnd)
+    trend = s[s["upper_slope"].notna()]
+    for r in trend.itertuples():
+        for i, px in zip(r.touch_i, r.touch_price):
+            du = abs(px - (r.upper_slope * i + r.upper_intercept))
+            dl = abs(px - (r.lower_slope * i + r.lower_intercept))
+            # default line_tol_atr is 1.0; allow generous slack for the ATR being a median here
+            assert min(du, dl) <= 4.0 * atr, f"dot at {i} sits on neither boundary"
+
+
+# ---------------------------------------------------------------------------
+# a symmetrical triangle has to be symmetrical
+# ---------------------------------------------------------------------------
+def test_symmetrical_triangle_requires_comparable_slopes(rnd):
+    """Converging with opposite slopes is necessary but not sufficient: without a symmetry test a
+    line falling at -12.9 paired with one rising at 0.76 was being called symmetrical."""
+    tight = chart_pattern_shapes(rnd, patterns=["symmetrical_triangle"],
+                                 settings={"symmetrical_triangle": dict(slope_sym_max=2.0)})
+    for r in tight.itertuples():
+        a, b = abs(r.upper_slope), abs(r.lower_slope)
+        assert max(a, b) / max(min(a, b), 1e-12) <= 2.0 + 1e-9
+
+    loose = chart_pattern_shapes(rnd, patterns=["symmetrical_triangle"],
+                                 settings={"symmetrical_triangle": dict(slope_sym_max=50.0)})
+    assert len(loose) >= len(tight), "loosening the symmetry bound cannot find fewer"
+
+
+def test_symmetry_bound_does_not_touch_the_other_triangles(rnd):
+    """Ascending/descending are defined by a FLAT boundary, so the symmetry test must not reach
+    them — it would otherwise silently reshape patterns it has no business filtering."""
+    for name in ("ascending_triangle", "descending_triangle"):
+        a = chart_pattern_shapes(rnd, patterns=[name],
+                                 settings={name: dict(slope_sym_max=1.01)})
+        b = chart_pattern_shapes(rnd, patterns=[name],
+                                 settings={name: dict(slope_sym_max=99.0)})
+        assert len(a) == len(b), f"{name} changed with slope_sym_max"
