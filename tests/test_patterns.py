@@ -802,3 +802,24 @@ def test_a_refitted_trendline_keeps_its_identity(rnd):
         if len(s) > 3:
             rel = np.abs(np.diff(s)) / np.maximum(np.abs(s[:-1]), 1e-9)
             assert (rel < 0.05).mean() < 0.30, "consecutive lines are near-duplicates"
+
+
+def test_the_protective_level_is_a_meaningful_distance_from_entry(rnd):
+    """Being on the correct side of entry is not enough. A long, steeply rising wedge lets its
+    rising lower boundary catch up with the highest high, so the stop lands a hair from the break
+    and reward-to-risk explodes — 585:1 measured on gold before this gate existed."""
+    s = chart_pattern_shapes(rnd)
+    assert len(s)
+    risk = (s["entry"] - s["stop"]).abs()
+    assert (risk > 0).all(), "a zero-risk shape publishes an unusable stop"
+    # the target sits one height away, so the risk floor is equivalent to an R:R ceiling
+    rr = (s["target"] - s["entry"]).abs() / risk
+    assert rr.max() <= 1.0 / 0.05 + 1e-6, f"reward-to-risk reached {rr.max():.1f}"
+
+
+def test_min_risk_frac_is_tunable(rnd):
+    tight = chart_pattern_shapes(rnd, settings={p: dict(min_risk_frac=0.30)
+                                                for p in CHART_PATTERNS})
+    loose = chart_pattern_shapes(rnd, settings={p: dict(min_risk_frac=0.0)
+                                                for p in CHART_PATTERNS})
+    assert len(tight) <= len(loose)
