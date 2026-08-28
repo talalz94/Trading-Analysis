@@ -426,8 +426,10 @@ def test_boundary_may_slope(rnd):
 def test_tuned_specs_cover_every_pattern_they_claim_and_reject_unknown_names():
     from quant.indicators import tuned_specs, TUNED_COMMON
     s = tuned_specs()
-    assert len(s) == 16, "13 swept patterns + the 3 channels added afterwards"
-    assert {"channel_up", "channel_down", "channel_flat"} <= set(s)
+    assert len(s) == len(CHART_PATTERNS), (
+        "TUNED_SPECS must cover EVERY pattern: a name missing here is never requested by "
+        "chart_pattern_shapes_tuned, so it silently shows zero detections on a tuned chart")
+    assert set(s) == set(CHART_PATTERNS)
     for name, cfg in s.items():
         assert name in CHART_PATTERNS
         assert "atr_mult" in cfg
@@ -688,3 +690,115 @@ def test_pattern_figure_can_draw_trendlines(rnd):
     fig = pattern_figure(rnd, patterns=["rising_wedge"], sr_zones=False, trendlines=True)
     groups = {t.legendgroup for t in fig.data if t.legendgroup}
     assert "support trendline" in groups or "resistance trendline" in groups
+
+
+# ---------------------------------------------------------------------------
+# apex expiry and the containment gate
+# ---------------------------------------------------------------------------
+def test_converging_shapes_never_confirm_past_their_apex(rnd):
+    """Past the apex the upper boundary sits BELOW the lower one and the shape is inverted."""
+    names = ["ascending_triangle", "descending_triangle", "symmetrical_triangle",
+             "rising_wedge", "falling_wedge"]
+    s = chart_pattern_shapes(rnd, patterns=names)
+    checked = 0
+    for r in s.itertuples():
+        ds = r.upper_slope - r.lower_slope
+        if abs(ds) < 1e-12:
+            continue
+        apex = (r.lower_intercept - r.upper_intercept) / ds
+        last = max(r.pivot_i)
+        if apex <= last:
+            continue                     # diverging: no apex ahead
+        checked += 1
+        frac = (r.confirm_i - last) / (apex - last)
+        assert frac <= 0.75 + 1e-6, f"{r.pattern} confirmed {frac:.2f} of the way to its apex"
+    assert checked > 0, "fixture produced no converging shapes to check"
+
+
+def test_channels_are_exempt_from_the_apex_limit(rnd):
+    """Parallel boundaries never meet, so the apex rule must not touch channels. If it did, the
+    fix for one family would silently shrink another."""
+    names = ["channel_up", "channel_down", "channel_flat"]
+    loose = chart_pattern_shapes(rnd, patterns=names,
+                                 settings={p: dict(max_apex_frac=0.05) for p in names})
+    wide = chart_pattern_shapes(rnd, patterns=names,
+                                settings={p: dict(max_apex_frac=10.0) for p in names})
+    assert len(loose) == len(wide), "the apex limit reached the channels"
+
+
+def test_every_confirmed_shape_contains_its_own_price_action(rnd):
+    """The direct statement of 'this shape describes what price did'. Before the gate existed,
+    32.7% of long-draw triangles held under 80% of their bars, worst case 0.31."""
+    from quant.indicators import add_atr
+    d = add_atr(rnd, 14)
+    atr = d["atr_14"].to_numpy(float)
+    hi, lo = d["high"].to_numpy(float), d["low"].to_numpy(float)
+    s = chart_pattern_shapes(rnd)
+    checked = 0
+    for r in s.itertuples():
+        if not (np.isfinite(r.upper_slope) and np.isfinite(r.lower_slope)):
+            continue
+        a, b = int(min(r.pivot_i)), int(r.confirm_i)
+        if b <= a:
+            continue
+        checked += 1
+        x = np.arange(a, b + 1)
+        tol = 1.0 * (atr[b] if np.isfinite(atr[b]) else 0.0)
+        u = r.upper_slope * x + r.upper_intercept
+        l = r.lower_slope * x + r.lower_intercept
+        inside = ((hi[a:b + 1] <= u + tol) & (lo[a:b + 1] >= l - tol)).mean()
+        assert inside >= 0.80 - 1e-9, f"{r.pattern} contains only {inside:.2f} of its bars"
+    assert checked > 0
+
+
+def test_containment_gate_can_be_disabled(rnd):
+    """0 turns it off, and turning it off cannot find FEWER shapes."""
+    names = ["ascending_triangle", "descending_triangle"]
+    on = chart_pattern_shapes(rnd, patterns=names)
+    off = chart_pattern_shapes(rnd, patterns=names,
+                               settings={p: dict(min_containment=0.0) for p in names})
+    assert len(off) >= len(on)
+
+
+def test_apex_and_containment_stay_causal(rnd):
+    """Both new gates read only bars at or before the break, so truncation must still agree."""
+    k = 2200
+    full = add_chart_patterns(rnd)
+    part = add_chart_patterns(rnd.iloc[:k].copy())
+    cols = [f"pat_{p}" for p in CHART_PATTERNS] + ["pat_signal", "pat_dir"]
+    pd.testing.assert_frame_equal(full[cols].iloc[:k].reset_index(drop=True),
+                                  part[cols].reset_index(drop=True))
+
+
+def test_requesting_a_subset_does_not_lose_shapes_to_the_flag_rename(rnd):
+    """Renaming a shape into a flag used to happen unconditionally, so a channel relabelled
+    `bull_flag` was then dropped by the `not in hits` filter instead of staying a channel. The
+    visible symptom was that the channel count moved with `pole_mult` — a parameter that has
+    nothing to do with channels."""
+    ch = ["channel_up", "channel_down", "channel_flat"]
+    counts = [len(chart_pattern_shapes(rnd, patterns=ch, pole_mult=pm)) for pm in (2.0, 1.0, 0.4)]
+    assert len(set(counts)) == 1, f"channel count moved with pole_mult: {counts}"
+
+
+def test_flag_rename_still_happens_when_flags_are_requested(rnd):
+    """The guard must not disable the feature: ask for flags and they must appear."""
+    ch = ["channel_up", "channel_down", "channel_flat"]
+    fl = ["bull_flag", "bear_flag"]
+    with_flags = chart_pattern_shapes(rnd, patterns=ch + fl, pole_mult=0.3)
+    assert with_flags["pattern"].isin(fl).any(), "no flags produced even at a loose pole"
+
+
+def test_a_refitted_trendline_keeps_its_identity(rnd):
+    """A line that picks up another touch is the SAME line, refined. Emitting a fresh record reset
+    `born_i` and produced near-duplicate lines: 16% of them lived under 10 bars and a fifth of
+    consecutive pairs differed in slope by under 5%."""
+    from quant.indicators import add_trendlines, trendline_table
+    tl = trendline_table(add_trendlines(rnd))
+    assert len(tl) > 5
+    life = tl["end_i"] - tl["born_i"]
+    assert (life < 10).mean() < 0.25, "too many lines living almost no time — identity is churning"
+    for _, g in tl.groupby("side"):
+        s = g.sort_values("born_i")["slope"].to_numpy()
+        if len(s) > 3:
+            rel = np.abs(np.diff(s)) / np.maximum(np.abs(s[:-1]), 1e-9)
+            assert (rel < 0.05).mean() < 0.30, "consecutive lines are near-duplicates"

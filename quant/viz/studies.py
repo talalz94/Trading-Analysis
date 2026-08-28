@@ -890,3 +890,109 @@ def zoom_to_trade(fig, run, trade_i: int, *, pad_bars: int = 60, time_col: str =
                                  f"{t['entry_price']:.2f} → {t['exit_price']:.2f}  "
                                  f"({t['close_reason']}, pnl {t['pnl']:.2f})")
     return fig
+
+
+def pattern_contact_sheet(df, *, patterns=None, worst: int = 1, best: int = 1,
+                          time_col: str = "t", tuned: bool = True, per_pattern=None,
+                          detect_kwargs=None, pad_frac: float = 0.25, cols: int = 4,
+                          panel_height: int = 300):
+    """One panel per pattern occurrence — its BEST and WORST example, side by side.
+
+    Every detector bug in this library so far was found by looking at a chart: dots that were not
+    touches, "symmetrical" triangles with 17:1 slopes, a parallel channel called a wedge. This makes
+    that inspection systematic instead of lucky. Shapes are ranked by CONTAINMENT — the share of bars
+    between the shape's first pivot and its break that sit inside its two boundaries — because a
+    shape price keeps escaping is not the shape it claims to be, whatever its boundaries do.
+
+    Read the worst column first. That is where a definitional bug shows up, and if the worst example
+    of every pattern looks reasonable, the library is behaving.
+
+    Level shapes (head-and-shoulders, double and triple tops) have no fitted boundaries, so they are
+    ranked by span and shown for completeness rather than scored.
+    """
+    import numpy as np
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    from ..indicators import chart_pattern_shapes, add_atr
+    from ..indicators.chart_patterns import chart_pattern_shapes_tuned, tuned_specs
+
+    d = df.reset_index(drop=True)
+    if "atr_14" not in d.columns:
+        d = add_atr(d, 14)
+    t = d[time_col].to_numpy() if time_col in d.columns else np.arange(len(d))
+    hi, lo = d["high"].to_numpy(float), d["low"].to_numpy(float)
+    atr = d["atr_14"].to_numpy(float)
+    atr_med = float(np.nanmedian(atr))
+
+    if tuned or per_pattern:
+        spec = per_pattern or tuned_specs()
+        names = list(patterns) if patterns else list(spec)
+        shapes = chart_pattern_shapes_tuned(d, specs=spec, patterns=names, **(detect_kwargs or {}))
+    else:
+        shapes = chart_pattern_shapes(d, patterns=patterns, **(detect_kwargs or {}))
+    if not len(shapes):
+        return go.Figure().update_layout(title="no patterns found")
+
+    def containment(r) -> float:
+        if not (np.isfinite(r.upper_slope) and np.isfinite(r.lower_slope)):
+            return np.nan
+        a, b = int(min(r.pivot_i)), int(r.confirm_i)
+        if b <= a:
+            return np.nan
+        x = np.arange(a, b + 1)
+        tol = 0.6 * (atr[b] if np.isfinite(atr[b]) else atr_med)
+        u = r.upper_slope * x + r.upper_intercept
+        l = r.lower_slope * x + r.lower_intercept
+        return float(((hi[a:b + 1] <= u + tol) & (lo[a:b + 1] >= l - tol)).mean())
+
+    shapes = shapes.copy()
+    shapes["containment"] = [containment(r) for r in shapes.itertuples()]
+
+    picks = []
+    for name, g in shapes.groupby("pattern"):
+        g = g.sort_values("containment", na_position="last")
+        lvl = g["containment"].isna().all()
+        if lvl:                                   # level shapes: widest and narrowest instead
+            g = g.sort_values("span_bars")
+        for r in list(g.head(worst).itertuples()):
+            picks.append((name, "worst" if not lvl else "narrowest", r))
+        for r in list(g.tail(best).itertuples()):
+            picks.append((name, "best" if not lvl else "widest", r))
+
+    n = len(picks)
+    rows = (n + cols - 1) // cols
+    titles = [f"{nm.replace('_', ' ')} — {tag}"
+              + (f" ({r.containment:.2f})" if np.isfinite(r.containment) else "")
+              for nm, tag, r in picks]
+    fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles,
+                        vertical_spacing=0.06, horizontal_spacing=0.04)
+
+    for k, (nm, tag, r) in enumerate(picks):
+        rr, cc = k // cols + 1, k % cols + 1
+        a, b = int(min(r.pivot_i)), int(r.confirm_i)
+        pad = max(int((b - a) * pad_frac), 5)
+        s0, s1 = max(a - pad, 0), min(b + pad, len(d) - 1)
+        w = d.iloc[s0:s1 + 1]
+        fig.add_trace(go.Candlestick(
+            x=w[time_col], open=w["open"], high=w["high"], low=w["low"], close=w["close"],
+            increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+            showlegend=False, name=""), row=rr, col=cc)
+        colr = "#f0a30a"
+        if np.isfinite(r.upper_slope):
+            x = np.arange(a, b + 1)
+            for sl, ic in ((r.upper_slope, r.upper_intercept), (r.lower_slope, r.lower_intercept)):
+                fig.add_trace(go.Scatter(x=t[x], y=sl * x + ic, mode="lines", showlegend=False,
+                                         line=dict(color=colr, width=2.2)), row=rr, col=cc)
+        fig.add_trace(go.Scatter(x=list(r.touch_t), y=list(r.touch_price), mode="markers",
+                                 showlegend=False,
+                                 marker=dict(size=7, color=colr, line=dict(width=1, color="#111"))),
+                      row=rr, col=cc)
+        fig.add_vline(x=t[b], line=dict(color="#8e9aa6", width=1, dash="dot"), row=rr, col=cc)
+
+    fig.update_xaxes(rangeslider_visible=False, showticklabels=False)
+    fig.update_layout(height=panel_height * rows, template="plotly_dark", showlegend=False,
+                      title="Pattern contact sheet — worst and best example of each, by containment",
+                      margin=dict(l=40, r=20, t=80, b=30))
+    for ann in fig.layout.annotations:
+        ann.font.size = 11
+    return fig
