@@ -179,6 +179,19 @@ class _PatternTarget(TPMethod):
     The classical projection: the pattern's height carried from the breakout point. Realised as an
     exit SIGNAL rather than a config price, because the target differs per trade and the kernel's
     take-profit ladder is fixed at entry.
+
+    **Paired with `pattern_stop@v1` on a LEVEL shape this is locked at exactly 1:1, and that
+    combination cannot be profitable here.** For double and triple tops and bottoms and both
+    head-and-shoulders, the target is the neckline plus the height and the stop is the extreme the
+    height was measured from — so reward and risk are the same number by construction. The
+    shape-quality audit measured reward-to-risk as identically 1.000, zero variance, across all 1,936
+    level-shape detections on BTC 15m, BTC 1h and XAUUSD. Since the measured directional hit rate is
+    0.48, a 1:1 payoff is a guaranteed loser before costs are even counted.
+
+    It is not a bug — it is what the textbook measured move means — but it does mean the pairing is
+    only sensible on the FITTED-boundary shapes (wedges, triangles, channels), where the stop comes
+    from a real swing rather than from the height itself and reward-to-risk actually varies
+    (median 1.4-3.7). See `experiments/pattern_quality_audit.py`.
     """
     name, version = "pattern_target", "v1"
     description = "exit at the chart pattern's measured-move target"

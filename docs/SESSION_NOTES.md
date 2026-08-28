@@ -723,6 +723,55 @@ a property of the instrument, not a detector failure, and it is documented as su
 
 `TUNED_SPECS` is now 16 entries. Tests: 302 passing.
 
+## Shape-quality audit (2026-08-25) — `experiments/pattern_quality_audit.py`
+
+Built because three detector bugs in a row were found by LOOKING at a chart while the suite stayed
+green: every existing test asserts an INVARIANT (causality, subset relations, monotonicity) and none
+asserted that a shape RESEMBLES ITS OWN DEFINITION. Six checks, each with a pass criterion derived
+from the pattern's definition. Run over the nine windows on **BTC 15m, BTC 1h and XAUUSD 15m** —
+4,026 shapes.
+
+### What passed, and it is worth knowing these are now measured rather than assumed
+
+* **Causality: 0 mismatches** over 12 truncation points x 9 windows x 3 instruments, on REAL data.
+  The suite only ever truncated a synthetic random walk.
+* **Definitional contract: 100%** on all 16 patterns, all three runs.
+* **Scale invariance CONFIRMED.** Median containment differs by at most **0.006** between BTC near
+  $60,000 and gold near $2,000, per pattern. The detector really is ratio-based; nothing absolute
+  leaked in. Same for 15m vs 1h.
+* **Touch residuals 0.13 median** against the 0.6 ATR tolerance that admitted them — the fits are not
+  being dragged to the limit, which is what you would see if the tolerance were doing the work.
+* Trendlines: zero off-chart endpoints, zero touch-count mismatches, zero breaks on the wrong side.
+
+### Three findings that came out of it
+
+1. **LEVEL SHAPES ARE LOCKED AT EXACTLY 1:1.** For double/triple tops and bottoms and both
+   head-and-shoulders, `pattern_target` is the neckline plus the height and `pattern_stop` is the
+   extreme that height was measured from — so reward IS risk, by construction. Measured
+   reward-to-risk 1.000 with **zero variance across all 1,936 level-shape detections**. With a 0.48
+   hit rate that pairing is a guaranteed loser, and it is 48% of everything the library detects. Not
+   a bug (it is the textbook measured move) but it was undocumented; `pattern_target@v1` now says so.
+   The fitted-boundary shapes are fine — their stops come from real swings and R:R runs 1.4-3.7.
+
+2. **EXTRAPOLATION IS THE TRIANGLES' PROBLEM.** `max_wait=150` lets a shape wait that long for its
+   break, and the boundaries are extrapolated the whole way. Split by draw distance:
+
+   | drawn past last pivot | n | containment | below 0.80 | width drift |
+   |---|---|---|---|---|
+   | short | 239 | 0.990 | **0.0%** | 0.085 |
+   | long  | 226 | 0.913 | **32.7%** | 0.452 |
+
+   Same detector, same patterns — only the extrapolation differs. Channels are immune (drift 0.006:
+   parallel lines stay parallel); converging shapes are not. **Proposed fix, NOT yet applied because
+   it changes what confirms and would invalidate the calibration and every phase result: expire a
+   converging pattern once price passes a fraction of the way to its APEX**, which is also the
+   textbook rule.
+
+3. **The audit had a hole in its own verdict** — `rr_ok` was computed by check 4 and never consulted,
+   so extreme reward-to-risk could not fail the run. 18 of 4,026 shapes (0.45%) sit outside the
+   0.2-20 band, worst 41.6, all wedges and channels. Now wired in, along with a triangle-containment
+   gate.
+
 ## In flight
 
 Nothing. Phases 12, 13, 14 and 15 have all re-run on the causal detector and their results are
