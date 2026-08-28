@@ -772,6 +772,58 @@ from the pattern's definition. Run over the nine windows on **BTC 15m, BTC 1h an
    0.2-20 band, worst 41.6, all wedges and channels. Now wired in, along with a triangle-containment
    gate.
 
+## Correctness pass on the detector (2026-08-25/28)
+
+Driven by the shape-quality audit and the contact sheet. **Five defects**, each surfaced by a
+MEASUREMENT rather than by reading code, with the test suite green throughout — every existing test
+asserted an invariant and none asserted that a shape resembles its own definition.
+
+1. **Converging shapes drawn and confirmed past their APEX.** Beyond it the upper boundary sits below
+   the lower one and the shape is inverted. `max_apex_frac` (0.75) constrains exactly the right family
+   for free: channels are parallel (no apex) and broadening shapes met theirs in the past.
+2. **Shapes that did not contain their own price action.** The apex limit alone does not bite when
+   convergence is slow. `min_containment` (0.80) is the direct statement instead of a proxy, checked
+   at the break where every bar is already past, so no lookahead. Worst containment **0.309 -> 0.810**,
+   shapes below 0.80 **18.3% -> ZERO**, and detections went slightly UP because rejecting a malformed
+   shape lets a better overlapping one survive de-duplication.
+3. **Requesting a subset of patterns silently lost shapes.** The flag rename ran unconditionally, so a
+   channel relabelled `bull_flag` was dropped by the `not in hits` filter instead of staying a
+   channel. Channels-only returned 21 where channels+flags returned 21 channels plus 36 flags, and the
+   count moved with `pole_mult` — a parameter unrelated to channels. Now stable at 55.
+4. **TUNED_SPECS covered 16 of 22 patterns**, so `chart_pattern_shapes_tuned` never requested
+   rectangles, flags or pennants and they showed zero detections — not because none exist but because
+   nothing asked for them.
+5. **Degenerate stops.** On a long, steeply rising wedge the rising lower boundary catches up with the
+   highest high, so the stop landed a hair from the break: reward-to-risk **585:1** on gold. Being on
+   the correct side of entry was tested; being a meaningful DISTANCE from it was not. `min_risk_frac`
+   (0.05), which is equivalent to capping R:R at 1/min_risk_frac since the target is one height away.
+
+Trendlines also gained identity: a refit used to spawn a whole new line record with a reset `born_i`,
+which is why 16% of lines lived under 10 bars. Median life **55 -> 92 bars**.
+
+### Audit verdict after the fixes
+
+PASS on **BTC 15m, BTC 1h and XAUUSD 15m** — 4,077 shapes. Zero causality mismatches over 12
+truncation points x 9 windows x 3 instruments, contract 100%, zero trendline invariant violations.
+**Scale invariance confirmed**: per-pattern median containment differs by at most 0.006 between BTC
+near $60,000 and gold near $2,000.
+
+### Recalibration
+
+The new gates reject shapes the old settings were calibrated to produce, so only 7 of 22 patterns
+still cleared the >=10-per-window floor. `experiments/recalibrate_tuned_specs.py` re-derives by the
+identical outcome-blind rule (count only, never forward returns). **11 of 22 clear it**; the other 11
+are marked `# rare in BTC 15m` and set to the most permissive combination — reported as rare rather
+than loosened until they appear, because manufacturing detections by relaxing geometry is the failure
+this whole line of work exists to prevent.
+
+`TUNED_COMMON` shrank to the knobs the pooled scan genuinely fixed for everything
+(`min_touches`, `line_tol_atr`); `min_height_atr` moved into each entry, since 11 of 22 override it
+and a "common" constant half the entries contradict is a lie about the data.
+
+**The phase 12-15 research numbers are now STALE** — they were measured before these gates. Given the
+verdict there was comprehensively negative and the goal here was correctness, they were not re-run.
+
 ## In flight
 
 Nothing. Phases 12, 13, 14 and 15 have all re-run on the causal detector and their results are
