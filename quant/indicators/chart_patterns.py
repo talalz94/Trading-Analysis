@@ -86,6 +86,20 @@ class PatternSpec:
                      span. This is the parallelism test: if the gap between the boundaries is the
                      same at both ends, the lines are parallel. "Some margin of error" is exactly
                      this number.
+    `min_containment` the share of bars between a shape's first pivot and its BREAK that must sit
+                     inside its two boundaries. This is the direct statement of "the shape describes
+                     its price action", and it is what the audit measured: before it existed, 32.7%
+                     of triangles drawn far past their last pivot held under 80% of their bars, worst
+                     case 0.31. Checked at the break, where every bar involved is already in the
+                     past, so it costs no lookahead. 0 disables it. Level shapes have no boundaries
+                     and are unaffected.
+    `max_apex_frac`  how far toward its APEX a converging shape may travel before it expires, as a
+                     fraction of the distance from its last pivot to where the boundaries meet. Past
+                     the apex the upper line sits below the lower one and the shape is inverted, so
+                     drawing or confirming one there is meaningless. 0.75 matches the textbook rule
+                     that triangles break in the middle-to-late part of their span. Only converging
+                     shapes have an apex ahead of them, so channels and broadening formations are
+                     untouched by this automatically rather than by special-casing.
     `converge_min_frac` a converging shape (triangle, wedge) or a diverging one (broadening) must
                      change width by at least this fraction. Without it `converging` meant only
                      `w1 < w0` — any hair of narrowing — so a dead-parallel channel that happened to
@@ -103,6 +117,8 @@ class PatternSpec:
     slope_sym_max: float = 2.5
     width_tol_frac: float = 0.25
     converge_min_frac: float = 0.25
+    max_apex_frac: float = 0.75
+    min_containment: float = 0.80
 
 
 # Shapes built from discrete extremes (tops, bottoms, H&S) are defined by their pivots rather than
@@ -171,6 +187,17 @@ TUNED_SPECS: Dict[str, dict] = {
     "channel_up":             dict(atr_mult=2.5, min_span_bars=100),
     "channel_down":           dict(atr_mult=2.5, min_span_bars=100),
     "channel_flat":           dict(atr_mult=2.5, min_span_bars=100),
+    # Rectangles, flags and pennants were missing here, which meant `chart_pattern_shapes_tuned`
+    # never asked for them and they could not appear on a tuned chart at all — they showed zero
+    # detections not because none exist but because nothing requested them. Flags and pennants are
+    # RENAMED from a source shape after a pole, so each takes its source's settings: pennants from
+    # the symmetrical triangle, flags from the channels and rectangles they are made of.
+    "rectangle_bull":         dict(atr_mult=2.5, min_span_bars=100),
+    "rectangle_bear":         dict(atr_mult=2.5, min_span_bars=100),
+    "bull_flag":              dict(atr_mult=2.5, min_span_bars=100),
+    "bear_flag":              dict(atr_mult=2.5, min_span_bars=100),
+    "bull_pennant":           dict(atr_mult=3.5, min_span_bars=200),
+    "bear_pennant":           dict(atr_mult=3.5, min_span_bars=200),
 }
 #: shared by every entry above — kept separate so the table shows only what actually differs
 TUNED_COMMON: dict = dict(min_touches_upper=3, min_touches_lower=3,
@@ -259,6 +286,23 @@ class _Candidate:
 
     def boundary_at(self, x: float) -> float:
         return self.b_slope * x + self.b_intercept
+
+    def apex_x(self) -> Optional[float]:
+        """Bar index where the two boundaries MEET, or None if they never do ahead of the shape.
+
+        Past this point the upper line sits below the lower one and the shape is inverted, so a
+        "triangle" drawn there is nonsense. Parallel boundaries (channels) never meet and diverging
+        ones (broadening) met in the past — both correctly return None, which is why the apex limit
+        constrains exactly the converging shapes that need it and leaves the others alone.
+        """
+        if self.upper is None or self.lower is None:
+            return None
+        ds = self.upper.slope - self.lower.slope
+        if abs(ds) < 1e-12:
+            return None                              # parallel: no apex
+        x = (self.lower.intercept - self.upper.intercept) / ds
+        last = max((p.i for p in self.pivots), default=0)
+        return float(x) if x > last else None        # apex behind the shape: diverging
 
     @property
     def span(self) -> int:
@@ -701,6 +745,8 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
     from .volatility import atr as _atr
     atr_s = _atr(out, atr_period).to_numpy(float)
     close = out["close"].to_numpy(float)
+    high = out["high"].to_numpy(float)
+    low = out["low"].to_numpy(float)
     n = len(out)
 
     pivots = _pivots_from_zigzag(out)
@@ -723,27 +769,45 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                                 pivot_step=pivot_step):
                 pole = _flagpole(pivots[:pi + 1], cand, pole_mult=pole_mult)
                 if pole and cand.name in _FLAGGABLE:
-                    # A flag/pennant continues the pole, so ONLY the candidate already registered on
-                    # that side qualifies. Relabelling the opposite-side one would keep its boundary
-                    # and stop, leaving the stop on the wrong side of entry.
-                    if cand.direction != (+1 if pole == "bull" else -1):
-                        continue
                     # A textbook flag is a consolidation that DRIFTS AGAINST the pole — that is what
                     # distinguishes it from the move simply continuing. Before channels existed the
                     # only shape available here was a rectangle, so every flag was a flat one; an
                     # ascending channel after an up-pole is not a flag and is left as a channel.
-                    if cand.name == "channel_up" and pole == "bull":
-                        pass
-                    elif cand.name == "channel_down" and pole == "bear":
-                        pass
-                    else:
-                        is_pennant = cand.name == "symmetrical_triangle"
-                        cand.name = f"{pole}_pennant" if is_pennant else f"{pole}_flag"
+                    counter = not ((cand.name == "channel_up" and pole == "bull")
+                                   or (cand.name == "channel_down" and pole == "bear"))
+                    new_name = (f"{pole}_pennant" if cand.name == "symmetrical_triangle"
+                                else f"{pole}_flag") if counter else None
+                    # ONLY rename into a pattern the caller actually asked for. Renaming
+                    # unconditionally meant a shape relabelled to a flag was then dropped by the
+                    # `not in hits` test below instead of staying the channel or triangle it was —
+                    # so asking for channels alone returned 21 where asking for channels AND flags
+                    # returned 21 channels plus 36 flags. The count also moved with `pole_mult`, a
+                    # parameter that has nothing to do with channels.
+                    if new_name is not None and new_name in hits:
+                        # A flag continues the pole, so only the candidate already registered on that
+                        # side qualifies. Relabelling the opposite-side one would keep its boundary
+                        # and stop, leaving the stop on the wrong side of entry.
+                        if cand.direction != (+1 if pole == "bull" else -1):
+                            continue
+                        cand.name = new_name
                 if cand.name not in hits:
                     continue
                 if not np.isfinite(cand.height) or cand.height <= 0:
                     continue
                 cand.expires_i = i + max_wait
+                # A CONVERGING shape also dies at its apex. `max_wait` alone let a triangle wait 150
+                # bars with its boundaries extrapolated the whole way, and the shape-quality audit
+                # measured what that costs: 32.7% of long-draw triangles hold less than 80% of their
+                # price action (worst 0.31) against 0.0% for short-draw ones. Past the apex the lines
+                # have crossed and the shape is inverted. Channels (parallel) and broadening shapes
+                # (diverging) have no apex ahead of them and are untouched.
+                apex = cand.apex_x()
+                if apex is not None:
+                    last = max((p.i for p in cand.pivots), default=i)
+                    spec_ap = specs.get(cand.name)
+                    frac = spec_ap.max_apex_frac if spec_ap else PatternSpec().max_apex_frac
+                    cand.expires_i = min(cand.expires_i,
+                                         int(last + frac * (apex - last)))
                 live.append(cand)
             pi += 1
 
@@ -760,6 +824,23 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
             if not broke:
                 still.append(cand)
                 continue
+            # The shape must actually DESCRIBE the price action it spans. This is the direct form of
+            # the property the apex limit only approximates: a triangle price kept escaping is not a
+            # triangle, whatever its boundaries do. Checked here because every bar from the shape's
+            # start to this break is already in the past, so it costs no lookahead — and only on the
+            # break, so it costs almost nothing.
+            if cand.upper is not None and cand.lower is not None:
+                spec_c = specs.get(cand.name) or PatternSpec()
+                if spec_c.min_containment > 0.0:
+                    a0 = min((p.i for p in cand.pivots), default=i)
+                    if i > a0:
+                        xs = np.arange(a0, i + 1)
+                        tol = spec_c.line_tol_atr * (atr_s[i] if np.isfinite(atr_s[i]) else 0.0)
+                        u = cand.upper.slope * xs + cand.upper.intercept
+                        l = cand.lower.slope * xs + cand.lower.intercept
+                        inside = ((high[a0:i + 1] <= u + tol) & (low[a0:i + 1] >= l - tol))
+                        if inside.mean() < spec_c.min_containment:
+                            continue
             # risk must be defined: the stop sits on the far side of the entry. These levels drive
             # real stop-losses, so an ill-formed shape is dropped rather than patched.
             if cand.direction > 0 and not cand.stop < neck:

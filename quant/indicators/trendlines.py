@@ -138,6 +138,22 @@ def add_trendlines(df: pd.DataFrame, *,
                     # equally-good lines every pivot would make the "current" line meaningless
                     if cur is not None and not cur.broke and fit.touches <= cur.touches:
                         continue
+                    # A line that picks up another touch is the SAME line, refined — not a new one.
+                    # Replacing it outright reset `born_i` and emitted a fresh record, which is why
+                    # 16% of lines lived under 10 bars and a fifth of consecutive pairs differed in
+                    # slope by less than 5%. Update in place when the new fit sits within tolerance
+                    # of the old one across the span they share, so line IDENTITY survives a refit.
+                    if cur is not None and not cur.broke:
+                        span_x = (cur.start_i, i)
+                        same = all(abs(fit.slope * x + fit.intercept - cur.at(x))
+                                   <= line_tol_atr * a for x in span_x)
+                        if same:
+                            cur.slope, cur.intercept = fit.slope, fit.intercept
+                            cur.touches = fit.touches
+                            cur.touch_i = tuple(p.i for p in fit.pivots)
+                            cur.touch_price = tuple(p.price for p in fit.pivots)
+                            cur.start_i = min(cur.start_i, fit.pivots[0].i)
+                            continue
                     ln = _Line(kind, fit.slope, fit.intercept, fit.touches,
                                fit.pivots[0].i, i,
                                touch_i=tuple(p.i for p in fit.pivots),
