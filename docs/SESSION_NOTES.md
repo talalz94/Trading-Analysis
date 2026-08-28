@@ -659,6 +659,70 @@ requirement is doing real work, which it was not able to show before the fix.
 21% perturbation of the signal set left rank correlations at 0.98+ while relocating every single
 winner. Stability of the ranking says nothing about stability of the optimum.
 
+## Detector geometry work (2026-08-25) — two bugs from a rendered chart, then two new families
+
+Both bugs were found by LOOKING at a chart, not by a test. Worth remembering: the test suite was
+green throughout, because neither defect violates an invariant anyone had thought to assert.
+
+### Bug A — the dots were not touches
+
+`_best_line` computes the RANSAC inlier mask that decides which pivots the boundary is fitted
+through, then **discarded it** and returned only the count. The row published `pivot_i` (the whole
+lookback window) and `pattern_figure` drew that with the hover label "<pattern> touch".
+
+Measured on BTC 1m over five days: **210 dots for 106 real touches** — half the dots marked a swing
+touching nothing. Across all patterns on 15m the trendline shapes were drawing **42-63%** spurious
+dots. `_Fit` now keeps its inliers; the shapes table publishes `touch_i` / `touch_price` / `touch_t`;
+the figure draws those. Level shapes (H&S, double/triple tops) have no fitted lines, so their
+defining extremes ARE the touches and they legitimately draw 100% of their pivots.
+
+### Bug B — symmetrical triangles were not symmetrical
+
+The test was only "upper falls, lower rises, converging". Nothing tied the two slopes together, so a
+boundary falling at **-12.9** against one rising at **0.76** qualified. Ratios reached **17:1**,
+median 3.3. Added `slope_sym_max` (default 2.5) and applied it to broadening formations too, where
+ratios reached 10:1 — a megaphone is symmetric by definition. Same chart: 16 triangles -> 10, worst
+ratio 2.22.
+
+A shape that converges but fails the bound is **dropped, not reclassified**: it is not flat-topped or
+flat-bottomed either, so it is not a classical named pattern.
+
+### New: CHANNELS (`channel_up`, `channel_down`, `channel_flat`)
+
+Two PARALLEL boundaries holding a roughly constant width. `width_tol_frac` (0.25) IS the parallelism
+test — if the gap is the same at both ends the lines are parallel, and "fixed size with some margin
+of error" is exactly that number.
+
+Adding them exposed a THIRD latent bug: `converging` meant only `w1 < w0`, any hair of narrowing, so
+**a dead-parallel channel was being emitted as a wedge**. `converge_min_frac` (0.25) now requires a
+shape to actually narrow, which makes channels and wedges mutually exclusive by construction. Wedge
+counts fell 32->29 and 27->21, broadening 10->6 and 12->6 — those were the degenerate ones.
+
+Channels also fixed the FLAG model. A bull flag is textbook a counter-sloping channel after a pole,
+but the only flaggable shapes were rectangles, so only perfectly flat flags could ever be found.
+`_FLAGGABLE` now includes channels, with an up-channel after an up-pole correctly NOT a flag.
+
+### New: TRENDLINES (`quant/indicators/trendlines.py`)
+
+One fitted line, not a closed shape. `add_trendlines` maintains the live support and resistance line
+bar by bar and flags `tl_break_up` / `tl_break_dn` on the close through it; a broken line is retired.
+Same RANSAC + envelope fit and the same causality rule (published only from the bar its last pivot
+CONFIRMED). Verified causal by truncation at three points.
+
+One bug caught while building it: a line SUPERSEDED by a better fit never had its `end_i` set, ran to
+the end of the chart, and extrapolated to endpoints like **-125,741** on a 60,000 instrument. Same
+extrapolation trap the pattern targets already guard against.
+
+### Calibration for the new shapes
+
+Channels were added after the Phase-15 sweep, so their settings were picked by the SAME outcome-blind
+rule applied afterwards (strictest setting still giving >=10 detections per window across the nine
+windows): `atr_mult=2.5, min_span_bars=100`, giving minima of 20 and 18 per window. **`channel_flat`
+clears no setting** — BTC almost never holds a strict fixed-width sideways band for 100+ bars. That is
+a property of the instrument, not a detector failure, and it is documented as such.
+
+`TUNED_SPECS` is now 16 entries. Tests: 302 passing.
+
 ## In flight
 
 Nothing. Phases 12, 13, 14 and 15 have all re-run on the causal detector and their results are
@@ -666,7 +730,11 @@ committed, raw CSVs included, so nothing needs a two-hour re-run to re-derive.
 
 ## Not done / next
 
-* **The user's next request is to PLOT the tuned settings.** The outcome-blind table lives in
+* The 3 channels and the trendlines have NOT been through the research pipeline — no phase-12 screen,
+  no null differencing, no metronome comparison. They are drawing tools until they have been. Given
+  every other family measured, expect no directional edge; a trendline break in particular is a close
+  cousin of the level-break family that was already measured and found to carry none.
+* **DONE this session:** plotting the tuned settings (notebook 15). The outcome-blind table lives in
   `experiments/phase15b_pattern_controls.FINALISTS` and draws with `notebooks/14_pattern_viewer.ipynb`.
   It is unaffected by the retractions, because those settings were selected on sample size rather
   than on score.

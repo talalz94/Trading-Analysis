@@ -84,7 +84,7 @@ quant/
 │   │                    #     separated. `gap_mode='none'` default: BTC has 0.000% true gaps, so the
 │   │                    #     textbook gap tests can never fire (7 patterns stay dead by design).
 │   │                    #     Adds cdl_bull_n / cdl_bear_n / cdl_score to use the whole set at once.
-│   ├── chart_patterns.py #   19 CHART PATTERNS (double/triple top+bottom, H&S + inverse, wedges,
+│   ├── chart_patterns.py #   22 CHART PATTERNS (double/triple top+bottom, H&S + inverse, wedges,
 │   │                    #     triangles, rectangles, flags, pennants, broadening) over ZIGZAG pivots.
 │   │                    #     Two-stage and strictly causal: a shape is registered when its pivots
 │   │                    #     confirm, and fires only when price CLOSES through its boundary (which
@@ -103,6 +103,18 @@ quant/
 │   │                    #     the zigzag per PASS, so differing values cannot share one call).
 │   │                    #     They are tuned for WELL-FORMED, FREQUENT shapes, NOT for direction:
 │   │                    #     hit rate 0.48, below a coin flip. See docs/WHAT_WORKS.md.
+│   │                    #     CHANNELS (channel_up/down/flat) = two PARALLEL boundaries holding a
+│   │                    #     constant width; width_tol_frac IS the parallelism test and
+│   │                    #     converge_min_frac makes channels and wedges mutually exclusive (a
+│   │                    #     parallel channel that narrowed by a hair used to be called a wedge).
+│   │                    #     slope_sym_max stops a near-flat line paired with a steep one being
+│   │                    #     called SYMMETRICAL (measured ratios reached 17:1). Flags/pennants are
+│   │                    #     renamed from channels/rectangles/symmetrical triangles after a pole.
+│   ├── trendlines.py    #   STANDALONE TRENDLINES — add_trendlines() fits the live support and
+│   │                    #     resistance line bar by bar (same RANSAC + envelope, same causality:
+│   │                    #     published only from the bar its last pivot CONFIRMED) and flags
+│   │                    #     tl_break_up / tl_break_dn on the close through it. A broken line is
+│   │                    #     retired. trendline_table() gives one row per line for drawing.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
@@ -151,6 +163,8 @@ quant/
 │   ├── charts.py        #   static price+trades, equity+drawdown (HTML-export safe)
 │   ├── studies.py       #   pattern_figure (candles + chart-pattern SHAPES: pivots, both trendlines,
 │   │                    #     neckline and measured-move target, one legend toggle each, + S/R zones),
+│   │                    #     pattern_figure(trendlines=True) adds the standalone trendlines with an
+│   │                    #     X at each break, on their own legend toggles),
 │   │                    #     add_pattern_overlays (candlestick + chart-pattern markers and their
 │   │                    #     entry/stop/target levels; one legend group per pattern, default OFF),
 │   │                    #     studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup

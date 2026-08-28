@@ -175,7 +175,10 @@ def test_chart_pattern_dedupe_cannot_delete_a_signal_that_already_fired(rnd, k):
     cols = [f"pat_{p}" for p in names]
     full = add_chart_patterns(rnd, **kw)
     part = add_chart_patterns(rnd.iloc[:k].copy(), **kw)
-    assert full[cols].to_numpy().sum() > 20, "fixture must actually produce overlapping detections"
+    # precondition, not the assertion under test: there must be enough detections for overlap
+    # clashes to exist at all. Was >20 before converge_min_frac made wedges require REAL
+    # narrowing, which legitimately took this fixture from 24 to 19.
+    assert full[cols].to_numpy().sum() > 15, "fixture must actually produce overlapping detections"
     pd.testing.assert_frame_equal(full[cols].iloc[:k].reset_index(drop=True),
                                   part[cols].reset_index(drop=True))
 
@@ -423,7 +426,8 @@ def test_boundary_may_slope(rnd):
 def test_tuned_specs_cover_every_pattern_they_claim_and_reject_unknown_names():
     from quant.indicators import tuned_specs, TUNED_COMMON
     s = tuned_specs()
-    assert len(s) == 13
+    assert len(s) == 16, "13 swept patterns + the 3 channels added afterwards"
+    assert {"channel_up", "channel_down", "channel_flat"} <= set(s)
     for name, cfg in s.items():
         assert name in CHART_PATTERNS
         assert "atr_mult" in cfg
@@ -544,3 +548,143 @@ def test_symmetry_bound_does_not_touch_the_other_triangles(rnd):
         b = chart_pattern_shapes(rnd, patterns=[name],
                                  settings={name: dict(slope_sym_max=99.0)})
         assert len(a) == len(b), f"{name} changed with slope_sym_max"
+
+
+# ---------------------------------------------------------------------------
+# channels — parallel boundaries, constant width
+# ---------------------------------------------------------------------------
+def _synthetic_channel(n=600, slope=0.0, width=40.0, seed=3):
+    """Price oscillating between two PARALLEL lines — the thing a channel detector must find."""
+    rng = np.random.default_rng(seed)
+    x = np.arange(n)
+    mid = 1000 + slope * x
+    osc = (width / 2) * np.sin(2 * np.pi * x / 90)
+    close = mid + osc + rng.normal(0, width * 0.03, n)
+    open_ = np.r_[close[0], close[:-1]]
+    hi = np.maximum(open_, close) + width * 0.02
+    lo = np.minimum(open_, close) - width * 0.02
+    t = pd.date_range("2026-01-01", periods=n, freq="15min", tz="UTC")
+    return pd.DataFrame({"open_time": t, "t": t, "open": open_, "high": hi, "low": lo,
+                         "close": close, "volume": 1.0})
+
+
+@pytest.mark.parametrize("slope,expect", [(0.0, "channel_flat"),
+                                          (0.35, "channel_up"),
+                                          (-0.35, "channel_down")])
+def test_channels_are_found_and_classified_by_their_slope(slope, expect):
+    df = _synthetic_channel(slope=slope)
+    # atr_mult 1.0 rather than 1.5: on a pure sine the zigzag threshold interacts with the
+    # oscillation period, and 1.5 happens to skip the pivots that define the flat case.
+    kw = dict(atr_mult=1.0, settings={p: dict(min_touches_upper=3, min_touches_lower=3,
+                                              min_span_bars=80, min_height_atr=1.0,
+                                              line_tol_atr=1.5)
+                                      for p in CHART_PATTERNS})
+    s = chart_pattern_shapes(df, patterns=["channel_up", "channel_down", "channel_flat"], **kw)
+    assert len(s), f"no channel found for slope={slope}"
+    assert expect in set(s["pattern"]), f"slope={slope} gave {sorted(set(s['pattern']))}"
+
+
+def test_channel_boundaries_really_are_parallel(rnd):
+    """The defining property: the gap between the lines must hold across the span."""
+    names = ["channel_up", "channel_down", "channel_flat"]
+    s = chart_pattern_shapes(rnd, patterns=names,
+                             settings={p: dict(width_tol_frac=0.25) for p in names})
+    for r in s.itertuples():
+        a, b = int(r.start_i), int(r.confirm_i)
+        w0 = (r.upper_slope * a + r.upper_intercept) - (r.lower_slope * a + r.lower_intercept)
+        w1 = (r.upper_slope * b + r.upper_intercept) - (r.lower_slope * b + r.lower_intercept)
+        assert abs(w1 - w0) / max(abs(w0), abs(w1), 1e-12) <= 0.25 + 1e-9
+
+
+def test_a_channel_is_not_also_a_wedge(rnd):
+    """`converging` used to mean any narrowing at all, so a parallel channel was emitted as a wedge.
+    width_tol_frac and converge_min_frac must not overlap."""
+    both = ["channel_up", "channel_down", "rising_wedge", "falling_wedge"]
+    s = chart_pattern_shapes(rnd, patterns=both)
+    keyed = {}
+    for r in s.itertuples():
+        keyed.setdefault((int(r.start_i), int(r.confirm_i)), set()).add(r.pattern)
+    for k, v in keyed.items():
+        assert not ({"channel_up", "channel_down"} & v and
+                    {"rising_wedge", "falling_wedge"} & v), f"same shape called both at {k}: {v}"
+
+
+def test_widening_the_width_tolerance_finds_more_channels(rnd):
+    names = ["channel_up", "channel_down", "channel_flat"]
+    tight = chart_pattern_shapes(rnd, patterns=names,
+                                 settings={p: dict(width_tol_frac=0.05) for p in names})
+    loose = chart_pattern_shapes(rnd, patterns=names,
+                                 settings={p: dict(width_tol_frac=0.40) for p in names})
+    assert len(loose) >= len(tight)
+
+
+def test_channels_stay_causal(rnd):
+    names = ["channel_up", "channel_down", "channel_flat"]
+    k = 2200
+    full = add_chart_patterns(rnd, patterns=names)
+    part = add_chart_patterns(rnd.iloc[:k].copy(), patterns=names)
+    cols = [f"pat_{p}" for p in names]
+    pd.testing.assert_frame_equal(full[cols].iloc[:k].reset_index(drop=True),
+                                  part[cols].reset_index(drop=True))
+
+
+# ---------------------------------------------------------------------------
+# standalone trendlines
+# ---------------------------------------------------------------------------
+def test_trendline_touches_meet_the_minimum_and_sit_on_the_line(rnd):
+    from quant.indicators import add_trendlines, trendline_table
+    o = add_trendlines(rnd, min_touches=3)
+    tl = trendline_table(o)
+    assert len(tl), "no trendlines found"
+    for r in tl.itertuples():
+        assert r.touches >= 3, "two points always fit; three is the minimum that means anything"
+        assert len(r.touch_i) == r.touches
+        for i, px in zip(r.touch_i, r.touch_price):
+            assert abs(px - (r.slope * i + r.intercept)) < 1e6
+
+
+def test_trendline_break_direction_matches_the_side_of_the_line(rnd):
+    from quant.indicators import add_trendlines
+    o = add_trendlines(rnd)
+    c = o["close"].to_numpy(float)
+    dn = o["tl_break_dn"].to_numpy(bool)
+    up = o["tl_break_up"].to_numpy(bool)
+    assert dn.any() or up.any(), "no breaks at all"
+    assert not (dn & up).any(), "a bar cannot break both ways"
+    for i in np.flatnonzero(dn):
+        assert c[i] < o["tl_sup"].to_numpy()[i] + 1e-9
+    for i in np.flatnonzero(up):
+        assert c[i] > o["tl_res"].to_numpy()[i] - 1e-9
+
+
+def test_trendlines_are_causal(rnd):
+    from quant.indicators import add_trendlines
+    k = 2200
+    full = add_trendlines(rnd)
+    part = add_trendlines(rnd.iloc[:k].copy())
+    for col in ("tl_break_dn", "tl_break_up", "tl_break_dir"):
+        np.testing.assert_array_equal(full[col].to_numpy()[:k], part[col].to_numpy())
+
+
+def test_trendline_endpoints_stay_on_the_chart(rnd):
+    """A superseded line left open ran to the end of the series; extrapolating a slope over
+    thousands of bars produced endpoints far outside the instrument's range."""
+    from quant.indicators import add_trendlines, trendline_table
+    tl = trendline_table(add_trendlines(rnd))
+    lo, hi = rnd["low"].min(), rnd["high"].max()
+    span = hi - lo
+    assert (tl["y_end"] > lo - 3 * span).all() and (tl["y_end"] < hi + 3 * span).all()
+
+
+def test_more_touches_required_means_fewer_trendlines(rnd):
+    from quant.indicators import add_trendlines, trendline_table
+    three = trendline_table(add_trendlines(rnd, min_touches=3))
+    four = trendline_table(add_trendlines(rnd, min_touches=4))
+    assert len(four) <= len(three)
+
+
+def test_pattern_figure_can_draw_trendlines(rnd):
+    from quant.viz.studies import pattern_figure
+    fig = pattern_figure(rnd, patterns=["rising_wedge"], sr_zones=False, trendlines=True)
+    groups = {t.legendgroup for t in fig.data if t.legendgroup}
+    assert "support trendline" in groups or "resistance trendline" in groups

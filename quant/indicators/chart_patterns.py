@@ -45,6 +45,10 @@ PATTERN_DIRECTION: Dict[str, int] = {
     "bull_flag": +1, "bear_flag": -1,
     "bull_pennant": +1, "bear_pennant": -1,
     "broadening_top": -1, "broadening_bottom": +1,
+    # CHANNELS — two PARALLEL boundaries holding a roughly constant width. Direction 0 because the
+    # tradable event is the BREAK, which can go either way: an ascending channel breaking down is a
+    # reversal, breaking up is continuation, and the shape itself does not say which.
+    "channel_up": 0, "channel_down": 0, "channel_flat": 0,
 }
 ALL_PATTERNS: List[str] = list(PATTERN_DIRECTION)
 
@@ -78,6 +82,15 @@ class PatternSpec:
                      triangles did not look symmetrical. A shape that converges but fails this is not
                      reclassified: it is not flat-topped or flat-bottomed either, so it is not a
                      classical named pattern and is dropped.
+    `width_tol_frac`  a CHANNEL's width may change by at most this fraction of itself across the
+                     span. This is the parallelism test: if the gap between the boundaries is the
+                     same at both ends, the lines are parallel. "Some margin of error" is exactly
+                     this number.
+    `converge_min_frac` a converging shape (triangle, wedge) or a diverging one (broadening) must
+                     change width by at least this fraction. Without it `converging` meant only
+                     `w1 < w0` — any hair of narrowing — so a dead-parallel channel that happened to
+                     narrow by 0.1% was emitted as a WEDGE. Together with `width_tol_frac` this makes
+                     channels and wedges mutually exclusive by construction rather than by luck.
     """
     min_touches_upper: int = 3
     min_touches_lower: int = 3
@@ -88,6 +101,8 @@ class PatternSpec:
     flat_tol_atr: float = 1.0
     level_tol: float = 0.12
     slope_sym_max: float = 2.5
+    width_tol_frac: float = 0.25
+    converge_min_frac: float = 0.25
 
 
 # Shapes built from discrete extremes (tops, bottoms, H&S) are defined by their pivots rather than
@@ -148,6 +163,14 @@ TUNED_SPECS: Dict[str, dict] = {
     "descending_triangle":    dict(atr_mult=2.5, min_span_bars=40),
     "broadening_top":         dict(atr_mult=2.5, min_span_bars=100),
     "broadening_bottom":      dict(atr_mult=2.5, min_span_bars=100),
+    # CHANNELS were added after the Phase-15 sweep, so these were picked by the SAME outcome-blind
+    # rule applied afterwards (strictest setting still giving >=10 detections per window across the
+    # nine windows) — never by score. At atr_mult 2.5 / span 100 the sloping channels give a minimum
+    # of 20 and 18 per window. `channel_flat` clears no setting: BTC almost never holds a strict
+    # fixed-width sideways band for 100+ bars, so expect very few and do not read that as a bug.
+    "channel_up":             dict(atr_mult=2.5, min_span_bars=100),
+    "channel_down":           dict(atr_mult=2.5, min_span_bars=100),
+    "channel_flat":           dict(atr_mult=2.5, min_span_bars=100),
 }
 #: shared by every entry above — kept separate so the table shows only what actually differs
 TUNED_COMMON: dict = dict(min_touches_upper=3, min_touches_lower=3,
@@ -384,9 +407,9 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
     if up is not None and lo is not None:
         w0 = up.at(x0) - lo.at(x0)
         w1 = up.at(x1) - lo.at(x1)
-        converging = w1 < w0
-        diverging = w1 > w0
-        # The measured move is the pattern's widest part, but the boundaries are EXTRAPOLATED to the
+        # converging / diverging / parallel are decided further down, from the FRACTIONAL width
+        # change, so that "converging" means the shape actually narrowed rather than merely not
+        # widening. The measured move is the pattern's widest part, but the boundaries are EXTRAPOLATED to the
         # window edges, and two steep converging lines can be metres apart there while price never
         # spanned anything like it. Clamp to the range price actually covered, or a triangle projects
         # a target thousands of points away.
@@ -433,10 +456,36 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
                                   height, formed, 0, upper=up, lower=lo, pivots=list(pv)))
 
         s_asc = specs.get("ascending_triangle", PatternSpec())
+        # How much the gap between the boundaries changes across the span, as a fraction of itself.
+        # Negative = narrowing. This one number separates every two-boundary shape: near zero is a
+        # parallel CHANNEL, clearly negative is a converging TRIANGLE or WEDGE, clearly positive is a
+        # BROADENING formation. Requiring a real change is what stops a channel being called a wedge.
+        denom = max(abs(w0), abs(w1), 1e-12)
+        w_change = (w1 - w0) / denom
+        converging = w_change <= -s_asc.converge_min_frac
+        diverging = w_change >= +s_asc.converge_min_frac
+        parallel = abs(w_change) <= s_asc.width_tol_frac
+
         if flat(up, s_asc) and rises(lo, s_asc):
             emit("ascending_triangle", +1, up, stop_up)
         elif flat(lo, s_asc) and falls(up, s_asc):
             emit("descending_triangle", -1, lo, stop_dn)
+        # --- CHANNELS: parallel boundaries, constant width. Tested BEFORE the wedges, because a
+        # channel that narrows by a hair used to satisfy the old `converging = w1 < w0`.
+        elif parallel and rises(up, s_asc) and rises(lo, s_asc):
+            emit("channel_up", +1, up, stop_up)
+            emit("channel_up", -1, lo, stop_dn)
+        elif parallel and falls(up, s_asc) and falls(lo, s_asc):
+            emit("channel_down", +1, up, stop_up)
+            emit("channel_down", -1, lo, stop_dn)
+        elif parallel and flat(up, s_asc) and flat(lo, s_asc):
+            # A level channel and a rectangle are the same geometry under two names, so both are
+            # emitted: `rectangle_*` keeps its long-standing meaning (flat top, flat bottom) while
+            # `channel_flat` additionally guarantees the width held steady.
+            emit("channel_flat", +1, up, stop_up)
+            emit("channel_flat", -1, lo, stop_dn)
+            emit("rectangle_bull", +1, up, stop_up)
+            emit("rectangle_bear", -1, lo, stop_dn)
         elif falls(up, s_asc) and rises(lo, s_asc) and converging:
             # converging with opposite slopes is necessary but NOT sufficient — the slopes also have
             # to be comparable, or a near-flat line paired with a steep one gets called symmetrical
@@ -451,8 +500,11 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
             emit("rectangle_bull", +1, up, stop_up)
             emit("rectangle_bear", -1, lo, stop_dn)
         elif rises(up, s_asc) and falls(lo, s_asc) and diverging:
-            emit("broadening_top", -1, lo, stop_dn)
-            emit("broadening_bottom", +1, up, stop_up)
+            # a broadening formation is a megaphone — symmetric about its middle by definition, and
+            # measured ratios reached 10:1 before this test was applied here too
+            if symmetrical(specs.get("broadening_top", PatternSpec())):
+                emit("broadening_top", -1, lo, stop_dn)
+                emit("broadening_bottom", +1, up, stop_up)
 
     # ---- level shapes: double / triple tops and bottoms, head & shoulders -----------
     scale = max(max(p.price for p in pv) - min(p.price for p in pv), 1e-12)
@@ -539,6 +591,13 @@ def _detect(pivots: List[_Pivot], upto: int, *, specs: Dict[str, PatternSpec], a
             if key not in best or cand.score > best[key].score:
                 best[key] = cand
     return list(best.values())
+
+
+#: shapes that become a flag or a pennant when a sharp pole precedes them. Channels joined this set
+#: when they were added: a flag IS a short counter-sloping channel, and modelling it as a rectangle
+#: (the only option before) meant only perfectly flat flags were ever found.
+_FLAGGABLE = ("symmetrical_triangle", "rectangle_bull", "rectangle_bear",
+              "channel_up", "channel_down", "channel_flat")
 
 
 def _flagpole(pv: List[_Pivot], cand: _Candidate, *, pole_mult: float) -> Optional[str]:
@@ -663,15 +722,23 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                                 min_pivots=min_pivots, lookback_pivots=lookback_pivots,
                                 pivot_step=pivot_step):
                 pole = _flagpole(pivots[:pi + 1], cand, pole_mult=pole_mult)
-                if pole and cand.name in ("symmetrical_triangle", "rectangle_bull",
-                                          "rectangle_bear"):
+                if pole and cand.name in _FLAGGABLE:
                     # A flag/pennant continues the pole, so ONLY the candidate already registered on
                     # that side qualifies. Relabelling the opposite-side one would keep its boundary
                     # and stop, leaving the stop on the wrong side of entry.
                     if cand.direction != (+1 if pole == "bull" else -1):
                         continue
-                    is_pennant = cand.name == "symmetrical_triangle"
-                    cand.name = f"{pole}_pennant" if is_pennant else f"{pole}_flag"
+                    # A textbook flag is a consolidation that DRIFTS AGAINST the pole — that is what
+                    # distinguishes it from the move simply continuing. Before channels existed the
+                    # only shape available here was a rectangle, so every flag was a flat one; an
+                    # ascending channel after an up-pole is not a flag and is left as a channel.
+                    if cand.name == "channel_up" and pole == "bull":
+                        pass
+                    elif cand.name == "channel_down" and pole == "bear":
+                        pass
+                    else:
+                        is_pennant = cand.name == "symmetrical_triangle"
+                        cand.name = f"{pole}_pennant" if is_pennant else f"{pole}_flag"
                 if cand.name not in hits:
                     continue
                 if not np.isfinite(cand.height) or cand.height <= 0:

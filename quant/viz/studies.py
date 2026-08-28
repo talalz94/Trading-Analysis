@@ -377,7 +377,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
                    extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
-                   per_pattern=None):
+                   per_pattern=None, trendlines: bool = False, trendline_kwargs=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -388,6 +388,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     Every pattern gets ONE legend entry controlling all of its drawing, so you can bring shapes in
     and out one at a time. `start_visible` names the ones that should be on when the chart opens;
     everything else starts in `legendonly`. S/R zones are their own toggle.
+
+    `trendlines=True` adds standalone TRENDLINES — single fitted support and resistance lines with
+    their touches and their break markers — on their own two legend toggles, independent of the
+    shapes. `trendline_kwargs` is passed straight to `add_trendlines`.
 
     `tuned=True` draws every pattern at its own calibrated settings (`TUNED_SPECS`) instead of one
     shared configuration — which needs several detection passes, because those settings disagree on
@@ -484,6 +488,37 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 fig.add_trace(go.Scattergl(
                     x=X, y=Y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
                     line=dict(color=colr2, width=wid, dash=dash), hoverinfo="skip"))
+
+    if trendlines:
+        from ..indicators.trendlines import trendline_table
+        tl = trendline_table(d, **(trendline_kwargs or {}))
+        for kind, label, colr in ((-1, "support trendline", "#2ecc71"),
+                                  (+1, "resistance trendline", "#e74c3c")):
+            sub = tl[tl["kind"] == kind] if len(tl) else tl
+            if not len(sub):
+                continue
+            vis = True if label.split()[0] + "_trendline" in start_visible else "legendonly"
+            lx, ly, dx, dy, bx, by = [], [], [], [], [], []
+            for r in sub.itertuples():
+                lx += [t[int(r.born_i)], t[int(r.end_i)], None]
+                ly += [r.y_start, r.y_end, None]
+                dx += list(r.touch_t) + [None]
+                dy += list(r.touch_price) + [None]
+                if r.broke:
+                    bx.append(t[int(r.end_i)]); by.append(r.y_end)
+            fig.add_trace(go.Scattergl(
+                x=lx, y=ly, mode="lines", name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
+                legendgroup=label, visible=vis, line=dict(color=colr, width=2.0, dash="dash"),
+                hovertemplate=f"{label}<extra></extra>"))
+            fig.add_trace(go.Scattergl(
+                x=dx, y=dy, mode="markers", legendgroup=label, visible=vis, showlegend=False,
+                marker=dict(size=6, color=colr, line=dict(width=1, color="#111")),
+                hovertemplate=f"{label} touch<extra></extra>"))
+            if bx:
+                fig.add_trace(go.Scattergl(
+                    x=bx, y=by, mode="markers", legendgroup=label, visible=vis, showlegend=False,
+                    marker=dict(size=11, color=colr, symbol="x", line=dict(width=1.5)),
+                    hovertemplate=f"{label} BREAK<extra></extra>"))
 
     fig.update_layout(
         title=title or "Chart patterns — click the legend to show/hide each one",
