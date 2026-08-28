@@ -40,3 +40,5 @@ Thumbs.db
 .vscode/
 .idea/
 _p15b_survivors.json
+notebooks/chart.html
+notebooks/chart_fixed.html

@@ -69,6 +69,15 @@ class PatternSpec:
     `flat_tol_atr`   a boundary is "flat" if it moves less than this many ATR across the whole span.
     `level_tol`      equal-highs / equal-lows tolerance, as a fraction of the shape's own height
                      (double and triple tops, head-and-shoulders shoulder symmetry).
+    `slope_sym_max`  how UNEQUAL the two boundary slopes may be and the shape still count as
+                     SYMMETRICAL: the steeper divided by the shallower. A symmetrical triangle is
+                     defined by two roughly equal and opposite slopes, and without this test the only
+                     requirements were "upper falls, lower rises, converging" — which a line falling
+                     at -12.9 against one rising at 0.76 satisfies. Measured on BTC 1m over five
+                     days, ratios reached 17:1 and the median was 3.3, which is why the drawn
+                     triangles did not look symmetrical. A shape that converges but fails this is not
+                     reclassified: it is not flat-topped or flat-bottomed either, so it is not a
+                     classical named pattern and is dropped.
     """
     min_touches_upper: int = 3
     min_touches_lower: int = 3
@@ -78,6 +87,7 @@ class PatternSpec:
     line_tol_atr: float = 1.0
     flat_tol_atr: float = 1.0
     level_tol: float = 0.12
+    slope_sym_max: float = 2.5
 
 
 # Shapes built from discrete extremes (tops, bottoms, H&S) are defined by their pivots rather than
@@ -194,11 +204,17 @@ class _Pivot:
 
 @dataclass
 class _Fit:
-    """A fitted boundary line plus how well the pivots actually sit on it."""
+    """A fitted boundary line plus how well the pivots actually sit on it.
+
+    `pivots` are the INLIERS — the ones within tolerance of the line, i.e. the actual touches. The
+    window they were chosen from holds others that sit inside the shape and touch nothing; keeping
+    only the inliers here is what lets a chart mark real touches instead of every nearby swing.
+    """
     slope: float
     intercept: float
     touches: int
     max_dev: float
+    pivots: Tuple["_Pivot", ...] = ()
 
     def at(self, x: float) -> float:
         return self.slope * x + self.intercept
@@ -313,7 +329,24 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int) ->
     else:
         sl2, ic2 = slope[pick], intercept[pick]
     dev = float(np.abs(yi - (sl2 * xi + ic2)).max())
-    return _Fit(float(sl2), float(ic2), int(sel.sum()), dev)
+    return _Fit(float(sl2), float(ic2), int(sel.sum()), dev,
+                tuple(p for p, is_touch in zip(pivots, sel) if is_touch))
+
+
+def _touch_pivots(cand: "_Candidate") -> List[_Pivot]:
+    """The pivots a shape is genuinely built on, in time order.
+
+    For a trendline shape those are the fitted boundaries' inliers. Level shapes (double and triple
+    tops, head-and-shoulders) have no fitted lines — their defining extremes ARE the touches.
+    """
+    seen = {}
+    for fit in (cand.upper, cand.lower):
+        for q in (fit.pivots if fit else ()):
+            seen[(q.i, q.price)] = q
+    if not seen:
+        for q in cand.pivots:
+            seen[(q.i, q.price)] = q
+    return sorted(seen.values(), key=lambda q: q.i)
 
 
 def _level_ok(a: float, b: float, tol: float, scale: float) -> bool:
@@ -369,6 +402,14 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
         def falls(f: _Fit, spec: PatternSpec) -> bool:
             return f.slope * max(span, 1) < -spec.flat_tol_atr * atr
 
+        def symmetrical(spec: PatternSpec) -> bool:
+            """Are the two boundaries close enough to equal-and-opposite to be called symmetrical?"""
+            a, b = abs(up.slope), abs(lo.slope)
+            lo_s, hi_s = min(a, b), max(a, b)
+            if lo_s <= 1e-12:
+                return False                      # one boundary flat: ascending/descending, not this
+            return hi_s / lo_s <= spec.slope_sym_max
+
         def touches_ok(spec: PatternSpec) -> bool:
             return (up.touches >= spec.min_touches_upper
                     and lo.touches >= spec.min_touches_lower
@@ -397,8 +438,11 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
         elif flat(lo, s_asc) and falls(up, s_asc):
             emit("descending_triangle", -1, lo, stop_dn)
         elif falls(up, s_asc) and rises(lo, s_asc) and converging:
-            emit("symmetrical_triangle", +1, up, stop_up)
-            emit("symmetrical_triangle", -1, lo, stop_dn)
+            # converging with opposite slopes is necessary but NOT sufficient — the slopes also have
+            # to be comparable, or a near-flat line paired with a steep one gets called symmetrical
+            if symmetrical(specs.get("symmetrical_triangle", PatternSpec())):
+                emit("symmetrical_triangle", +1, up, stop_up)
+                emit("symmetrical_triangle", -1, lo, stop_dn)
         elif rises(up, s_asc) and rises(lo, s_asc) and converging:
             emit("rising_wedge", -1, lo, stop_dn)
         elif falls(up, s_asc) and falls(lo, s_asc) and converging:
@@ -672,6 +716,11 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                 lower_intercept=cand.lower.intercept if cand.lower else np.nan,
                 boundary_slope=cand.b_slope, boundary_intercept=cand.b_intercept,
                 pivot_i=[q.i for q in pv], pivot_price=[q.price for q in pv],
+                # the pivots the boundaries were actually FITTED THROUGH. `pivot_i` is the whole
+                # search window and is roughly twice as long — drawing that as "touches" put a dot
+                # on every nearby swing, which is what made the chart look noisy.
+                touch_i=[q.i for q in _touch_pivots(cand)],
+                touch_price=[q.price for q in _touch_pivots(cand)],
                 hi_i=[q.i for q in pv if q.kind > 0],
                 hi_price=[q.price for q in pv if q.kind > 0],
                 lo_i=[q.i for q in pv if q.kind < 0],
@@ -721,7 +770,8 @@ def chart_pattern_shapes(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
             "height", "span_bars", "touches", "touches_upper", "touches_lower",
             "upper_slope", "upper_intercept", "lower_slope", "lower_intercept",
             "boundary_slope", "boundary_intercept",
-            "pivot_i", "pivot_price", "hi_i", "hi_price", "lo_i", "lo_price"]
+            "pivot_i", "pivot_price", "touch_i", "touch_price",
+            "hi_i", "hi_price", "lo_i", "lo_price"]
     out = pd.DataFrame(shapes)
     if not len(out):
         return pd.DataFrame(columns=cols)
@@ -730,6 +780,7 @@ def chart_pattern_shapes(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         out["t"] = tv[out["confirm_i"].to_numpy(int)]
         out["start_t"] = tv[out["start_i"].to_numpy(int)]
         out["pivot_t"] = [list(tv[np.asarray(v, int)]) for v in out["pivot_i"]]
+        out["touch_t"] = [list(tv[np.asarray(v, int)]) for v in out["touch_i"]]
     return out
 
 
