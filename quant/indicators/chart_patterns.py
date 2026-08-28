@@ -86,6 +86,12 @@ class PatternSpec:
                      span. This is the parallelism test: if the gap between the boundaries is the
                      same at both ends, the lines are parallel. "Some margin of error" is exactly
                      this number.
+    `min_risk_frac`  the protective level must sit at least this fraction of the pattern HEIGHT away
+                     from the entry. Being on the correct side is not enough: on a long, steeply
+                     rising wedge the rising lower boundary catches up with the highest high, so the
+                     stop lands a hair from the break and reward-to-risk explodes — 585:1 measured on
+                     gold. That is a degenerate risk definition, and since the target is one height
+                     away, this bound is equivalent to capping reward-to-risk at 1/min_risk_frac.
     `min_containment` the share of bars between a shape's first pivot and its BREAK that must sit
                      inside its two boundaries. This is the direct statement of "the shape describes
                      its price action", and it is what the audit measured: before it existed, 32.7%
@@ -119,6 +125,7 @@ class PatternSpec:
     converge_min_frac: float = 0.25
     max_apex_frac: float = 0.75
     min_containment: float = 0.80
+    min_risk_frac: float = 0.05
 
 
 # Shapes built from discrete extremes (tops, bottoms, H&S) are defined by their pivots rather than
@@ -846,6 +853,14 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
             if cand.direction > 0 and not cand.stop < neck:
                 continue
             if cand.direction < 0 and not cand.stop > neck:
+                continue
+            # ...and it must sit a MEANINGFUL distance away, not merely on the correct side. On a
+            # long, steeply rising wedge the rising lower boundary catches up with the highest high,
+            # so `stop` ends up a hair from the break and reward-to-risk explodes: measured at 585:1
+            # on gold, 41:1 on BTC. That is a degenerate risk definition rather than an opportunity,
+            # and it is the same failure the apex stop produced before real swing levels replaced it.
+            spec_r = specs.get(cand.name) or PatternSpec()
+            if abs(neck - cand.stop) < spec_r.min_risk_frac * cand.height:
                 continue
             pv = cand.pivots
             rows.append(dict(
