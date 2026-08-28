@@ -433,9 +433,11 @@ def test_tuned_specs_cover_every_pattern_they_claim_and_reject_unknown_names():
     for name, cfg in s.items():
         assert name in CHART_PATTERNS
         assert "atr_mult" in cfg
-        # the shared quality knobs must reach every pattern
+        # TUNED_COMMON holds only what the POOLED scan fixed for everything, so those must reach
+        # every pattern untouched. Per-pattern values (atr_mult, span, height) are meant to differ.
         for k, v in TUNED_COMMON.items():
             assert cfg[k] == v, f"{name} lost {k}"
+        assert "min_height_atr" in cfg, f"{name} must state its own height"
         # three touches is the point: two points define a line exactly
         assert cfg["min_touches_upper"] >= 3 and cfg["min_touches_lower"] >= 3
     assert set(tuned_specs(["rising_wedge"])) == {"rising_wedge"}

@@ -152,63 +152,57 @@ SENSITIVITY_PRESETS: Dict[str, dict] = {
 }
 
 
-#: Per-pattern detector calibration from the Phase-15 sweep (108 settings x 9 windows x 13 patterns,
-#: BTCUSDT 15m 2022-2026), re-run on the causal detector.
+#: Per-pattern detector calibration for all 22 patterns, BTCUSDT 15m over the balanced nine-window
+#: cycle. Re-derived by `experiments/recalibrate_tuned_specs.py` after the containment, apex and
+#: minimum-risk gates went in — those reject shapes the previous numbers were chosen to produce, so
+#: the old settings had quietly become stricter than they claimed.
 #:
-#: WHAT THESE ARE: settings that produce well-formed shapes in usable numbers — at least ten
-#: detections per window in every one of the nine windows, at the strictest geometry that still
-#: clears that floor. The quality knobs (`min_touches=3`, `line_tol_atr=0.6`) come from a scan pooled
-#: over all thirteen patterns, and both land where the prior argument says they should: two points
-#: define a line exactly, so three touches is the meaningful minimum.
+#: THE RULE, unchanged: fix the quality knobs (`min_touches=3`, `line_tol_atr=0.6`) from the pooled
+#: Phase-15 scan, then take the STRICTEST remaining combination that still yields at least ten
+#: detections in EVERY one of the nine windows. Selection uses detection COUNT only.
+#:
+#: ELEVEN of the 22 clear that floor. The rest are marked `# rare in BTC 15m` and are set to the most
+#: permissive combination available — they are reported as rare rather than loosened until they
+#: appear, because manufacturing detections by relaxing geometry is how a detector starts finding
+#: shapes that are not there. Pennants need a scarce symmetrical triangle AND a preceding pole;
+#: `channel_flat` needs BTC to hold a strict fixed-width sideways band for 100+ bars, which it
+#: almost never does. Those are properties of the market, not gaps in the detector.
 #:
 #: WHAT THESE ARE NOT: settings that predict direction, and they must not be read that way. They were
 #: chosen deliberately WITHOUT looking at forward returns, because selecting on the score is not
 #: defensible here — re-running the identical grid after fixing a lookahead moved the best-scoring
 #: cell for 13 of 13 patterns, including patterns whose rank correlation across all 108 settings was
-#: 0.98-0.999. At these settings the measured directional hit rate is **0.48, below a coin flip**.
-#: What a confirmed pattern does predict is EXPANSION: 18-42% more forward range than normal, against
-#: a shuffled null at 0.97. Use these to SEE the shapes and to size risk; see `docs/WHAT_WORKS.md`
-#: before trading one.
+#: 0.98-0.999. The measured directional hit rate is **0.48, below a coin flip**. What a confirmed
+#: pattern does predict is EXPANSION: 18-42% more forward range than normal, against a shuffled null
+#: at 0.97. Use these to SEE the shapes and to size risk; read `docs/WHAT_WORKS.md` before trading one.
 TUNED_SPECS: Dict[str, dict] = {
-    # atr_mult 5.0 — the level shapes, which need big, clean pivots
-    "head_shoulders":         dict(atr_mult=5.0, min_span_bars=100),
-    "inverse_head_shoulders": dict(atr_mult=5.0, min_span_bars=100),
-    "triple_top":             dict(atr_mult=5.0, min_span_bars=100),
-    "triple_bottom":          dict(atr_mult=5.0, min_span_bars=100),
-    "double_top":             dict(atr_mult=5.0, min_span_bars=100),
-    "double_bottom":          dict(atr_mult=5.0, min_span_bars=100),
-    # atr_mult 3.5 — wedges and the symmetrical triangle, which need a long span to be real
-    "rising_wedge":           dict(atr_mult=3.5, min_span_bars=200),
-    "falling_wedge":          dict(atr_mult=3.5, min_span_bars=200),
-    "symmetrical_triangle":   dict(atr_mult=3.5, min_span_bars=200),
-    # atr_mult 2.5 — the rarer shapes, which need a finer zigzag to appear at all
-    "ascending_triangle":     dict(atr_mult=2.5, min_span_bars=40),
-    "descending_triangle":    dict(atr_mult=2.5, min_span_bars=40),
-    "broadening_top":         dict(atr_mult=2.5, min_span_bars=100),
-    "broadening_bottom":      dict(atr_mult=2.5, min_span_bars=100),
-    # CHANNELS were added after the Phase-15 sweep, so these were picked by the SAME outcome-blind
-    # rule applied afterwards (strictest setting still giving >=10 detections per window across the
-    # nine windows) — never by score. At atr_mult 2.5 / span 100 the sloping channels give a minimum
-    # of 20 and 18 per window. `channel_flat` clears no setting: BTC almost never holds a strict
-    # fixed-width sideways band for 100+ bars, so expect very few and do not read that as a bug.
-    "channel_up":             dict(atr_mult=2.5, min_span_bars=100),
-    "channel_down":           dict(atr_mult=2.5, min_span_bars=100),
-    "channel_flat":           dict(atr_mult=2.5, min_span_bars=100),
-    # Rectangles, flags and pennants were missing here, which meant `chart_pattern_shapes_tuned`
-    # never asked for them and they could not appear on a tuned chart at all — they showed zero
-    # detections not because none exist but because nothing requested them. Flags and pennants are
-    # RENAMED from a source shape after a pole, so each takes its source's settings: pennants from
-    # the symmetrical triangle, flags from the channels and rectangles they are made of.
-    "rectangle_bull":         dict(atr_mult=2.5, min_span_bars=100),
-    "rectangle_bear":         dict(atr_mult=2.5, min_span_bars=100),
-    "bull_flag":              dict(atr_mult=2.5, min_span_bars=100),
-    "bear_flag":              dict(atr_mult=2.5, min_span_bars=100),
-    "bull_pennant":           dict(atr_mult=3.5, min_span_bars=200),
-    "bear_pennant":           dict(atr_mult=3.5, min_span_bars=200),
+    "double_top":               dict(atr_mult=5.0, min_span_bars=40, min_height_atr=4.0),
+    "double_bottom":            dict(atr_mult=5.0, min_span_bars=100, min_height_atr=4.0),
+    "head_shoulders":           dict(atr_mult=5.0, min_span_bars=100, min_height_atr=4.0),
+    "inverse_head_shoulders":   dict(atr_mult=5.0, min_span_bars=100, min_height_atr=4.0),
+    "triple_bottom":            dict(atr_mult=5.0, min_span_bars=100, min_height_atr=4.0),
+    "triple_top":               dict(atr_mult=5.0, min_span_bars=100, min_height_atr=4.0),
+    "ascending_triangle":       dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "bear_flag":                dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "bear_pennant":             dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "broadening_bottom":        dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "broadening_top":           dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "bull_flag":                dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "bull_pennant":             dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "channel_flat":             dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "descending_triangle":      dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "rectangle_bear":           dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "rectangle_bull":           dict(atr_mult=2.5, min_span_bars=40, min_height_atr=2.0),   # rare in BTC 15m
+    "channel_down":             dict(atr_mult=2.5, min_span_bars=100, min_height_atr=4.0),
+    "channel_up":               dict(atr_mult=2.5, min_span_bars=100, min_height_atr=4.0),
+    "falling_wedge":            dict(atr_mult=2.5, min_span_bars=100, min_height_atr=4.0),
+    "rising_wedge":             dict(atr_mult=2.5, min_span_bars=200, min_height_atr=4.0),
+    "symmetrical_triangle":     dict(atr_mult=2.5, min_span_bars=200, min_height_atr=4.0),
 }
-#: shared by every entry above — kept separate so the table shows only what actually differs
-TUNED_COMMON: dict = dict(min_touches_upper=3, min_touches_lower=3,
-                          min_height_atr=4.0, line_tol_atr=0.6)
+#: The knobs the POOLED scan fixed for EVERY pattern — and only those. `min_height_atr` used to live
+#: here too, but the re-derivation gives 11 of the 22 a different value, and a "common" constant that
+#: half the entries override is a lie about the data. It is stated per pattern instead.
+TUNED_COMMON: dict = dict(min_touches_upper=3, min_touches_lower=3, line_tol_atr=0.6)
 
 
 def tuned_specs(patterns: Optional[Sequence[str]] = None) -> Dict[str, dict]:
