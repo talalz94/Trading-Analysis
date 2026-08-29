@@ -797,8 +797,11 @@ def test_a_refitted_trendline_keeps_its_identity(rnd):
     from quant.indicators import add_trendlines, trendline_table
     tl = trendline_table(add_trendlines(rnd))
     assert len(tl) > 5
-    life = tl["end_i"] - tl["born_i"]
-    assert (life < 10).mean() < 0.25, "too many lines living almost no time — identity is churning"
+    # measured on the DRAWN span (first touch to end), not `end_i - born_i`. The latter is short by
+    # construction: a pivot's extreme sits well before the bar that confirms it, so a line is often
+    # already near retirement when it becomes knowable. That is the confirmation lag, not churn.
+    drawn = tl["end_i"] - tl["start_i"]
+    assert (drawn < 10).mean() < 0.25, "too many lines drawn over almost nothing — identity churning"
     for _, g in tl.groupby("side"):
         s = g.sort_values("born_i")["slope"].to_numpy()
         if len(s) > 3:
@@ -825,3 +828,75 @@ def test_min_risk_frac_is_tunable(rnd):
     loose = chart_pattern_shapes(rnd, settings={p: dict(min_risk_frac=0.0)
                                                 for p in CHART_PATTERNS})
     assert len(tight) <= len(loose)
+
+
+# ---------------------------------------------------------------------------
+# what gets DRAWN — the checks whose absence let three defects reach a chart
+# ---------------------------------------------------------------------------
+def test_level_shape_dots_are_the_extremes_the_pattern_is_named_for(rnd):
+    """A triple top's pivot list carries its three highs AND the two troughs that set the neckline.
+    Drawing all of them put a "triple top touch" on the LOW of a candle — 33-40% of the dots."""
+    hi, lo = rnd["high"].to_numpy(float), rnd["low"].to_numpy(float)
+    s = chart_pattern_shapes(rnd)
+    lvl = s[s["upper_slope"].isna()]
+    assert len(lvl), "fixture produced no level shapes"
+    wrong = 0
+    for r in lvl.itertuples():
+        want_high = int(r.direction) < 0                    # a top marks highs, a bottom lows
+        for i, px in zip(r.touch_i, r.touch_price):
+            near_high = abs(px - hi[int(i)]) < abs(px - lo[int(i)])
+            wrong += int(near_high != want_high)
+    assert wrong == 0, f"{wrong} dots on the wrong side of the candle"
+
+
+def test_a_level_pattern_actually_sits_at_one_level(rnd):
+    """Equality was checked only between ADJACENT pairs and scaled by the whole pivot window's
+    range, which let three "equal" tops sit 14.8 ATR apart."""
+    from quant.indicators import add_atr
+    from quant.indicators.chart_patterns import PatternSpec
+    atr = add_atr(rnd, 14)["atr_14"].to_numpy(float)
+    tol = PatternSpec().level_tol_atr
+    s = chart_pattern_shapes(rnd)
+    lvl = s[s["upper_slope"].isna() & ~s["pattern"].str.contains("head_shoulders")]
+    for r in lvl.itertuples():
+        tp = np.asarray(r.touch_price, float)
+        if len(tp) < 2:
+            continue
+        a = atr[int(r.formed_i)]
+        if not np.isfinite(a) or a <= 0:
+            continue
+        assert (tp.max() - tp.min()) <= tol * a + 1e-6, (
+            f"{r.pattern} spans {(tp.max()-tp.min())/a:.1f} ATR — not one level")
+
+
+def test_trendlines_are_drawn_where_they_are_near_price(rnd):
+    """44% of lines used to end more than 6 ATR from price, the worst at 119 — rays off the chart."""
+    from quant.indicators import add_trendlines, trendline_table, add_atr
+    d = add_atr(rnd, 14)
+    med = float(np.nanmedian(d["atr_14"].to_numpy(float)))
+    c = d["close"].to_numpy(float)
+    tl = trendline_table(add_trendlines(rnd))
+    assert len(tl)
+    for r in tl.itertuples():
+        e = int(r.end_i)
+        assert abs((r.slope * e + r.intercept) - c[e]) / med < 20.0, "line ends far from price"
+
+
+def test_every_trendline_touch_lies_inside_its_drawn_span(rnd):
+    """Lines were drawn from `born_i`, which is AFTER every pivot they are fitted through, so the
+    touch dots sat outside the segment on all 36 lines of the first sample."""
+    from quant.indicators import add_trendlines, trendline_table
+    tl = trendline_table(add_trendlines(rnd))
+    for r in tl.itertuples():
+        if not len(r.touch_i):
+            continue
+        assert int(r.start_i) <= min(r.touch_i) and max(r.touch_i) <= int(r.end_i)
+
+
+def test_a_trendline_that_never_lived_is_not_recorded(rnd):
+    """Several pivots can confirm on one bar, so a line could be born and superseded before ever
+    publishing. Those were still drawn, across spans they had never been valid over."""
+    from quant.indicators import add_trendlines, trendline_table
+    tl = trendline_table(add_trendlines(rnd))
+    assert (tl["end_i"] >= tl["born_i"]).all(), "a line ends before it was born"
+    assert (tl["end_i"] >= 0).all()

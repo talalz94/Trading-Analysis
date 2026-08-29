@@ -457,10 +457,23 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             xa, xb = t[a], t[b]
             # Draw the LINE, not the segment between its two end pivots: evaluate the fit across the
             # whole pattern. Level shapes (H&S, double tops) have no fitted boundaries, only a neckline.
+            # CONVERGING shapes are drawn all the way to their APEX, where the two boundaries meet.
+            # Stopping at the break left a triangle as two lines heading toward each other without
+            # ever closing, so it did not read as a triangle at all. Only converging pairs have an
+            # apex ahead of them; channels are parallel and broadening shapes met theirs in the past,
+            # so both are unaffected. The apex is bounded because a pattern already expires at
+            # `max_apex_frac` (0.75) of the way there.
+            xe = b
+            du, dl = r.upper_slope, r.lower_slope
+            if du == du and dl == dl and abs(du - dl) > 1e-12:
+                apex = (r.lower_intercept - r.upper_intercept) / (du - dl)
+                if b < apex <= b + 4 * max(b - a, 1):
+                    xe = int(min(apex, n - 1))
+            xb2 = t[xe]
             for sl, ic in ((r.upper_slope, r.upper_intercept), (r.lower_slope, r.lower_intercept)):
                 if sl == sl and ic == ic:                       # not NaN
-                    lx += [xa, xb, None]
-                    ly += [sl * r.start_i + ic, sl * (b) + ic, None]
+                    lx += [xa, xb2, None]
+                    ly += [sl * r.start_i + ic, sl * xe + ic, None]
             # the pivots the lines were FITTED THROUGH, not every swing in the search window
             mx += list(r.touch_t) + [None]
             my += list(r.touch_price) + [None]
@@ -500,7 +513,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             vis = True if label.split()[0] + "_trendline" in start_visible else "legendonly"
             lx, ly, dx, dy, bx, by = [], [], [], [], [], []
             for r in sub.itertuples():
-                lx += [t[int(r.born_i)], t[int(r.end_i)], None]
+                # from the FIRST TOUCH, not from born_i: the line is fitted through pivots that all
+                # sit before it became known, so drawing from born_i left every touch dot outside
+                # the segment. All 36 lines in the sample had this.
+                lx += [t[int(r.start_i)], t[int(r.end_i)], None]
                 ly += [r.y_start, r.y_end, None]
                 dx += list(r.touch_t) + [None]
                 dy += list(r.touch_price) + [None]

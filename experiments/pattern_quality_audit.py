@@ -273,6 +273,52 @@ def audit_causality(d: pd.DataFrame, window: str) -> List[dict]:
     return out
 
 
+def audit_dots(d: pd.DataFrame, window: str) -> List[dict]:
+    """Does every drawn TOUCH marker actually sit on the thing it claims to touch?
+
+    This check did not exist, and its absence is why three defects reached a rendered chart. A
+    trendline shape's dots must lie on one of its two fitted boundaries. A LEVEL shape's dots must lie
+    on the extreme the pattern is named for — a triple top marked its two intervening TROUGHS as
+    touches, putting 33-40% of its dots on the low of a candle.
+    """
+    hi = d["high"].to_numpy(float)
+    lo = d["low"].to_numpy(float)
+    atr_arr = d["atr_14"].to_numpy(float)
+    atr_med = float(np.nanmedian(atr_arr))
+    shapes = chart_pattern_shapes_tuned(d)
+    rows = []
+    for r in shapes.itertuples():
+        # the ATR the FIT used, not the one at confirmation. Measuring a touch against a later,
+        # smaller ATR reported 8 dots as off their line when 0 of 10,297 actually are — the same
+        # denominator mistake this audit already made once with the contract frame.
+        f_i = int(r.formed_i)
+        atr_here = atr_arr[f_i] if np.isfinite(atr_arr[f_i]) else atr_med
+        off_line = wrong_side = 0
+        for i, px in zip(r.touch_i, r.touch_price):
+            i = int(i)
+            if _has_lines(r):
+                du = abs(px - _line(r.upper_slope, r.upper_intercept, i))
+                dl = abs(px - _line(r.lower_slope, r.lower_intercept, i))
+                if min(du, dl) > LINE_TOL * atr_here * 2.0:
+                    off_line += 1
+            else:
+                # a top's touches are highs, a bottom's are lows
+                near_hi = abs(px - hi[i]) < abs(px - lo[i])
+                want_hi = int(r.direction) < 0
+                if near_hi != want_hi:
+                    wrong_side += 1
+        rows.append(dict(window=window, pattern=r.pattern, dots=len(r.touch_i),
+                         dots_off_line=off_line, dots_wrong_side=wrong_side,
+                         # only meaningful where the pattern claims ONE level. A head-and-shoulders
+                         # has no single level — the head is supposed to stand clear of the
+                         # shoulders — so reporting its full spread just looks like a failure.
+                         level_spread_atr=(
+                             float((max(r.touch_price) - min(r.touch_price)) / max(atr_here, 1e-9))
+                             if (not _has_lines(r) and len(r.touch_price) > 1
+                                 and "head_shoulders" not in r.pattern) else np.nan)))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # trendlines
 # ---------------------------------------------------------------------------
@@ -292,6 +338,28 @@ def audit_trendlines(d: pd.DataFrame, window: str) -> dict:
             bad_touch += 1
         if not (lo_px - 3 * rng < r.y_end < hi_px + 3 * rng):
             off_chart += 1
+    # DISTANCE FROM PRICE. A support line price has left 100 ATR behind is a ray heading off the
+    # chart, not support. Nothing checked this, and the old bound here (endpoint within 3x the whole
+    # price range) was so loose that lines 119 ATR away passed it.
+    c_all = o["close"].to_numpy(float)
+    d_start, d_end, far = [], [], 0
+    atr_all = o["atr_14"].to_numpy(float) if "atr_14" in o.columns else None
+    for r in tl.itertuples():
+        s_i, e_i = int(r.start_i), int(r.end_i)
+        # the LOCAL ATR, because that is what the retirement rule compares against. Using the window
+        # median flagged 38 lines as far from price when by the rule's own measure none are.
+        a_s = (atr_all[e_i] if atr_all is not None and np.isfinite(atr_all[e_i]) and atr_all[e_i] > 0
+               else atr_med)
+        ds = abs((r.slope * s_i + r.intercept) - c_all[s_i]) / a_s
+        de = abs((r.slope * e_i + r.intercept) - c_all[e_i]) / a_s
+        d_start.append(ds); d_end.append(de)
+        if de > 20.0:
+            far += 1
+    # TOUCHES INSIDE THE DRAWN SPAN. Lines were drawn from `born_i`, which is after every pivot they
+    # are fitted through, so all 36 lines in the first sample had their dots outside the segment.
+    outside = sum(1 for r in tl.itertuples()
+                  if len(r.touch_i) and not (int(r.start_i) <= min(r.touch_i)
+                                             and max(r.touch_i) <= int(r.end_i)))
     c = o["close"].to_numpy(float)
     dn = o["tl_break_dn"].to_numpy(bool)
     up = o["tl_break_up"].to_numpy(bool)
@@ -299,6 +367,10 @@ def audit_trendlines(d: pd.DataFrame, window: str) -> dict:
     res = o["tl_res"].to_numpy(float)
     wrong = int((c[dn] >= sup[dn]).sum() + (c[up] <= res[up]).sum())
     return dict(window=window, lines=len(tl), broke=int(tl.broke.sum()) if len(tl) else 0,
+                dist_start_med=float(np.median(d_start)) if d_start else np.nan,
+                dist_end_med=float(np.median(d_end)) if d_end else np.nan,
+                dist_end_max=float(max(d_end)) if d_end else np.nan,
+                lines_far_from_price=far, touches_outside_span=outside,
                 median_touches=float(tl.touches.median()) if len(tl) else np.nan,
                 touch_resid_med=float(np.median(resid)) if resid else np.nan,
                 off_chart_endpoints=off_chart, touch_count_mismatch=bad_touch,
@@ -323,7 +395,7 @@ def main(windows=None, trunc_points=None, skip_causality=False,
     t0 = time.time()
     print(f"AUDIT: {symbol} {tf} over {len(keys)} windows, {TRUNC_POINTS} truncation points",
           flush=True)
-    shape_rows, caus_rows, tl_rows = [], [], []
+    shape_rows, caus_rows, tl_rows, dot_rows = [], [], [], []
     for wi, k in enumerate(keys, 1):
         try:
             d = _load(k, symbol=symbol, tf=tf, source=source)
@@ -334,6 +406,7 @@ def main(windows=None, trunc_points=None, skip_causality=False,
             print(f"  [{wi}/{len(keys)}] {k} SKIPPED (only {len(d)} bars)", flush=True)
             continue
         shape_rows += audit_shapes(d, k)
+        dot_rows += audit_dots(d, k)
         tl_rows.append(audit_trendlines(d, k))
         if not skip_causality:
             caus_rows += audit_causality(d, k)
@@ -427,9 +500,28 @@ def main(windows=None, trunc_points=None, skip_causality=False,
         tot = int(caus.mismatches.sum())
         print(f"\n   TOTAL MISMATCHES: {tot}   -> {'CAUSAL' if tot == 0 else 'LOOKAHEAD PRESENT'}")
 
+    hdr("6b. DRAWN DOTS — does every touch marker sit on the thing it claims to touch?")
+    dots = pd.DataFrame(dot_rows)
+    if len(dots):
+        g6b = (dots.groupby("pattern")
+                   .agg(shapes=("dots", "size"), dots=("dots", "sum"),
+                        off_line=("dots_off_line", "sum"),
+                        wrong_side=("dots_wrong_side", "sum"),
+                        worst_level_spread_atr=("level_spread_atr",
+                            lambda v: float(np.nanmax(v)) if v.notna().any() else np.nan))
+                   .reset_index().sort_values(["wrong_side", "off_line"], ascending=False))
+        print(g6b.round(2).to_string(index=False))
+        print("   trendline shapes: a dot must lie on one of the two fitted boundaries.")
+        print("   level shapes: a TOP's dots must be highs and a BOTTOM's must be lows.")
+        print(f"   dots off their line: {int(dots.dots_off_line.sum())} | "
+              f"wrong side of the candle: {int(dots.dots_wrong_side.sum())} | "
+              f"of {int(dots.dots.sum())} drawn")
+
     hdr("7. TRENDLINES")
     print(tl.to_string(index=False))
     print("\n   invariants that must be zero: "
+          f"lines far from price {int(tl.lines_far_from_price.sum())}, "
+          f"touches outside the drawn span {int(tl.touches_outside_span.sum())}, "
           f"off-chart endpoints {int(tl.off_chart_endpoints.sum())}, "
           f"touch-count mismatches {int(tl.touch_count_mismatch.sum())}, "
           f"breaks on the wrong side {int(tl.breaks_on_wrong_side.sum())}, "
@@ -459,8 +551,14 @@ def main(windows=None, trunc_points=None, skip_causality=False,
     if len(tri) and (tri.containment < CONTAIN_MIN).mean() > 0.10:
         fails.append(f"{100*(tri.containment < CONTAIN_MIN).mean():.0f}% of triangles below "
                      f"{CONTAIN_MIN} containment (extrapolation past the last pivot)")
+    if len(dots):
+        if int(dots.dots_off_line.sum()):
+            fails.append(f"{int(dots.dots_off_line.sum())} drawn dots do not sit on their boundary")
+        if int(dots.dots_wrong_side.sum()):
+            fails.append(f"{int(dots.dots_wrong_side.sum())} drawn dots on the wrong side of the "
+                         f"candle (a top marking a low, or vice versa)")
     for c in ("off_chart_endpoints", "touch_count_mismatch", "breaks_on_wrong_side",
-              "both_ways_same_bar"):
+              "both_ways_same_bar", "lines_far_from_price", "touches_outside_span"):
         if int(tl[c].sum()):
             fails.append(f"trendlines: {int(tl[c].sum())} {c}")
     print("  " + ("\n  ".join(f"FAIL: {f}" for f in fails) if fails else "PASS — all checks clean"))

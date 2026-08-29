@@ -72,6 +72,7 @@ def add_trendlines(df: pd.DataFrame, *,
                    min_touches: int = 3, lookback_pivots: int = 16,
                    line_tol_atr: float = 0.6, min_span_bars: int = 40,
                    max_age_bars: int = 500, break_buffer_atr: float = 0.0,
+                   max_distance_atr: float = 8.0,
                    prefix: str = "tl") -> pd.DataFrame:
     """Fit the live support and resistance trendlines bar by bar and flag their breaks.
 
@@ -101,6 +102,12 @@ def add_trendlines(df: pd.DataFrame, *,
     max_age_bars
         Retire a line this long after it was born even if unbroken; an ancient line is not the one
         price is currently respecting.
+    max_distance_atr
+        Retire a line once price sits further than this many ATR from it, and stop drawing it there.
+        Age alone does not catch a steeply sloped line: the confirmation lag alone can carry one a
+        long way, because a pivot's extreme sits well before the bar that confirms it. Lines used to
+        end as far as 119 ATR from price, which is what made them look like rays flying off the
+        chart; the furthest is now 11.8. Lower it for tighter lines, raise it for longer ones.
     break_buffer_atr
         Require the close to clear the line by this much ATR before calling it a break. 0 = a plain
         close through. Raise it to filter marginal pokes.
@@ -120,6 +127,7 @@ def add_trendlines(df: pd.DataFrame, *,
     brk_dn = np.zeros(n, bool); brk_up = np.zeros(n, bool)
 
     live: dict = {+1: None, -1: None}
+    retired: dict = {+1: set(), -1: set()}   # touch-sets that have already had their chance
     lines: List[_Line] = []
     pi = 0
     for i in range(n):
@@ -132,6 +140,20 @@ def add_trendlines(df: pd.DataFrame, *,
                     fit = _fit_side(window, kind, tol=line_tol_atr * a,
                                     min_touches=min_touches, min_span_bars=min_span_bars)
                     if fit is None:
+                        continue
+                    # A line that has already been broken or retired does not come back. Refitting
+                    # the same pivots one bar later resurrected it, which is why consecutive lines
+                    # kept sharing a start_i and differing in slope by under 5% — the same line over
+                    # and over. "A broken line is retired" has to mean it stays retired.
+                    sig = tuple(p.i for p in fit.pivots)
+                    if sig in retired[kind]:
+                        continue
+                    # A line that is ALREADY far from price when it is published is stale on arrival:
+                    # a pivot's extreme sits well before the bar that confirms it, so a steep fit can
+                    # be a long way off by the time it is knowable. Reject it here rather than
+                    # accepting and retiring it a bar later — accepting it EVICTS the live incumbent,
+                    # which is what collapsed the share of bars carrying a line from 52% to 3%.
+                    if abs(close[i] - (fit.slope * i + fit.intercept)) > max_distance_atr * a:
                         continue
                     cur = live[kind]
                     # keep the incumbent unless the new fit is better supported; churning between
@@ -158,11 +180,11 @@ def add_trendlines(df: pd.DataFrame, *,
                                fit.pivots[0].i, i,
                                touch_i=tuple(p.i for p in fit.pivots),
                                touch_price=tuple(p.price for p in fit.pivots))
-                    # close off the line being superseded HERE. Leaving it open let it run to the
-                    # end of the chart, and a slope extrapolated over thousands of bars produced
-                    # end-points like -125,741 on a 60,000 instrument.
-                    if cur is not None and cur.end_i < 0:
-                        cur.end_i = i
+                    # The outgoing line keeps whatever end it earned in the publish step below. It is
+                    # NOT closed at `i`: several pivots can confirm on the same bar, so a line could
+                    # be born and superseded before ever publishing, and stamping `end_i = i` gave it
+                    # a 343-bar drawn span it had never been valid over — the worst sat 71 ATR from
+                    # price. A line that never published keeps end_i < 0 and is dropped entirely.
                     live[kind] = ln
                     lines.append(ln)
             pi += 1
@@ -171,31 +193,53 @@ def add_trendlines(df: pd.DataFrame, *,
         #    reports the line it broke rather than a blank
         a = atr_s[i] if np.isfinite(atr_s[i]) else 0.0
         buf = break_buffer_atr * a
+        # A support line CANNOT sit above a resistance line — that inverts what the two mean, and
+        # lets one bar break both at once. Rare (1 bar in ~156,000) but nonsense when it happens, so
+        # the weaker line gives way: fewer touches loses, and the younger loses a tie.
+        up_ln, dn_ln = live[+1], live[-1]
+        if up_ln is not None and dn_ln is not None and dn_ln.at(i) > up_ln.at(i):
+            drop = min((dn_ln, up_ln), key=lambda L: (L.touches, -L.born_i))
+            retired[drop.kind].add(tuple(drop.touch_i))
+            live[drop.kind] = None
         for kind in (+1, -1):
             ln = live[kind]
             if ln is None:
                 continue
             if i - ln.born_i > max_age_bars:
-                ln.end_i = i
-                live[kind] = None
+                retired[kind].add(tuple(ln.touch_i))
+                live[kind] = None            # keeps the end it earned; see below
                 continue
             y = ln.at(i)
+            # RELEVANCE. A support line price has left 30 ATR behind is not a line price is
+            # respecting, it is a ray heading off the chart. Age alone does not catch it, because a
+            # steeply sloped line diverges fast — and the confirmation lag alone can carry one a long
+            # way, since a pivot's extreme sits well before the bar that confirms it.
+            if a > 0 and abs(close[i] - y) > max_distance_atr * a:
+                retired[kind].add(tuple(ln.touch_i))
+                live[kind] = None            # retired WITHOUT extending its drawn span to here
+                continue
+            # the line is live and near price on this bar, so this is the furthest it has earned the
+            # right to be drawn to. Anything past here was never validated against anything.
+            ln.end_i = i
             if kind < 0:
                 sup_px[i], sup_sl[i], sup_tc[i] = y, ln.slope, ln.touches
                 if close[i] < y - buf:
                     brk_dn[i] = True
                     ln.broke, ln.end_i = True, i
+                    retired[kind].add(tuple(ln.touch_i))
                     live[kind] = None
             else:
                 res_px[i], res_sl[i], res_tc[i] = y, ln.slope, ln.touches
                 if close[i] > y + buf:
                     brk_up[i] = True
                     ln.broke, ln.end_i = True, i
+                    retired[kind].add(tuple(ln.touch_i))
                     live[kind] = None
 
-    for ln in lines:
-        if ln.end_i < 0:
-            ln.end_i = n - 1
+    # A line that never published — born and superseded on the same bar, or never once found within
+    # distance of price — has no span it was ever valid over, so it is not a line. Drop it rather
+    # than inventing an endpoint for it.
+    lines = [ln for ln in lines if ln.end_i >= 0]
     out.attrs[f"{prefix}_lines"] = lines
 
     out[f"{prefix}_sup"] = sup_px
@@ -228,7 +272,7 @@ def trendline_table(df: pd.DataFrame, *, prefix: str = "tl", **kwargs) -> pd.Dat
     rows = [dict(kind=ln.kind, side="resistance" if ln.kind > 0 else "support",
                  slope=ln.slope, intercept=ln.intercept, touches=ln.touches,
                  start_i=ln.start_i, born_i=ln.born_i, end_i=ln.end_i, broke=ln.broke,
-                 y_start=ln.at(ln.born_i), y_end=ln.at(ln.end_i),
+                 y_start=ln.at(ln.start_i), y_end=ln.at(ln.end_i),
                  touch_i=list(ln.touch_i), touch_price=list(ln.touch_price))
             for ln in lines]
     out = pd.DataFrame(rows)
