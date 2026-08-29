@@ -71,8 +71,20 @@ class PatternSpec:
     `min_height_atr` reject shapes shorter than this many ATR — noise rather than structure.
     `line_tol_atr`   how far off the fitted line a pivot may sit and still count as a touch.
     `flat_tol_atr`   a boundary is "flat" if it moves less than this many ATR across the whole span.
-    `level_tol`      equal-highs / equal-lows tolerance, as a fraction of the shape's own height
-                     (double and triple tops, head-and-shoulders shoulder symmetry).
+    `level_tol`      equal-highs / equal-lows tolerance as a fraction of the PIVOT WINDOW's range.
+                     Kept as a secondary bound; `level_tol_atr` is the one that binds.
+    `level_tol_atr`  how far apart the defining extremes of a top or bottom may sit and still count
+                     as EQUAL, in ATR. This is the test that makes a "triple top" actually be one.
+                     Two things were wrong before it existed: equality was checked only between
+                     ADJACENT pairs, so the first and third peak could drift to twice the tolerance;
+                     and it was measured against the whole pivot window's range rather than anything
+                     local, which on a wide window is enormous. Measured result: three "equal" tops
+                     spread **14.8 ATR** apart, 65% of the shape's own height. Now the FULL SPREAD of
+                     all defining extremes must fit inside this. The default is DERIVED rather than
+                     tuned: a level is a horizontal trendline, so each extreme should sit within the
+                     same `line_tol_atr` (0.6) of it that a pivot must sit from a fitted line, which
+                     puts the full spread at 2 x 0.6. Tuning it to produce a desired number of triple
+                     tops would be choosing the answer.
     `slope_sym_max`  how UNEQUAL the two boundary slopes may be and the shape still count as
                      SYMMETRICAL: the steeper divided by the shallower. A symmetrical triangle is
                      defined by two roughly equal and opposite slopes, and without this test the only
@@ -120,6 +132,7 @@ class PatternSpec:
     line_tol_atr: float = 1.0
     flat_tol_atr: float = 1.0
     level_tol: float = 0.12
+    level_tol_atr: float = 1.2
     slope_sym_max: float = 2.5
     width_tol_frac: float = 0.25
     converge_min_frac: float = 0.25
@@ -412,13 +425,34 @@ def _touch_pivots(cand: "_Candidate") -> List[_Pivot]:
         for q in (fit.pivots if fit else ()):
             seen[(q.i, q.price)] = q
     if not seen:
+        # A level shape's pivot list carries BOTH the defining extremes and the intervening swings
+        # that set the neckline — a triple top is stored as three highs plus the two troughs between
+        # them. Drawing all of them put a "triple top touch" marker on the LOW of a candle, which is
+        # 33-40% of the dots on these patterns. The touches are the extremes that define the LEVEL,
+        # so keep only the side the pattern is named for: highs for a top, lows for a bottom.
+        want = +1 if cand.direction < 0 else -1
         for q in cand.pivots:
-            seen[(q.i, q.price)] = q
+            if q.kind == want:
+                seen[(q.i, q.price)] = q
     return sorted(seen.values(), key=lambda q: q.i)
 
 
 def _level_ok(a: float, b: float, tol: float, scale: float) -> bool:
     return abs(a - b) <= tol * max(scale, 1e-12)
+
+
+def _levels_equal(prices: Sequence[float], spec: PatternSpec, atr: float,
+                  slack: float = 1.0) -> bool:
+    """Do these extremes sit at ONE level? Judged on the FULL SPREAD, in ATR.
+
+    Adjacent-pair checks let error accumulate along the sequence, and a tolerance scaled by the
+    pivot window's range is unbounded in any local sense — together those let three "equal" tops
+    sit 14.8 ATR apart. `slack` loosens it for shapes where the textbook is laxer, such as
+    head-and-shoulders, whose shoulders need only be comparable.
+    """
+    if atr <= 0 or len(prices) < 2:
+        return True
+    return (max(prices) - min(prices)) <= spec.level_tol_atr * slack * atr
 
 
 # ---------------------------------------------------------------------------
@@ -565,13 +599,15 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
     s_lv = specs.get("double_top", _LEVEL_SPEC)
     h1, h2 = highs[-2], highs[-1]
     l1, l2 = lows[-2], lows[-1]
-    if _level_ok(h1.price, h2.price, s_lv.level_tol, scale) and h1.i < h2.i:
+    if (_level_ok(h1.price, h2.price, s_lv.level_tol, scale)
+            and _levels_equal([h1.price, h2.price], s_lv, atr) and h1.i < h2.i):
         mid = [p for p in lows if h1.i < p.i < h2.i]
         if mid:
             neck = min(p.price for p in mid)
             top = max(h1.price, h2.price)
             emit_level("double_top", -1, neck, top, top - neck, [h1, mid[-1], h2])
-    if _level_ok(l1.price, l2.price, s_lv.level_tol, scale) and l1.i < l2.i:
+    if (_level_ok(l1.price, l2.price, s_lv.level_tol, scale)
+            and _levels_equal([l1.price, l2.price], s_lv, atr) and l1.i < l2.i):
         mid = [p for p in highs if l1.i < p.i < l2.i]
         if mid:
             neck = max(p.price for p in mid)
@@ -579,8 +615,7 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
             emit_level("double_bottom", +1, neck, bot, neck - bot, [l1, mid[-1], l2])
     if len(highs) >= 3:
         a, b, c = highs[-3], highs[-2], highs[-1]
-        if (_level_ok(a.price, b.price, s_lv.level_tol, scale)
-                and _level_ok(b.price, c.price, s_lv.level_tol, scale)):
+        if _levels_equal([a.price, b.price, c.price], s_lv, atr):
             mid = [p for p in lows if a.i < p.i < c.i]
             if mid:
                 neck = min(p.price for p in mid)
@@ -588,8 +623,7 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
                 emit_level("triple_top", -1, neck, top, top - neck, [a, b, c] + mid[-2:])
     if len(lows) >= 3:
         a, b, c = lows[-3], lows[-2], lows[-1]
-        if (_level_ok(a.price, b.price, s_lv.level_tol, scale)
-                and _level_ok(b.price, c.price, s_lv.level_tol, scale)):
+        if _levels_equal([a.price, b.price, c.price], s_lv, atr):
             mid = [p for p in highs if a.i < p.i < c.i]
             if mid:
                 neck = max(p.price for p in mid)
@@ -600,7 +634,7 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
         troughs = [p for p in lows if ls.i < p.i < rs.i]
         s_hs = specs.get("head_shoulders", _LEVEL_SPEC)
         if (head.price > ls.price and head.price > rs.price
-                and _level_ok(ls.price, rs.price, s_hs.level_tol * 1.5, scale)
+                and _levels_equal([ls.price, rs.price], s_hs, atr, slack=1.5)
                 and len(troughs) >= 2):
             neck = float(np.mean([p.price for p in troughs[-2:]]))
             emit_level("head_shoulders", -1, neck, head.price, head.price - neck,
@@ -610,7 +644,7 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
         peaks = [p for p in highs if ls.i < p.i < rs.i]
         s_hs = specs.get("inverse_head_shoulders", _LEVEL_SPEC)
         if (head.price < ls.price and head.price < rs.price
-                and _level_ok(ls.price, rs.price, s_hs.level_tol * 1.5, scale)
+                and _levels_equal([ls.price, rs.price], s_hs, atr, slack=1.5)
                 and len(peaks) >= 2):
             neck = float(np.mean([p.price for p in peaks[-2:]]))
             emit_level("inverse_head_shoulders", +1, neck, head.price, neck - head.price,
