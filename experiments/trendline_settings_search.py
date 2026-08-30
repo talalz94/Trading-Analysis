@@ -61,13 +61,18 @@ MIN_BREAKS = 30            # per (instrument, tf, setting) pooled, below this a 
 INSTRUMENTS = [("BTCUSDT", "binance"), ("XAUUSD", "dukascopy")]
 TIMEFRAMES = ["1h", "15m", "5m"]          # 1m is added for survivors only, in stage 4
 
+#: 144 combinations. Sized against a MEASURED cost, not a guess: at 324 combinations stage 1 alone
+#: ran 5 hours (0.22s per detection per 4,400 bars, and 5m windows carry 52,000). Trimming
+#: `line_tol_atr` and `lookback_pivots` to their end points brings the whole run to ~3 hours, which
+#: costs very little — the finding that the score surface is flat and its argmax is noise means a
+#: finer grid buys precision on a quantity that is not stable anyway.
 GRID = dict(
     atr_mult=[2.5, 3.5, 5.0],
     min_touches=[3, 4],
-    line_tol_atr=[0.4, 0.6, 1.0],
+    line_tol_atr=[0.4, 1.0],
     min_span_bars=[20, 40, 80],
     break_buffer_atr=[0.0, 0.3],
-    lookback_pivots=[12, 16, 24],
+    lookback_pivots=[12, 24],
 )
 
 

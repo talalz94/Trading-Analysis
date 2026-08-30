@@ -824,10 +824,71 @@ and a "common" constant half the entries contradict is a lie about the data.
 **The phase 12-15 research numbers are now STALE** — they were measured before these gates. Given the
 verdict there was comprehensively negative and the goal here was correctness, they were not re-run.
 
-## In flight
+## Drawing defects found from a rendered chart (2026-08-29/30)
 
-Nothing. Phases 12, 13, 14 and 15 have all re-run on the causal detector and their results are
-committed, raw CSVs included, so nothing needs a two-hour re-run to re-derive.
+The user opened a chart and found three things wrong that the audit had passed. Six defects behind
+them, and — worth recording — **two of the three "failures" the new audit checks first reported were
+flaws in the CHECKS, not the code.**
+
+### The six defects
+
+1. **Trendlines drawn from `born_i`**, which is after every pivot they are fitted through, so ALL 36
+   lines in the sample had their touch dots outside the drawn segment. Now drawn from the first touch.
+2. **Zero-life lines.** Several pivots can confirm on one bar, so a line could be born and superseded
+   before ever publishing. Those were still drawn across 343 bars; the worst sat **71 ATR** from price.
+   A line that never published is now dropped.
+3. **Broken lines resurrecting.** A retired line was refit from the same pivots a bar later, which is
+   why consecutive lines shared a `start_i` and differed in slope by under 5%. `retired` now
+   remembers touch-sets: "a broken line is retired" has to mean it stays retired.
+4. **Converging shapes did not close.** Boundaries stopped at the break, so a triangle read as two
+   lines heading toward each other. They now extend to the APEX.
+5. **Level-shape dots on the wrong side.** A triple top's pivot list carries its three highs AND the
+   two troughs that set the neckline; all were drawn as touches, putting **33-40% of dots on the low
+   of a candle**. `_touch_pivots` now keeps only the side the pattern is named for.
+6. **"Equal" tops that were not.** Equality was checked only between ADJACENT pairs and scaled by the
+   whole pivot window's range, letting three tops sit **14.8 ATR apart**, 65% of the shape's height.
+   Now the FULL SPREAD must fit inside `level_tol_atr`, whose default is DERIVED not tuned: a level
+   is a horizontal trendline, so 2 x `line_tol_atr`.
+
+Plus one real anomaly the new checks caught: **support and resistance could CROSS** — one bar in
+~156,000 had support above resistance, letting a single bar break both ways. The weaker line now
+gives way.
+
+### METHODOLOGY RULE 12 — audit a rule in the rule's own frame of reference
+
+The new checks reported 8 dots off their line and 38 lines far from price. Measured correctly: **0
+and 0**. The dot check used the ATR at CONFIRMATION when the fit used the ATR at FORMATION; the
+distance check used the window-median ATR when the retirement rule uses the local one. This is the
+same mistake the audit already made once with the contract frame, three times in total. Getting the
+frame wrong makes a check STRICTER than reality and manufactures defects — the safe direction to be
+wrong in, but it cost two rounds of investigation.
+
+### Audit state
+
+PASS on BTC 15m, BTC 1h and XAUUSD 15m: 3,508 shapes, **21,763 drawn dots with zero off their line
+and zero on the wrong side**, zero causality mismatches, all trendline invariants zero. Two new
+checks now gate the verdict — every drawn dot must sit on what it marks, and every drawn line must
+stay near the price it describes. 317 tests.
+
+## In flight — trendline settings search
+
+`experiments/trendline_settings_search.py`, results read by `notebooks/16_trendline_research.ipynb`.
+144 settings x 3 timeframes (1h/15m/5m) x 2 instruments x 9 windows, ~3 hours.
+
+Four stages kept apart: QUALITY (outcome-blind, and the only stable answer), SCREEN (null-differenced
+with a matched control), MULTI-TIMEFRAME, CONFIRMATION on the second instrument.
+
+Three sizing decisions came from measurement rather than assumption, and are worth keeping:
+
+* **The obvious MTF test is unanswerable at this event rate.** Requiring a break on BOTH timeframes
+  gives 0-1 events: 1h yields ~6 up-breaks in six months. Reporting that as a null result would have
+  been reporting arithmetic as a finding. The higher timeframe now supplies a STATE (its line sloping
+  with or against the break), splitting hundreds of events.
+* **1m is excluded.** Its cache covers only part of the nine-window span, so it turned a compute job
+  into 1,052 network pages per window — four hours of fetching before any measurement — against a
+  10.8%-of-R cost floor no entry family here clears. `prewarm()` now touches every cache up front.
+* **The grid was cut 324 -> 144** after measuring 0.22s per detection per 4,400 bars: at 324, stage 1
+  alone ran 5 hours. Cheap to cut, because the argmax of the score surface is known to be noise.
 
 ## Not done / next
 

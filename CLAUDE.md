@@ -206,8 +206,10 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 15_tuned_pattern_viewer = all 13 chart patterns at their CALIBRATED
-                         #   per-pattern settings (quant.indicators.TUNED_SPECS), one legend toggle each
+notebooks/               # 16_trendline_research = reads experiments/trendline_settings_search
+                         #   (144 settings x 3 TFs x 2 instruments x 9 windows, 4 stages)
+                         # 15_tuned_pattern_viewer = all 22 chart patterns at their CALIBRATED
+                         #   per-pattern settings (quant.indicators.TUNED_SPECS) + trendlines, one toggle each
                          # 14_pattern_viewer = chart-pattern SHAPES + S/R zones, toggled from the legend
                          # 01_research_cycle · 02_inference_experiments · 03_ema_cross_study (Q1-Q9)
                          #   · 04_trend_runner_leverage · 05_simple_1m_ema_breakout ·
