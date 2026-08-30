@@ -890,7 +890,48 @@ Three sizing decisions came from measurement rather than assumption, and are wor
 * **The grid was cut 324 -> 144** after measuring 0.22s per detection per 4,400 bars: at 324, stage 1
   alone ran 5 hours. Cheap to cut, because the argmax of the score surface is known to be noise.
 
+## Trendline settings search — RESULTS (2026-08-30)
+
+`experiments/trendline_settings_search.py`, 144 settings x 3 timeframes x 2 instruments x 9 windows.
+Ran in **72 minutes**, against a 3-hour estimate — the cost model built at 324 combinations
+over-predicted, so trust the measurement over the extrapolation next time.
+
+### Settings (stage 1, outcome-blind) — stable, but read the caveat
+
+Every selection converged on `min_touches=4, line_tol_atr=1.0, min_span_bars=80`, with `atr_mult`
+varying by timeframe: **1h -> 2.5, 15m -> 3.5-5.0, 5m -> 5.0**. Slower timeframes want a finer zigzag
+because they have fewer bars to find swings in.
+
+**CAVEAT, and it matters: `min_touches=4` was chosen by the tie-break, not by being better.** The
+selection rule takes the STRICTEST setting that still clears the sample floor, and 4 is stricter than
+3. On the gate itself 3 passes **80.1%** of the time against **53.5%** for 4. So the honest label is
+"the strictest that still works", not "the best". `min_span_bars=80` and `min_touches=4` are also the
+maximum values in the grid, so stricter settings were never tested.
+
+Pass rates by knob: `atr_mult` 2.5=92% / 3.5=70% / 5.0=39%; `line_tol_atr` 0.4=54% / 1.0=80%;
+`min_span_bars` and `break_buffer_atr` are flat (66-67%), so neither is doing much.
+
+### Direction (stage 2) — dead, consistent with everything else here
+
+* hit rate above 0.50 in **36% of 102 cells** — BELOW the 50% chance rate — median exactly **0.5000**
+* 56 of 102 cells beat their shuffled null: **55%, chance 50%**
+* positive AND consistent in >=8 of 9 windows: **2, chance expectation 2.0**
+* worst on 5m: 22.5% of cells above a coin flip, median hit 0.4896
+
+### Multi-timeframe (stage 3) — INCONCLUSIVE, and must not be reported as negative
+
+The redesign (HTF slope as a state rather than requiring two breaks) still lacks power: a
+higher-timeframe line is live on only **3-22% of bars**, so classifying lower-timeframe breaks by it
+produced **5 classified events against 1,705 unclassified**. The question is unanswered, not answered
+in the negative. Answering it needs either a state that exists on most bars (an EMA slope, a
+structural bias) or far more data.
+
 ## Not done / next
+
+* The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,
+  use a higher-timeframe state that exists on most bars rather than one that exists on 3-22% of them.
+* Trendline settings could be swept STRICTER: `min_touches=4` and `min_span_bars=80` are the grid
+  maxima and were selected, so the useful range may lie beyond what was tested.
 
 * The 3 channels and the trendlines have NOT been through the research pipeline — no phase-12 screen,
   no null differencing, no metronome comparison. They are drawing tools until they have been. Given
