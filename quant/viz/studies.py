@@ -377,7 +377,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
                    extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
-                   per_pattern=None, trendlines: bool = False, trendline_kwargs=None):
+                   per_pattern=None, trendlines: bool = False, trendline_kwargs=None,
+                   emas=(), view_start=None, line_picker: bool = True):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -388,6 +389,18 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     Every pattern gets ONE legend entry controlling all of its drawing, so you can bring shapes in
     and out one at a time. `start_visible` names the ones that should be on when the chart opens;
     everything else starts in `legendonly`. S/R zones are their own toggle.
+
+    `emas=(20, 50, 100, 200)` overlays moving averages, one legend toggle each.
+
+    `view_start` sets where the x-axis OPENS while leaving the data intact. Indicators that need
+    history — S/R zones, trendlines, long EMAs — are only as good as the bars before them, so load
+    a warm-up period before the range you care about and pass its end here. Without it the left edge
+    of the chart shows zones and lines built from a handful of bars, which is not what they would
+    have looked like at the time.
+
+    `line_picker` adds a dropdown that ISOLATES one trendline at a time. Twenty overlapping lines
+    under one legend toggle is unreadable, and one legend entry per line is worse; the dropdown keeps
+    the legend to two entries and still lets you inspect any single line.
 
     `trendlines=True` adds standalone TRENDLINES — single fitted support and resistance lines with
     their touches and their break markers — on their own two legend toggles, independent of the
@@ -414,6 +427,14 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         x=t, open=d["open"], high=d["high"], low=d["low"], close=d["close"],
         name="price", increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
         showlegend=False))
+
+    for p in (emas or ()):
+        from ..indicators import ema as _ema
+        fig.add_trace(go.Scattergl(
+            x=t, y=_ema(d["close"], int(p)), mode="lines", name=f"EMA {p}",
+            legendgroup=f"ema{p}", line=dict(width=1.4),
+            visible=True if f"ema{p}" in start_visible or "emas" in start_visible else "legendonly",
+            hovertemplate=f"EMA {p}: %{{y:.2f}}<extra></extra>"))
 
     if sr_zones:
         zt = sr_zone_table(d, left=zones_left, right=zones_right, cluster_pct=cluster_pct,
@@ -502,6 +523,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     x=X, y=Y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
                     line=dict(color=colr2, width=wid, dash=dash), hoverinfo="skip"))
 
+    picker_idx = []          # (label, first trace index) for each individually-selectable line
     if trendlines:
         from ..indicators.trendlines import trendline_table
         tl = trendline_table(d, **(trendline_kwargs or {}))
@@ -512,6 +534,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 continue
             vis = True if label.split()[0] + "_trendline" in start_visible else "legendonly"
             lx, ly, dx, dy, bx, by = [], [], [], [], [], []
+            per_line = []          # (label, x-of-line, y-of-line, touch xs, touch ys) for the picker
             for r in sub.itertuples():
                 # from the FIRST TOUCH, not from born_i: the line is fitted through pivots that all
                 # sit before it became known, so drawing from born_i left every touch dot outside
@@ -522,6 +545,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 dy += list(r.touch_price) + [None]
                 if r.broke:
                     bx.append(t[int(r.end_i)]); by.append(r.y_end)
+                per_line.append((
+                    f"{label.split()[0]} @ {pd.to_datetime(str(t[int(r.start_i)])):%b-%d %H:%M}"
+                    f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
+                    [t[int(r.start_i)], t[int(r.end_i)]], [r.y_start, r.y_end],
+                    list(r.touch_t), list(r.touch_price)))
             fig.add_trace(go.Scattergl(
                 x=lx, y=ly, mode="lines", name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
                 legendgroup=label, visible=vis, line=dict(color=colr, width=2.0, dash="dash"),
@@ -535,6 +563,66 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     x=bx, y=by, mode="markers", legendgroup=label, visible=vis, showlegend=False,
                     marker=dict(size=11, color=colr, symbol="x", line=dict(width=1.5)),
                     hovertemplate=f"{label} BREAK<extra></extra>"))
+            if line_picker:
+                # only offer lines that are actually VISIBLE in the opening view. Warm-up history
+                # can carry a hundred more, and a dropdown of 130 entries is no more usable than
+                # the overlapping lines it was meant to untangle.
+                if view_start is not None:
+                    vs = pd.to_datetime(view_start)
+                    # bar timestamps are tz-aware; a bare date string is not
+                    if vs.tzinfo is None:
+                        vs = vs.tz_localize("UTC")
+                    per_line = [pl for pl in per_line
+                                if pd.to_datetime(str(pl[1][1])).tz_convert("UTC") >= vs]
+                for lbl, xs, ys, txs, tys in per_line:
+                    picker_idx.append((lbl, len(fig.data)))
+                    fig.add_trace(go.Scattergl(
+                        x=xs, y=ys, mode="lines", visible=False, showlegend=False,
+                        line=dict(color=colr, width=3.2),
+                        hovertemplate=f"{lbl}<extra></extra>"))
+                    fig.add_trace(go.Scattergl(
+                        x=txs, y=tys, mode="markers", visible=False, showlegend=False,
+                        marker=dict(size=9, color=colr, line=dict(width=1.5, color="#fff")),
+                        hovertemplate="touch<extra></extra>"))
+
+    # ---- the line picker: a dropdown that ISOLATES one trendline ------------------------
+    # Twenty overlapping lines under a single legend toggle cannot be read, and one legend entry per
+    # line is worse. The dropdown keeps the legend at two entries and still reaches any single line.
+    if picker_idx:
+        n_tr = len(fig.data)
+        base = [tr.visible if tr.visible is not None else True for tr in fig.data]
+        picked = {i for _, i in picker_idx} | {i + 1 for _, i in picker_idx}
+
+        def vis_for(sel_first=None):
+            v = list(base)
+            for i in picked:
+                v[i] = False
+            if sel_first is not None:
+                v[sel_first] = True
+                v[sel_first + 1] = True
+                # isolating one line hides the grouped overlay, or you see both at once
+                for j, tr in enumerate(fig.data):
+                    if getattr(tr, "legendgroup", "") in ("support trendline",
+                                                          "resistance trendline"):
+                        v[j] = False
+            return v
+
+        buttons = [dict(label="all lines (grouped)", method="update",
+                        args=[{"visible": vis_for(None)}])]
+        for lbl, i in picker_idx:
+            buttons.append(dict(label=lbl, method="update", args=[{"visible": vis_for(i)}]))
+        fig.update_layout(updatemenus=[dict(
+            buttons=buttons, direction="down", showactive=True,
+            x=0.0, xanchor="left", y=1.10, yanchor="top",
+            bgcolor="rgba(30,34,40,0.95)", bordercolor="#555",
+            font=dict(size=11, color="#ddd"))])
+
+    if view_start is not None:
+        # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown
+        _vs = pd.to_datetime(view_start)
+        if _vs.tzinfo is None:
+            _vs = _vs.tz_localize("UTC")
+        fig.update_xaxes(range=[_vs, t[-1]])
 
     fig.update_layout(
         title=title or "Chart patterns — click the legend to show/hide each one",
