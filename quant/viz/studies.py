@@ -433,7 +433,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         fig.add_trace(go.Scattergl(
             x=t, y=_ema(d["close"], int(p)), mode="lines", name=f"EMA {p}",
             legendgroup=f"ema{p}", line=dict(width=1.4),
-            visible=True if f"ema{p}" in start_visible or "emas" in start_visible else "legendonly",
+            visible=False if f"-ema{p}" in start_visible else True,   # ON by default
             hovertemplate=f"EMA {p}: %{{y:.2f}}<extra></extra>"))
 
     if sr_zones:
@@ -461,6 +461,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         names = list(patterns) if patterns else list(_PD)
         shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
     n = len(d)
+    picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
     for name in names:
         sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
         if not len(sub):
@@ -522,8 +523,58 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 fig.add_trace(go.Scattergl(
                     x=X, y=Y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
                     line=dict(color=colr2, width=wid, dash=dash), hoverinfo="skip"))
+        # WHERE IT CONFIRMED. A shape is only a signal from the bar price closed through its
+        # boundary, and that bar is often far to the right of the shape itself — the median wait on
+        # BTC 15m is 15 bars and a double top waits about 42. Marking it makes the lag visible
+        # instead of leaving the shape looking as though it fired when it formed.
+        fig.add_trace(go.Scattergl(
+            x=[t[int(r.confirm_i)] for r in sub.itertuples()],
+            y=[float(r.entry) for r in sub.itertuples()],
+            mode="markers", legendgroup=name, visible=vis, showlegend=False,
+            marker=dict(size=13, color=colr, symbol="star",
+                        line=dict(width=1.5, color="#fff")),
+            customdata=[[int(r.confirm_i) - int(max(r.pivot_i))] for r in sub.itertuples()],
+            hovertemplate=(f"{label} CONFIRMED here<br>entry %{{y:.2f}}"
+                           "<br>%{customdata[0]} bars after its last pivot<extra></extra>")))
 
-    picker_idx = []          # (label, first trace index) for each individually-selectable line
+        if line_picker:
+            # scope the picker to shapes that CONFIRM inside the opening view. Warm-up history
+            # carries just as many again, and an instance list you have to scroll past a hundred
+            # entries to use is no better than the overlap it replaces.
+            _keep = sub
+            if view_start is not None:
+                _vs0 = pd.to_datetime(view_start)
+                if _vs0.tzinfo is None:
+                    _vs0 = _vs0.tz_localize("UTC")
+                _keep = sub[[pd.to_datetime(str(t[int(r.confirm_i)])).tz_convert("UTC") >= _vs0
+                             for r in sub.itertuples()]]
+            for r in _keep.itertuples():
+                a2, b2 = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
+                ix, iy = [], []
+                for sl, ic in ((r.upper_slope, r.upper_intercept),
+                               (r.lower_slope, r.lower_intercept)):
+                    if sl == sl and ic == ic:
+                        ix += [t[a2], t[b2], None]
+                        iy += [sl * a2 + ic, sl * b2 + ic, None]
+                if not ix:
+                    ix = [t[a2], t[b2], None]
+                    iy = [r.boundary_slope * a2 + r.boundary_intercept,
+                          r.boundary_slope * b2 + r.boundary_intercept, None]
+                picker.append((label, f"{label} @ {pd.to_datetime(str(t[a2])):%b-%d %H:%M}"
+                                      f"  (confirms {pd.to_datetime(str(t[int(r.confirm_i)])):%b-%d %H:%M})",
+                               len(fig.data), int(a2)))
+                fig.add_trace(go.Scattergl(x=ix, y=iy, mode="lines", visible=False,
+                                           showlegend=False, line=dict(color=colr, width=3.2),
+                                           hovertemplate=f"{label}<extra></extra>"))
+                fig.add_trace(go.Scattergl(
+                    x=list(r.touch_t) + [t[int(r.confirm_i)]],
+                    y=list(r.touch_price) + [float(r.entry)],
+                    mode="markers", visible=False, showlegend=False,
+                    marker=dict(size=[9] * len(r.touch_t) + [15], color=colr,
+                                symbol=["circle"] * len(r.touch_t) + ["star"],
+                                line=dict(width=1.5, color="#fff")),
+                    hovertemplate="touch / CONFIRMED<extra></extra>"))
+
     if trendlines:
         from ..indicators.trendlines import trendline_table
         tl = trendline_table(d, **(trendline_kwargs or {}))
@@ -546,10 +597,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 if r.broke:
                     bx.append(t[int(r.end_i)]); by.append(r.y_end)
                 per_line.append((
-                    f"{label.split()[0]} @ {pd.to_datetime(str(t[int(r.start_i)])):%b-%d %H:%M}"
+                    f"{label} @ {pd.to_datetime(str(t[int(r.start_i)])):%b-%d %H:%M}"
                     f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
                     [t[int(r.start_i)], t[int(r.end_i)]], [r.y_start, r.y_end],
-                    list(r.touch_t), list(r.touch_price)))
+                    list(r.touch_t), list(r.touch_price), int(r.start_i), label))
             fig.add_trace(go.Scattergl(
                 x=lx, y=ly, mode="lines", name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
                 legendgroup=label, visible=vis, line=dict(color=colr, width=2.0, dash="dash"),
@@ -574,8 +625,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         vs = vs.tz_localize("UTC")
                     per_line = [pl for pl in per_line
                                 if pd.to_datetime(str(pl[1][1])).tz_convert("UTC") >= vs]
-                for lbl, xs, ys, txs, tys in per_line:
-                    picker_idx.append((lbl, len(fig.data)))
+                for lbl, xs, ys, txs, tys, si, fam in per_line:
+                    picker.append((fam, lbl, len(fig.data), si))
                     fig.add_trace(go.Scattergl(
                         x=xs, y=ys, mode="lines", visible=False, showlegend=False,
                         line=dict(color=colr, width=3.2),
@@ -585,37 +636,68 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         marker=dict(size=9, color=colr, line=dict(width=1.5, color="#fff")),
                         hovertemplate="touch<extra></extra>"))
 
-    # ---- the line picker: a dropdown that ISOLATES one trendline ------------------------
-    # Twenty overlapping lines under a single legend toggle cannot be read, and one legend entry per
-    # line is worse. The dropdown keeps the legend at two entries and still reaches any single line.
-    if picker_idx:
-        n_tr = len(fig.data)
+    # ---- TWO dropdowns: pick a family, then pick one instance inside it ------------------
+    # A single flat list does not scale: with warm-up history it reached 130 entries, which is no
+    # more readable than the overlapping lines it was meant to untangle. The first menu narrows to
+    # one family (S/R zones, support trendlines, rising wedges...), the second isolates a single
+    # occurrence within it. Instances are listed EARLIEST FIRST so the order matches the chart.
+    if picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
-        picked = {i for _, i in picker_idx} | {i + 1 for _, i in picker_idx}
+        owned = {i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
+        fam_groups = {}
+        for fam, lbl, idx, sortk in sorted(picker, key=lambda z: z[3]):
+            fam_groups.setdefault(fam, []).append((lbl, idx))
 
-        def vis_for(sel_first=None):
+        def _grouped(only_family=None):
+            """Restore the normal grouped drawing, optionally showing just one family."""
             v = list(base)
-            for i in picked:
+            for i in owned:
                 v[i] = False
-            if sel_first is not None:
-                v[sel_first] = True
-                v[sel_first + 1] = True
-                # isolating one line hides the grouped overlay, or you see both at once
+            if only_family is not None:
                 for j, tr in enumerate(fig.data):
-                    if getattr(tr, "legendgroup", "") in ("support trendline",
-                                                          "resistance trendline"):
-                        v[j] = False
+                    g = getattr(tr, "legendgroup", "") or ""
+                    if g and g not in ("price", "sr") and not g.startswith("ema"):
+                        v[j] = (g.replace("_", " ") == only_family)
+                    elif g == "sr":
+                        v[j] = (only_family == "S/R zones")
             return v
 
-        buttons = [dict(label="all lines (grouped)", method="update",
-                        args=[{"visible": vis_for(None)}])]
-        for lbl, i in picker_idx:
-            buttons.append(dict(label=lbl, method="update", args=[{"visible": vis_for(i)}]))
-        fig.update_layout(updatemenus=[dict(
-            buttons=buttons, direction="down", showactive=True,
-            x=0.0, xanchor="left", y=1.10, yanchor="top",
-            bgcolor="rgba(30,34,40,0.95)", bordercolor="#555",
-            font=dict(size=11, color="#ddd"))])
+        def _isolate(first):
+            v = list(base)
+            for i in owned:
+                v[i] = False
+            for j, tr in enumerate(fig.data):
+                g = getattr(tr, "legendgroup", "") or ""
+                if g and g not in ("price",) and not g.startswith("ema"):
+                    v[j] = False          # everything else out of the way
+            v[first] = True
+            v[first + 1] = True
+            return v
+
+        fam_buttons = [dict(label="▸ everything", method="update",
+                            args=[{"visible": _grouped(None)}])]
+        if sr_zones:
+            fam_buttons.append(dict(label="S/R zones", method="update",
+                                    args=[{"visible": _grouped("S/R zones")}]))
+        for fam in fam_groups:
+            fam_buttons.append(dict(label=f"{fam}  ({len(fam_groups[fam])})", method="update",
+                                    args=[{"visible": _grouped(fam)}]))
+
+        inst_buttons = [dict(label="▸ all instances", method="update",
+                             args=[{"visible": _grouped(None)}])]
+        for fam, items in fam_groups.items():
+            inst_buttons.append(dict(label=f"── {fam.upper()} ──", method="update",
+                                     args=[{"visible": _grouped(fam)}]))
+            for lbl, idx in items:
+                inst_buttons.append(dict(label=f"    {lbl}", method="update",
+                                         args=[{"visible": _isolate(idx)}]))
+
+        menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
+                    bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
+                    font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
+        fig.update_layout(updatemenus=[
+            dict(buttons=fam_buttons, x=0.0, xanchor="left", **menu),
+            dict(buttons=inst_buttons, x=0.185, xanchor="left", **menu)])
 
     if view_start is not None:
         # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown
@@ -629,7 +711,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         height=height, template="plotly_dark", xaxis_rangeslider_visible=False,
         hovermode="x unified", legend=dict(orientation="v", x=1.01, y=1,
                                            bgcolor="rgba(0,0,0,0.35)"),
-        margin=dict(l=50, r=210, t=60, b=40))
+        margin=dict(l=50, r=210, t=104, b=40),
+        title_x=0.5, title_xanchor="center", title_y=0.985, title_yanchor="top")
     fig.update_yaxes(side="right")
     return fig
 
