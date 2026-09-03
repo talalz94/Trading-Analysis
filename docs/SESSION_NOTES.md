@@ -926,6 +926,52 @@ produced **5 classified events against 1,705 unclassified**. The question is una
 in the negative. Answering it needs either a state that exists on most bars (an EMA slope, a
 structural bias) or far more data.
 
+## Chart viewer (2026-08-31) — notebook 15, and three lessons worth keeping
+
+`quant.viz.pattern_figure` gained the controls needed to actually READ a dense chart. What matters
+here is less the features than what building them revealed.
+
+### WARM-UP HELPS MOST INDICATORS AND HURTS S/R ZONES
+
+Loading history so trendlines, zones and a 200-EMA have something to stand on is right for almost
+everything — and wrong for S/R zones. The zone tracker keeps the `max_zones` most-touched levels,
+and in a trending market those are all OLD. Measured on BTC 5m running 66k to 82k with a two-month
+warm-up: **1 of 40 zones was anywhere near the price on screen**. With a 2,000-bar lookback, 38 are.
+`zone_lookback_bars` therefore builds zones from a BOUNDED history ending at the view, deliberately
+different from every other indicator on the chart.
+
+Two related traps in the same code: `max_zones` caps zones held SIMULTANEOUSLY, not rows — each zone
+emits a row per price revision, so 40 zones produced 1,366 segments and the legend read "S/R zones
+(767)". Drawing every row also stacks a zone's whole history of slightly-different levels; only the
+LAST revision is the level in force.
+
+### WARM-UP SHOULD BE COMPUTED, NOT DRAWN
+
+The browser was handed all 20,161 candles to display 2,593. Everything is now calculated on the full
+frame and drawn from `view_start` — 87% fewer points, plus patterns that confirmed entirely inside
+the warm-up and trendlines that died before the window opened are dropped.
+
+### PLOTLY CAN CASCADE, THROUGH THE LAYOUT PATCH
+
+A dropdown of 130 entries is no more readable than the overlapping lines it replaces. Plotly has no
+native cascading menu, but a button's `update` method carries a LAYOUT patch alongside the trace
+patch, and a menu's buttons are a layout property — so the family menu rewrites
+`updatemenus[1].buttons`. Picking "support trendline" leaves the instance menu showing only support
+trendlines.
+
+Also added: EMA overlays (on by default — they were previously added as `legendonly`, so they
+appeared in the legend and nowhere else), and a STAR at each pattern's confirmation bar with the bar
+count since its last pivot in the hover. That lag is large and was invisible: median 15 bars on BTC
+15m, about 42 for a double top.
+
+### A PROCESS NOTE THAT COST TWO ROUNDS
+
+The generated notebook was overwritten twice by the user's own edits (open in Jupyter, dates changed,
+saved). On top of that, a builder patch anchored on a line ending `fig` silently did nothing because
+the cell ends `# fig` — `str.replace` does not complain when it matches nothing. **Patch notebooks IN
+PLACE and assert every anchor.** Regenerating destroys the user's settings; unasserted replaces
+destroy the edit without telling you.
+
 ## Not done / next
 
 * The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,

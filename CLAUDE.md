@@ -164,7 +164,12 @@ quant/
 │   ├── studies.py       #   pattern_figure (candles + chart-pattern SHAPES: pivots, both trendlines,
 │   │                    #     neckline and measured-move target, one legend toggle each, + S/R zones),
 │   │                    #     pattern_figure(trendlines=True) adds the standalone trendlines with an
-│   │                    #     X at each break, on their own legend toggles),
+│   │                    #     X at each break, on their own legend toggles; emas=, view_start=
+│   │                    #     (warm-up is COMPUTED but not DRAWN), line_picker= (CASCADING dropdowns:
+│   │                    #     the family menu rewrites the instance menu via the layout patch),
+│   │                    #     zone_lookback_bars= (S/R zones from BOUNDED history -- warm-up makes
+│   │                    #     them stale in a trend: 1 of 40 near price vs 38 at a 2000-bar lookback),
+│   │                    #     and a STAR at each pattern's confirmation bar),
 │   │                    #     add_pattern_overlays (candlestick + chart-pattern markers and their
 │   │                    #     entry/stop/target levels; one legend group per pattern, default OFF),
 │   │                    #     studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup
