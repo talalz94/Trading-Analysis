@@ -477,13 +477,13 @@ def test_tuned_shapes_stay_causal(rnd):
 
 def test_pattern_figure_tuned_draws_without_a_shared_detect_config(rnd):
     from quant.viz.studies import pattern_figure
-    fig = pattern_figure(rnd, tuned=True, sr_zones=False)
+    fig = pattern_figure(rnd, tuned=True, sr_zones=False, emas=())
     drawn = {t.legendgroup for t in fig.data if t.legendgroup}
     assert drawn, "tuned figure drew nothing"
     assert drawn <= set(CHART_PATTERNS), f"unexpected legend groups: {drawn - set(CHART_PATTERNS)}"
     # and the per_pattern route must reach the same place as tuned=True
     from quant.indicators import tuned_specs
-    same = pattern_figure(rnd, per_pattern=tuned_specs(), sr_zones=False)
+    same = pattern_figure(rnd, per_pattern=tuned_specs(), sr_zones=False, emas=())
     assert {t.legendgroup for t in same.data if t.legendgroup} == drawn
 
 
@@ -900,3 +900,15 @@ def test_a_trendline_that_never_lived_is_not_recorded(rnd):
     tl = trendline_table(add_trendlines(rnd))
     assert (tl["end_i"] >= tl["born_i"]).all(), "a line ends before it was born"
     assert (tl["end_i"] >= 0).all()
+
+
+def test_emas_are_drawn_without_being_asked_for(rnd):
+    """They default ON. A caller that predates the feature -- an un-updated notebook cell, say --
+    still gets them, which is the only version of this fix that survives a stale caller."""
+    from quant.viz.studies import pattern_figure
+    fig = pattern_figure(rnd, patterns=[], sr_zones=False, trendlines=False)
+    emas = [t for t in fig.data if t.name and str(t.name).startswith("EMA")]
+    assert len(emas) == 4, f"expected 4 EMAs by default, got {[t.name for t in emas]}"
+    assert all(t.visible is True for t in emas), "EMAs must be visible, not legendonly"
+    bare = pattern_figure(rnd, patterns=[], sr_zones=False, trendlines=False, emas=())
+    assert not [t for t in bare.data if t.name and str(t.name).startswith("EMA")]
