@@ -912,3 +912,16 @@ def test_emas_are_drawn_without_being_asked_for(rnd):
     assert all(t.visible is True for t in emas), "EMAs must be visible, not legendonly"
     bare = pattern_figure(rnd, patterns=[], sr_zones=False, trendlines=False, emas=())
     assert not [t for t in bare.data if t.name and str(t.name).startswith("EMA")]
+
+
+def test_isolating_a_trendline_still_shows_where_it_confirmed_and_broke(rnd):
+    """The grouped view marks the break with an X; the isolated view was drawing only the touch
+    dots, so the two events that matter — when the line became tradable, and when it failed —
+    disappeared exactly when you zoomed in on one line to study it."""
+    from quant.viz.studies import pattern_figure
+    fig = pattern_figure(rnd, patterns=[], sr_zones=False, trendlines=True, emas=())
+    hidden = [t for t in fig.data if t.visible is False and getattr(t, "text", None)]
+    assert hidden, "no isolated per-line traces were built"
+    labels = {str(x) for t in hidden for x in (t.text or [])}
+    assert any("CONFIRMED" in l for l in labels), "isolated line never marks where it confirmed"
+    assert any("BROKE" in l for l in labels), "isolated line never marks where it broke"
