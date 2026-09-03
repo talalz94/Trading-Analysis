@@ -972,6 +972,62 @@ the cell ends `# fig` — `str.replace` does not complain when it matches nothin
 PLACE and assert every anchor.** Regenerating destroys the user's settings; unasserted replaces
 destroy the edit without telling you.
 
+## Multi-timeframe patterns on one chart (`tf_frames=`)
+
+`pattern_figure(df_15m, tf_frames={"4h": df_4h, "1h": df_1h})` draws other timeframes' shapes and
+trendlines over the chart you are watching. Load the frames with `quant.data.tf_frames`.
+
+**Why it is additive rather than a rewrite.** Everything `pattern_figure` emits is already
+`(timestamp, price)`, and a fitted slope is only ever evaluated at an index *of the frame it was
+fitted on*. So each layer keeps its own `t` array, its own view index and its own bar count, and the
+timestamp is the only coordinate the frames share. No index remapping exists anywhere in the feature.
+The chart layer's traces come out byte-identical with extra layers loaded — asserted in
+`test_extra_timeframes_leave_the_chart_timeframes_own_drawing_untouched`.
+
+**Causality.** Bars carry their OPEN time everywhere in this project, so a 4h pattern confirming on
+the bar stamped 12:00 is not knowable until 16:00. Events (the confirmation star, the trendline break
+X, the "line confirmed" diamond, the right end of an extended line) are stamped at `open + interval`;
+geometry (left ends, touch pivots) stays at the open, where the candle sits. The interval is
+`median(diff(t))` of the frame itself — there is no timeframe-string parser in the drawing path, so a
+relabelled or gappy frame still reports the truth. Same discipline as `align_timeframes(shift_bars=1)`.
+
+**The engineering problem was payload size, not drawing.** Dropdown buttons carry a `visible` vector
+as long as the whole trace list, so the menu costs *buttons x traces*. Naively adding four timeframes
+to the nine-day BTC 15m window gave **1,027 traces x 479 buttons = 9.8 MB of dropdown JSON and an
+11.4 s build** — a chart that does not open, which is worse than one that is cluttered. Three changes
+brought it to **447 traces / 67 buttons / 1.23 MB**:
+
+* a **third cascading menu was rejected** — it nests multiplicatively (a timeframe button carries the
+  family list, whose buttons each carry an instance list). The timeframe folds into the family label
+  instead, and menu 1 groups families under per-timeframe headers;
+* **each instance is listed once.** It used to appear in the initial menu, under its timeframe and
+  under its family; three copies of the dominant term was 1.1 MB of the 1.6 MB. Wide selections now
+  list families, and the family itself lists its instances;
+* **caps**: `max_picker_instances` (60) bounds what the extra layers may add to the dropdown between
+  them — shared out evenly, unspent budget rolling from coarse to fine — and `max_shapes_per_tf` (40)
+  bounds shapes and trendlines per pattern per timeframe. The chart's own picker is never trimmed.
+
+**Measured cost** (BTCUSDT, view 2026-06-01 -> 2026-06-10, 800 bars warm-up per timeframe):
+
+| tf | bars | detect | shapes | confirming in view | build with it added |
+|---|---|---|---|---|---|
+| 4h | 859 | 0.15 s | 7 | **0** | — |
+| 1h | 1,033 | 0.18 s | 8 | 3 | 5.5 s (with 4h) |
+| 15m (chart) | 1,729 | 0.46 s | 24 | 11 | — |
+| 5m | 3,457 | 0.90 s | 29 | 23 | 6.9 s |
+| 1m | 14,401 | 4.88 s | 174 | **155** | 16.7 s |
+
+**Coarse timeframes need a WIDE view; fine ones need a NARROW one.** A 4h shape spans 100-200 4h
+bars = 17-33 days, so over a nine-day window 4h confirmed **nothing** — that is arithmetic, not a
+bug. At the other end 1m confirmed 155 shapes over the same window, which is the clutter rather than
+a feature. `PATTERN_TFS = ("4h", "1h")` is the useful default; reach for 1m/5m on a one- or two-day
+window.
+
+**`y_from_price` (new, on by default).** A 1h falling wedge that began before the window ran from
+86,000 down to a 51,800 apex, and plotly's autorange stretched a 60k-76k chart out to 50k-85k,
+leaving the price action a third of the pane. The line was correct — it really is that tall. The
+y-axis is now scaled to the candles on screen. Pass `y_from_price=False` for the old behaviour.
+
 ## Not done / next
 
 * The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,
@@ -992,3 +1048,6 @@ destroy the edit without telling you.
 * Cross-instrument for chart patterns still needs more gold data to be answerable (1 of 9 windows
   clears the 40-trade floor).
 * The parked ideas in `memory/parked-strategy-ideas.md` remain parked.
+* Multi-timeframe patterns are a DRAWING feature only. Nothing about whether a 4h shape confirmed
+  under a 1h trend is worth trading has been measured, and the phase-12 screen has not been run on
+  any cross-timeframe combination. Expect nothing until it has been.

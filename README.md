@@ -191,6 +191,28 @@ works. Crypto/FX/stocks/indices become available as their data providers are add
 - **Reports:** `quant.reporting.to_html(res, "reports/run.html", df=df, price_df=df)` — offline,
   shareable (stats + price/trades + equity/drawdown + monthly + hour×weekday heatmaps).
 - **Charts (Jupyter):** `quant.viz.ResearchChart(df).add_ema(50).add_trades(res.trades).show()`.
+- **Pattern viewer:** `quant.viz.pattern_figure(df, tuned=True, trendlines=True)` draws chart-pattern
+  GEOMETRY — the fitted boundaries, the pivots they pass through, the neckline that had to break and
+  the measured-move target — plus standalone support/resistance trendlines, S/R zones and EMAs, each
+  on its own legend toggle, with two cascading dropdowns to isolate a single instance.
+  [`notebooks/15_tuned_pattern_viewer.ipynb`](notebooks/15_tuned_pattern_viewer.ipynb) is the ready
+  configuration; notebook 14 is the same thing with one shared detector setting.
+- **Patterns from other timeframes on one chart:**
+
+  ```python
+  from quant.data import get_ohlcv, tf_frames
+  df     = get_ohlcv("BTCUSDT", "15m", start="2026-04-01", end="2026-06-10")
+  frames = tf_frames("BTCUSDT", ("4h", "1h"), view_start="2026-06-01", end="2026-06-10")
+  fig    = pattern_figure(df, tuned=True, trendlines=True, view_start="2026-06-01",
+                          tf_frames=frames)
+  ```
+
+  Each layer is detected in its own bar space and placed by timestamp. Higher-timeframe **events are
+  stamped at the bar's CLOSE** — bars carry their open time, so a 4h star drawn at the open would be
+  a four-hour lookahead. Weight encodes timeframe (coarser is heavier, finer is thinner and
+  semi-transparent); colour still means direction; only the chart's own timeframe is visible at open.
+  Coarse timeframes need a WIDE view and fine ones a NARROW one: over a nine-day window 4h confirmed
+  nothing at all, while 1m confirmed 155 shapes.
 
 ---
 
@@ -541,7 +563,9 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 - [`experiments/README.md`](experiments/README.md) — inference layer how-to
 - [`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md) — running context: research findings, gotchas, next steps
 - [`notebooks/`](notebooks/) — `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
-  `04_trend_runner_leverage` · `05_simple_1m_ema_breakout`
+  `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `14_pattern_viewer` ·
+  `15_tuned_pattern_viewer` (calibrated settings + trendlines + other timeframes) ·
+  `16_trendline_research`
 
 ## License
 This project is released under the MIT License.

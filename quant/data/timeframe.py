@@ -91,3 +91,70 @@ def build_mtf(
         htf = resample_ohlcv(base_df, rule)
         others[rule] = fn(htf)
     return align_timeframes(base_df, others, time_col=time_col, shift_bars=shift_bars)
+
+
+# --------------------------------------------------------------------------------------------
+# Multi-timeframe FRAMES (as opposed to multi-timeframe COLUMNS, which is what build_mtf gives)
+# --------------------------------------------------------------------------------------------
+# `build_mtf` folds higher-timeframe FEATURES onto the base grid, which is what a strategy needs.
+# Drawing is a different problem: to plot a 4h pattern you need the 4h FRAME it was fitted on,
+# because its slopes are per-4h-bar and its indices index that frame. So these return frames.
+
+_TF_UNIT_MINUTES = {"m": 1, "min": 1, "h": 60, "d": 1440, "w": 10080}
+
+
+def tf_minutes(tf: str) -> int:
+    """Minutes in one bar of `tf` ('1m', '15m', '1h', '4h', '1d', '1w')."""
+    s = str(tf).strip().lower()
+    i = 0
+    while i < len(s) and (s[i].isdigit() or s[i] == "."):
+        i += 1
+    n, unit = s[:i], s[i:]
+    if not n or unit not in _TF_UNIT_MINUTES:
+        raise ValueError(f"cannot parse timeframe {tf!r}; expected e.g. '15m', '1h', '4h', '1d'")
+    return int(float(n) * _TF_UNIT_MINUTES[unit])
+
+
+def tf_frames(symbol: str, tfs, *, view_start, end, warmup_bars: int = 800,
+              source: str = "binance", market: str = "spot", tz: str = "UTC",
+              **kwargs) -> Dict[str, pd.DataFrame]:
+    """Load one OHLCV frame per timeframe, each with the SAME warm-up measured in BARS.
+
+    Detection cares about bars, not about wall-clock: a pattern needs `min_span_bars` bars of its
+    own timeframe, and the zigzag needs pivots before that. So a fixed calendar start gives 4h
+    almost nothing while giving 1m far more than it can use. Each frame therefore starts at
+    ``view_start - warmup_bars x <one bar of that timeframe>``.
+
+    Frames are fetched rather than resampled from a finer one on purpose. Resampling is free, but
+    it caps the coarse frame's history at the finer frame's start, and coarse timeframes are
+    exactly the ones that need a long run-up: a 4h shape spans 100-200 4h bars, which is 17-33
+    days for the shape alone. `get_ohlcv` caches incrementally, so the fetch is paid once.
+
+    Returns ``{tf: DataFrame}`` ordered coarsest first, which is also the order they should be
+    drawn in — coarse structure underneath, fine detail on top.
+    """
+    from .loader import get_ohlcv
+
+    vs = pd.Timestamp(view_start)
+    if vs.tzinfo is None:
+        vs = vs.tz_localize("UTC")
+    out: Dict[str, pd.DataFrame] = {}
+    for tf in sorted(dict.fromkeys(tfs), key=tf_minutes, reverse=True):
+        start = (vs - pd.Timedelta(minutes=tf_minutes(tf) * int(warmup_bars))).strftime("%Y-%m-%d")
+        out[tf] = get_ohlcv(symbol, tf, start=start, end=end, source=source,
+                            market=market, tz=tz, **kwargs).reset_index(drop=True)
+    return out
+
+
+def bar_interval(df: pd.DataFrame, *, time_col: str = "t") -> pd.Timedelta:
+    """One bar's duration, measured from the frame itself rather than from a label.
+
+    Used to stamp a higher-timeframe EVENT at the bar's CLOSE. Bars are stamped at their OPEN
+    everywhere in this project, so an event read off bar `i` of a 4h frame is only knowable four
+    hours after that timestamp; drawing it at the open would be a four-hour lookahead on a 15m
+    chart. The median of the diffs is exact for a regular grid and survives gaps and DST.
+    """
+    if time_col not in df.columns or len(df) < 2:
+        return pd.Timedelta(0)
+    d = pd.to_datetime(df[time_col]).diff().dropna()
+    return pd.Timedelta(d.median()) if len(d) else pd.Timedelta(0)

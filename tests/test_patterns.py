@@ -7,6 +7,8 @@ routinely fail this, usually by flagging a shape at its extreme rather than at i
 """
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -925,3 +927,228 @@ def test_isolating_a_trendline_still_shows_where_it_confirmed_and_broke(rnd):
     labels = {str(x) for t in hidden for x in (t.text or [])}
     assert any("CONFIRMED" in l for l in labels), "isolated line never marks where it confirmed"
     assert any("BROKE" in l for l in labels), "isolated line never marks where it broke"
+
+
+# ---------------------------------------------------------------------------
+# MULTI-TIMEFRAME drawing: patterns from other timeframes on one chart
+#
+# The frames share exactly one coordinate — the timestamp — so a shape fitted on 4h bars can be
+# drawn over a 15m chart with no index remapping, provided each layer keeps its own bar space. The
+# two things that can go wrong are CAUSALITY (a higher-timeframe bar is stamped at its OPEN but is
+# only knowable at its CLOSE) and SIZE (every dropdown button carries a visibility vector as long as
+# the trace list, so an uncapped layer makes the chart unopenable rather than merely cluttered).
+# ---------------------------------------------------------------------------
+def _marker_points(trace):
+    """(x, symbol) for every point of a marker trace; symbols may be per-point or shared."""
+    xs = list(trace.x or [])
+    syms = trace.marker.symbol
+    return zip(xs, (list(syms) if isinstance(syms, (list, tuple)) else [syms] * len(xs)))
+
+
+def _tf_layer(fig, tf):
+    """Every grouped trace belonging to timeframe `tf`'s layer."""
+    return [tr for tr in fig.data if (getattr(tr, "legendgroup", "") or "").startswith(f"{tf}::")]
+
+
+def _n_picker(fig):
+    """Picker instances in a figure. Each costs exactly two hidden traces."""
+    return sum(1 for tr in fig.data if tr.visible is False) // 2
+
+
+def test_extra_timeframes_leave_the_chart_timeframes_own_drawing_untouched(rnd):
+    """Adding a layer must not perturb the chart you already had.
+
+    The same discipline as golden parity in the kernel: the feature is additive, so every trace the
+    single-timeframe chart drew has to come out identical with a second layer loaded.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    h1 = resample_ohlcv(rnd, "1h")
+    plain = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True)
+    multi = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames={"1h": h1})
+
+    assert len(multi.data) > len(plain.data)          # the layer really was drawn
+    a = json.loads(plain.to_json())["data"]
+    b = json.loads(multi.to_json())["data"]
+    assert a == b[:len(a)]
+
+
+def test_a_higher_timeframe_event_is_drawn_where_that_bar_CLOSED(rnd):
+    """A 1h pattern confirming on the bar stamped 12:00 is not knowable until 13:00.
+
+    Bars carry their OPEN time everywhere in this project. Drawing a higher-timeframe confirmation
+    at the open would show a signal up to one whole HTF bar before it existed — an hour here, four
+    hours for a 4h layer. Events therefore go at the bar close; the geometry they hang off (the
+    touch pivots) stays at the open, which is where that candle physically sits.
+    """
+    from quant.data import bar_interval, resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    h1 = resample_ohlcv(rnd, "1h")
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames={"1h": h1})
+
+    step = bar_interval(h1)
+    assert step == pd.Timedelta(hours=1)
+    opens = set(pd.to_datetime(h1["t"]))
+    closes = {o + step for o in opens}
+
+    n_events = n_touches = 0
+    for tr in _tf_layer(fig, "1h"):
+        if getattr(tr, "mode", None) != "markers":
+            continue
+        for x, sym in _marker_points(tr):
+            if x is None:
+                continue
+            ts = pd.Timestamp(str(x))
+            ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+            if sym in ("star", "x", "diamond"):
+                n_events += 1
+                assert ts in closes, f"{sym} drawn at {ts}, which is not a 1h bar close"
+            else:
+                n_touches += 1
+                assert ts in opens, f"touch drawn at {ts}, which is not a 1h bar open"
+    assert n_events and n_touches, "nothing was drawn, so nothing was tested"
+
+
+def test_a_higher_timeframe_layer_lands_in_the_same_place_whatever_it_is_drawn_over(rnd):
+    """The layer is a property of ITS OWN frame, not of whatever chart it happens to sit on."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    h1 = resample_ohlcv(rnd, "1h")
+
+    def stars(chart):
+        fig = pattern_figure(chart, sr_zones=False, emas=(), tf_frames={"1h": h1})
+        return sorted(str(x) for tr in _tf_layer(fig, "1h")
+                      if getattr(tr, "mode", None) == "markers"
+                      for x, sym in _marker_points(tr) if sym == "star" and x is not None)
+
+    assert stars(rnd) == stars(resample_ohlcv(rnd, "30min")) != []
+
+
+def test_the_extra_timeframes_cannot_flood_the_picker(rnd):
+    """Buttons x traces is the cost, so the buttons have to be bounded, not merely tidy.
+
+    Uncapped, a 1m layer over a nine-day window contributed 335 instance entries on its own and took
+    the dropdown JSON to ~9.8 MB. A chart that will not open is worse than one that is cluttered.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h"), "30min": resample_ohlcv(rnd, "30min")}
+    kw = dict(sr_zones=False, emas=(), trendlines=True)
+    plain = _n_picker(pattern_figure(rnd, **kw))
+    tight = _n_picker(pattern_figure(rnd, tf_frames=frames, max_picker_instances=4, **kw))
+    loose = _n_picker(pattern_figure(rnd, tf_frames=frames, max_picker_instances=40, **kw))
+
+    assert tight - plain <= 4                 # the budget is a hard cap on the EXTRA layers
+    assert plain < tight < loose              # ...and the chart's own picker is never trimmed
+
+
+def test_max_shapes_per_tf_bounds_what_each_extra_pattern_draws(rnd):
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True,
+                         tf_frames={"30min": resample_ohlcv(rnd, "30min")}, max_shapes_per_tf=1)
+    named = [tr.name for tr in _tf_layer(fig, "30min") if tr.name]
+    assert named
+    for name in named:                        # "30min · double top (1)" / "... (1, 0 broke)"
+        assert name.rstrip(")").rsplit("(", 1)[-1].split(",")[0] == "1"
+
+
+def test_extra_timeframes_start_hidden_and_are_drawn_at_a_different_weight(rnd):
+    """Colour keeps meaning DIRECTION; weight is what tells you which timeframe you are looking at."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    fig = pattern_figure(rnd, sr_zones=False, emas=(),
+                         tf_frames={"1h": resample_ohlcv(rnd, "1h")})
+    layer = [tr for tr in _tf_layer(fig, "1h") if tr.name]
+    assert layer, "nothing drawn on the extra layer"
+    for tr in layer:
+        assert tr.visible == "legendonly"     # the chart opens on its own timeframe only
+        assert tr.name.startswith("1h · ")
+    # coarser than the chart, so heavier than the chart's own 2.6
+    widths = [tr.line.width for tr in layer if getattr(tr, "mode", None) == "lines"]
+    assert widths and max(widths) > 2.6
+
+
+def test_tf_trendlines_follows_the_chart_unless_it_is_asked_otherwise(rnd):
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h")}
+
+    def has_lines(**kw):
+        fig = pattern_figure(rnd, sr_zones=False, emas=(), tf_frames=frames, **kw)
+        return any("trendline" in (tr.name or "") for tr in _tf_layer(fig, "1h"))
+
+    assert not has_lines(trendlines=False)                        # follows the chart
+    assert has_lines(trendlines=True)
+    assert has_lines(trendlines=False, tf_trendlines=True)        # ...unless overridden
+    assert not has_lines(trendlines=True, tf_trendlines=False)
+
+
+def test_tf_minutes_parses_the_timeframe_strings_the_data_layer_uses():
+    from quant.data import tf_minutes
+
+    got = [tf_minutes(x) for x in ("1m", "5m", "15m", "1h", "4h", "1d")]
+    assert got == [1, 5, 15, 60, 240, 1440]
+    with pytest.raises(ValueError):
+        tf_minutes("fortnight")
+
+
+def test_bar_interval_is_read_off_the_frame_not_off_a_label(rnd):
+    """No timeframe string is involved, so a relabelled or gappy frame still reports the truth."""
+    from quant.data import bar_interval, resample_ohlcv
+
+    assert bar_interval(rnd) == pd.Timedelta(minutes=15)
+    assert bar_interval(resample_ohlcv(rnd, "4h")) == pd.Timedelta(hours=4)
+    gappy = rnd.drop(index=range(100, 140)).reset_index(drop=True)
+    assert bar_interval(gappy) == pd.Timedelta(minutes=15)      # the median survives a gap
+
+
+def test_tf_frames_gives_every_timeframe_the_same_history_in_BARS(monkeypatch):
+    """A fixed calendar start starves 4h and drowns 1m; detection counts bars, so the loader does too."""
+    from quant.data import timeframe as tfmod
+
+    seen = {}
+
+    def fake_get_ohlcv(symbol, tf, *, start, end, source, market, tz, **kw):
+        seen[tf] = start
+        t = pd.date_range(start, end, freq="1h", tz="UTC")[:5]
+        return pd.DataFrame({"open_time": t, "t": t, "open": 1.0, "high": 1.0,
+                             "low": 1.0, "close": 1.0, "volume": 1.0})
+
+    monkeypatch.setattr("quant.data.loader.get_ohlcv", fake_get_ohlcv)
+    out = tfmod.tf_frames("BTCUSDT", ("1h", "4h"), view_start="2026-06-01", end="2026-06-10",
+                          warmup_bars=100)
+
+    assert list(out) == ["4h", "1h"]                       # coarsest first: structure underneath
+    # 100 bars of warm-up is 100 hours for 1h and 400 for 4h, floored to a whole day because the
+    # cache is date-granular — flooring can only ever hand detection MORE bars than were asked for
+    for tf, hours in (("1h", 100), ("4h", 400)):
+        want = (pd.Timestamp("2026-06-01") - pd.Timedelta(hours=hours)).floor("D")
+        assert pd.Timestamp(seen[tf]) == want
+
+
+def test_the_y_axis_is_scaled_to_the_candles_not_to_the_geometry_hanging_off_them(rnd):
+    """A pattern that began before the window can be far taller than the window.
+
+    Measured: a 1h falling wedge starting at 86,000 and converging at 51,800 stretched a 60k-76k
+    chart out to 50k-85k, leaving the price action a third of the pane. The line was correct — it
+    really is that tall — but the chart is there to show price.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h")}
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames)
+    lo, hi = float(rnd["low"].min()), float(rnd["high"].max())
+    y0, y1 = fig.layout.yaxis.range
+    assert y0 < lo and y1 > hi                       # the candles all fit...
+    assert (y1 - y0) < 1.5 * (hi - lo)               # ...without the pane being given away
+    assert pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames,
+                          y_from_price=False).layout.yaxis.range is None
