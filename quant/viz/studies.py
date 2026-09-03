@@ -422,16 +422,36 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
     d = df.reset_index(drop=True)
     t = d[time_col].to_numpy() if time_col in d.columns else np.arange(len(d))
+
+    # WARM-UP IS COMPUTED, NOT DRAWN. Indicators need the history; the browser does not. Rendering
+    # all 20,000 bars to look at 2,600 made the chart crawl, so everything below is drawn from
+    # `v0` onward while still being CALCULATED on the whole frame.
+    v0 = 0
+    if view_start is not None and time_col in d.columns:
+        _vs = pd.to_datetime(view_start)
+        if _vs.tzinfo is None:
+            _vs = _vs.tz_localize("UTC")
+        # compare as UTC-naive on both sides; the column is tz-aware and a bare date string is not
+        _tt = pd.to_datetime(d[time_col])
+        _tt = _tt.dt.tz_convert("UTC").dt.tz_localize(None) if _tt.dt.tz is not None else _tt
+        v0 = int(np.searchsorted(_tt.to_numpy(), np.datetime64(_vs.tz_localize(None))))
+        v0 = max(0, min(v0, len(d) - 1))
+    dv = d.iloc[v0:]
+    tv = t[v0:]
+    # the price band actually on screen — used to drop levels that are no longer anywhere near price
+    _lo, _hi = float(dv["low"].min()), float(dv["high"].max())
+    _pad = 0.15 * max(_hi - _lo, 1e-9)
+
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=t, open=d["open"], high=d["high"], low=d["low"], close=d["close"],
+        x=tv, open=dv["open"], high=dv["high"], low=dv["low"], close=dv["close"],
         name="price", increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
         showlegend=False))
 
     for p in (emas or ()):
         from ..indicators import ema as _ema
         fig.add_trace(go.Scattergl(
-            x=t, y=_ema(d["close"], int(p)), mode="lines", name=f"EMA {p}",
+            x=tv, y=_ema(d["close"], int(p)).to_numpy()[v0:], mode="lines", name=f"EMA {p}",
             legendgroup=f"ema{p}", line=dict(width=1.4),
             visible=False if f"-ema{p}" in start_visible else True,   # ON by default
             hovertemplate=f"EMA {p}: %{{y:.2f}}<extra></extra>"))
@@ -440,9 +460,16 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         zt = sr_zone_table(d, left=zones_left, right=zones_right, cluster_pct=cluster_pct,
                            max_zones=max_zones, time_col=time_col)
         zt = zt[zt["touches"] >= min_touches]
+        # A zone is a level price is respecting NOW. Two filters, both about relevance rather than
+        # correctness: the segment has to reach the visible window at all, and its price has to be
+        # near the prices on screen. Without the second, a long warm-up in a trending market fills
+        # the chart with levels from 20% below — 767 segments, none of them next to price.
+        if len(zt):
+            zt = zt[(zt["end_i"] >= v0)
+                    & zt["price"].between(_lo - _pad, _hi + _pad)]
         xs, ys, widths = [], [], []
         for r in zt.itertuples():
-            xs += [r.start_t, r.end_t, None]
+            xs += [max(r.start_t, tv[0]) if r.start_i < v0 else r.start_t, r.end_t, None]
             ys += [r.price, r.price, None]
             widths.append(r.touches)
         if xs:
@@ -462,6 +489,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
     n = len(d)
     picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
+    if len(shapes) and v0 > 0:
+        # a shape that confirmed entirely inside the warm-up is history: it is what taught the
+        # detector, not something to draw over the window you asked to look at
+        shapes = shapes[shapes["confirm_i"] >= v0]
     for name in names:
         sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
         if not len(sub):
@@ -578,6 +609,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     if trendlines:
         from ..indicators.trendlines import trendline_table
         tl = trendline_table(d, **(trendline_kwargs or {}))
+        if len(tl) and v0 > 0:
+            tl = tl[tl["end_i"] >= v0]        # lines that died before the window opened
         for kind, label, colr in ((-1, "support trendline", "#2ecc71"),
                                   (+1, "resistance trendline", "#e74c3c")):
             sub = tl[tl["kind"] == kind] if len(tl) else tl
