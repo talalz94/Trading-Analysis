@@ -378,7 +378,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
                    extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
                    per_pattern=None, trendlines: bool = False, trendline_kwargs=None,
-                   emas=(), view_start=None, line_picker: bool = True,
+                   emas=(20, 50, 100, 200), view_start=None, line_picker: bool = True,
                    zone_lookback_bars: int = 2000):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
@@ -391,7 +391,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     and out one at a time. `start_visible` names the ones that should be on when the chart opens;
     everything else starts in `legendonly`. S/R zones are their own toggle.
 
-    `emas=(20, 50, 100, 200)` overlays moving averages, one legend toggle each.
+    `emas` overlays moving averages, one legend toggle each. It DEFAULTS to (20, 50, 100, 200)
+    rather than to nothing on purpose: a caller that has not been updated still gets them. Pass
+    `emas=()` for a bare chart.
 
     `zone_lookback_bars` is how far back S/R zones are built from, counted back from the start of
     the view. Warm-up helps most indicators and HURTS this one: the tracker keeps the most-touched
