@@ -71,7 +71,11 @@ quant/
 │   ├── cache.py         #   generic incremental Parquet cache for range-based providers
 │   ├── store.py         #   pushdown load (column projection + date range) via polars/pyarrow
 │   ├── loader.py        #   get_ohlcv(): fast cache path OR incremental fetch
-│   └── timeframe.py     #   resample_ohlcv + align_timeframes + build_mtf (anti-lookahead)
+│   └── timeframe.py     #   resample_ohlcv + align_timeframes + build_mtf (anti-lookahead) +
+│                        #     tf_frames() = one FRAME per timeframe with equal history IN BARS
+│                        #     (build_mtf gives multi-timeframe COLUMNS; drawing a 4h shape needs
+│                        #     the 4h FRAME, because its slopes are per-4h-bar), tf_minutes(),
+│                        #     bar_interval() = a bar's duration read off the frame, not a label
 ├── indicators/          # vectorized compute ONLY (no plotting); recursive parts in numba
 │   ├── overlays.py      #   ema, sma, add_emas, add_smas
 │   ├── oscillators.py   #   add_rsi (Wilder), add_macd, add_stochastic, add_rsi_divergence
@@ -167,6 +171,18 @@ quant/
 │   │                    #     X at each break, on their own legend toggles; emas=, view_start=
 │   │                    #     (warm-up is COMPUTED but not DRAWN), line_picker= (CASCADING dropdowns:
 │   │                    #     the family menu rewrites the instance menu via the layout patch),
+│   │                    #     tf_frames={"1h": df_1h} draws OTHER TIMEFRAMES' patterns and
+│   │                    #     trendlines on one chart -- each layer detected in its OWN bar space
+│   │                    #     and placed by TIMESTAMP, the only coordinate the frames share, so no
+│   │                    #     index remapping. HTF EVENTS are stamped at the bar CLOSE (bars carry
+│   │                    #     their open, so a 4h star at the open is a 4h lookahead); geometry
+│   │                    #     stays at the open. WEIGHT encodes timeframe, colour still means
+│   │                    #     direction, only the chart's own timeframe is visible at open. The
+│   │                    #     timeframe folds into the family (`4h - rising wedge`) rather than
+│   │                    #     adding a third menu: buttons carry a visibility vector as long as the
+│   │                    #     trace list, so a nested cascade cost 9.8 MB of JSON. max_picker_
+│   │                    #     instances= / max_shapes_per_tf= bound it; y_from_price= scales the
+│   │                    #     y-axis to the CANDLES, not to geometry that may be far taller,
 │   │                    #     zone_lookback_bars= (S/R zones from BOUNDED history -- warm-up makes
 │   │                    #     them stale in a trend: 1 of 40 near price vs 38 at a 2000-bar lookback),
 │   │                    #     and a STAR at each pattern's confirmation bar),

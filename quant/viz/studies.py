@@ -379,7 +379,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
                    per_pattern=None, trendlines: bool = False, trendline_kwargs=None,
                    emas=(20, 50, 100, 200), view_start=None, line_picker: bool = True,
-                   zone_lookback_bars: int = 2000):
+                   zone_lookback_bars: int = 2000, tf_frames=None, tf_patterns=None,
+                   tf_trendlines=None, max_picker_instances: int = 60,
+                   max_shapes_per_tf: int = 40, y_from_price: bool = True):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -420,6 +422,33 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     `atr_mult` and that sizes the zigzag for the whole pass. `per_pattern={name: {...}}` does the
     same with settings you supply. Both override `detect_kwargs` for pattern detection.
 
+    MULTI-TIMEFRAME. `tf_frames={"1h": df_1h, "4h": df_4h}` draws patterns and trendlines detected
+    on OTHER timeframes onto this chart. Each extra frame is detected and drawn in its OWN bar
+    space — its slopes are per-bar-of-that-timeframe and its indices index that frame — and lands
+    here through the only coordinate the two share, the timestamp. `quant.data.tf_frames` loads
+    them with equal history in BARS, which is what detection needs. Three things make it readable:
+
+    * **Events are stamped at the higher timeframe's bar CLOSE**, not its open. Bars carry their
+      open time everywhere in this project, so a 4h pattern confirming on the bar stamped 12:00 is
+      not knowable until 16:00 — drawing it at 12:00 would be a four-hour lookahead on a 15m chart.
+      Geometry (line ends on the left, touch pivots) stays at the open, where that candle sits.
+    * **Weight encodes timeframe**: coarser draws heavier, finer draws thinner and semi-transparent.
+      Colour still means DIRECTION. Only the chart's own timeframe is visible when the chart opens.
+    * The timeframe folds into the pattern family, so `4h - rising wedge` is one entry in the
+      existing family dropdown rather than a third cascading menu. `max_picker_instances` bounds
+      how many single-instance entries the extra timeframes may add between them, and
+      `max_shapes_per_tf` bounds how many shapes each pattern draws. `tf_trendlines` follows
+      `trendlines` unless you set it explicitly.
+
+    `y_from_price` scales the y-axis to the CANDLES on screen rather than letting plotly autorange
+    over everything drawn. A pattern's boundaries are only as tall as the pattern, and a shape that
+    began before the window can be far taller than it: a 1h falling wedge starting at 86,000 and
+    converging at 51,800 stretched a 60k-76k chart out to 50k-85k, shrinking the price action to a
+    third of the pane. The chart is there to show price; an annotation should not rescale it.
+
+    S/R zones and EMAs stay on the chart frame only: a 4h zone and a 15m zone are the same
+    horizontal line at the same price, so drawing both adds clutter and no information.
+
     Nothing here is forward-looking: shapes are drawn from the bar the pattern CONFIRMED, using only
     pivots that had already been confirmed by then.
     """
@@ -428,23 +457,28 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     from ..indicators import chart_pattern_shapes, sr_zone_table
     from ..indicators.chart_patterns import chart_pattern_shapes_tuned, tuned_specs
     from ..indicators.chart_patterns import PATTERN_DIRECTION as _PD
+    from ..data.timeframe import bar_interval, tf_minutes
 
     d = df.reset_index(drop=True)
     t = d[time_col].to_numpy() if time_col in d.columns else np.arange(len(d))
 
+    def _view_index(frame, tcol):
+        """First bar of `frame` at or after `view_start`; 0 when no view was asked for."""
+        if view_start is None or tcol not in frame.columns:
+            return 0
+        vs = pd.to_datetime(view_start)
+        if vs.tzinfo is None:
+            vs = vs.tz_localize("UTC")
+        # compare as UTC-naive on both sides; the column is tz-aware and a bare date string is not
+        tt = pd.to_datetime(frame[tcol])
+        tt = tt.dt.tz_convert("UTC").dt.tz_localize(None) if tt.dt.tz is not None else tt
+        i = int(np.searchsorted(tt.to_numpy(), np.datetime64(vs.tz_localize(None))))
+        return max(0, min(i, len(frame) - 1))
+
     # WARM-UP IS COMPUTED, NOT DRAWN. Indicators need the history; the browser does not. Rendering
     # all 20,000 bars to look at 2,600 made the chart crawl, so everything below is drawn from
     # `v0` onward while still being CALCULATED on the whole frame.
-    v0 = 0
-    if view_start is not None and time_col in d.columns:
-        _vs = pd.to_datetime(view_start)
-        if _vs.tzinfo is None:
-            _vs = _vs.tz_localize("UTC")
-        # compare as UTC-naive on both sides; the column is tz-aware and a bare date string is not
-        _tt = pd.to_datetime(d[time_col])
-        _tt = _tt.dt.tz_convert("UTC").dt.tz_localize(None) if _tt.dt.tz is not None else _tt
-        v0 = int(np.searchsorted(_tt.to_numpy(), np.datetime64(_vs.tz_localize(None))))
-        v0 = max(0, min(v0, len(d) - 1))
+    v0 = _view_index(d, time_col)
     dv = d.iloc[v0:]
     tv = t[v0:]
     # the price band actually on screen — used to drop levels that are no longer anywhere near price
@@ -498,223 +532,331 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 opacity=0.55, hoverinfo="skip",
                 visible=True if "sr_zones" in start_visible else "legendonly"))
 
-    if tuned or per_pattern:
-        spec = per_pattern or tuned_specs()
-        names = list(patterns) if patterns else list(spec)
-        shapes = chart_pattern_shapes_tuned(d, specs=spec, patterns=names,
-                                            **(detect_kwargs or {}))
-    else:
-        names = list(patterns) if patterns else list(_PD)
-        shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
-    n = len(d)
-    def r_y(xs, ys, i):
-        """Height of a drawn two-point segment at bar `i`, by linear interpolation."""
-        i0 = int(np.searchsorted(t, xs[0])); i1 = int(np.searchsorted(t, xs[1]))
-        if i1 == i0:
-            return ys[0]
-        return ys[0] + (ys[1] - ys[0]) * (i - i0) / (i1 - i0)
+    def _detect(frame, want):
+        """One detection pass for a frame, honouring tuned / per-pattern / shared settings."""
+        if tuned or per_pattern:
+            spec = per_pattern or tuned_specs()
+            nm = list(want) if want else list(spec)
+            return nm, chart_pattern_shapes_tuned(frame, specs=spec, patterns=nm,
+                                                  **(detect_kwargs or {}))
+        nm = list(want) if want else list(_PD)
+        return nm, chart_pattern_shapes(frame, patterns=nm, **(detect_kwargs or {}))
 
     picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
-    if len(shapes) and v0 > 0:
-        # a shape that confirmed entirely inside the warm-up is history: it is what taught the
-        # detector, not something to draw over the window you asked to look at
-        shapes = shapes[shapes["confirm_i"] >= v0]
-    for name in names:
-        sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
-        if not len(sub):
-            continue
-        up = _PD.get(name, 0) > 0
-        colr = "#2ecc71" if up else ("#e74c3c" if _PD.get(name, 0) < 0 else "#f0a30a")
-        vis = True if name in start_visible else "legendonly"
-        lx, ly = [], []          # the two fitted boundaries, extended across the shape
-        mx, my = [], []          # the pivots those lines are fitted through
-        nx, ny = [], []          # the boundary that broke
-        tx, ty = [], []          # measured-move target
-        sx, sy = [], []          # protective stop
-        for r in sub.itertuples():
-            a, b = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
-            xa, xb = t[a], t[b]
-            # Draw the LINE, not the segment between its two end pivots: evaluate the fit across the
-            # whole pattern. Level shapes (H&S, double tops) have no fitted boundaries, only a neckline.
-            # CONVERGING shapes are drawn all the way to their APEX, where the two boundaries meet.
-            # Stopping at the break left a triangle as two lines heading toward each other without
-            # ever closing, so it did not read as a triangle at all. Only converging pairs have an
-            # apex ahead of them; channels are parallel and broadening shapes met theirs in the past,
-            # so both are unaffected. The apex is bounded because a pattern already expires at
-            # `max_apex_frac` (0.75) of the way there.
-            xe = b
-            du, dl = r.upper_slope, r.lower_slope
-            if du == du and dl == dl and abs(du - dl) > 1e-12:
-                apex = (r.lower_intercept - r.upper_intercept) / (du - dl)
-                if b < apex <= b + 4 * max(b - a, 1):
-                    xe = int(min(apex, n - 1))
-            xb2 = t[xe]
-            for sl, ic in ((r.upper_slope, r.upper_intercept), (r.lower_slope, r.lower_intercept)):
-                if sl == sl and ic == ic:                       # not NaN
-                    lx += [xa, xb2, None]
-                    ly += [sl * r.start_i + ic, sl * xe + ic, None]
-            # the pivots the lines were FITTED THROUGH, not every swing in the search window
-            mx += list(r.touch_t) + [None]
-            my += list(r.touch_price) + [None]
-            nx += [xa, xb, None]
-            ny += [r.boundary_slope * r.start_i + r.boundary_intercept,
-                   r.boundary_slope * b + r.boundary_intercept, None]
-            tx += [t[int(r.confirm_i)], xb, None]
-            ty += [r.target, r.target, None]
-            sx += [t[int(r.confirm_i)], xb, None]
-            sy += [r.stop, r.stop, None]
-        label = name.replace("_", " ")
-        fig.add_trace(go.Scattergl(
-            x=lx or nx, y=ly or ny, mode="lines", name=f"{label} ({len(sub)})",
-            legendgroup=name, visible=vis,
-            line=dict(color=colr, width=2.6),
-            hovertemplate=f"{label}<extra></extra>"))
-        fig.add_trace(go.Scattergl(
-            x=mx, y=my, mode="markers", legendgroup=name, visible=vis, showlegend=False,
-            marker=dict(size=7, color=colr, line=dict(width=1, color="#111")),
-            hovertemplate=f"{label} touch<extra></extra>"))
-        for X, Y, colr2, dash, wid in ((nx, ny, "#f0a30a", "solid", 2.0),
-                                       (tx, ty, colr, "dot", 1.4),
-                                       (sx, sy, "#888888", "dot", 1.2)):
-            if X:
-                fig.add_trace(go.Scattergl(
-                    x=X, y=Y, mode="lines", legendgroup=name, visible=vis, showlegend=False,
-                    line=dict(color=colr2, width=wid, dash=dash), hoverinfo="skip"))
-        # WHERE IT CONFIRMED. A shape is only a signal from the bar price closed through its
-        # boundary, and that bar is often far to the right of the shape itself — the median wait on
-        # BTC 15m is 15 bars and a double top waits about 42. Marking it makes the lag visible
-        # instead of leaving the shape looking as though it fired when it formed.
-        fig.add_trace(go.Scattergl(
-            x=[t[int(r.confirm_i)] for r in sub.itertuples()],
-            y=[float(r.entry) for r in sub.itertuples()],
-            mode="markers", legendgroup=name, visible=vis, showlegend=False,
-            marker=dict(size=13, color=colr, symbol="star",
-                        line=dict(width=1.5, color="#fff")),
-            customdata=[[int(r.confirm_i) - int(max(r.pivot_i))] for r in sub.itertuples()],
-            hovertemplate=(f"{label} CONFIRMED here<br>entry %{{y:.2f}}"
-                           "<br>%{customdata[0]} bars after its last pivot<extra></extra>")))
+    fam_lg = {}      # family label -> the legendgroup that family's grouped traces carry
+    tf_fams = {}     # timeframe label (None = this chart) -> its family labels, in drawing order
 
-        if line_picker:
-            # scope the picker to shapes that CONFIRM inside the opening view. Warm-up history
-            # carries just as many again, and an instance list you have to scroll past a hundred
-            # entries to use is no better than the overlap it replaces.
-            _keep = sub
-            if view_start is not None:
-                _vs0 = pd.to_datetime(view_start)
-                if _vs0.tzinfo is None:
-                    _vs0 = _vs0.tz_localize("UTC")
-                _keep = sub[[pd.to_datetime(str(t[int(r.confirm_i)])).tz_convert("UTC") >= _vs0
-                             for r in sub.itertuples()]]
-            for r in _keep.itertuples():
-                a2, b2 = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
-                ix, iy = [], []
-                for sl, ic in ((r.upper_slope, r.upper_intercept),
-                               (r.lower_slope, r.lower_intercept)):
-                    if sl == sl and ic == ic:
-                        ix += [t[a2], t[b2], None]
-                        iy += [sl * a2 + ic, sl * b2 + ic, None]
-                if not ix:
-                    ix = [t[a2], t[b2], None]
-                    iy = [r.boundary_slope * a2 + r.boundary_intercept,
-                          r.boundary_slope * b2 + r.boundary_intercept, None]
-                picker.append((label, f"{label} @ {pd.to_datetime(str(t[a2])):%b-%d %H:%M}"
-                                      f"  (confirms {pd.to_datetime(str(t[int(r.confirm_i)])):%b-%d %H:%M})",
-                               len(fig.data), int(a2)))
-                fig.add_trace(go.Scattergl(x=ix, y=iy, mode="lines", visible=False,
-                                           showlegend=False, line=dict(color=colr, width=3.2),
-                                           hovertemplate=f"{label}<extra></extra>"))
-                fig.add_trace(go.Scattergl(
-                    x=list(r.touch_t) + [t[int(r.confirm_i)]],
-                    y=list(r.touch_price) + [float(r.entry)],
-                    mode="markers", visible=False, showlegend=False,
-                    marker=dict(size=[9] * len(r.touch_t) + [15], color=colr,
-                                symbol=["circle"] * len(r.touch_t) + ["star"],
-                                line=dict(width=1.5, color="#fff")),
-                    hovertemplate="touch / CONFIRMED<extra></extra>"))
+    def _draw_layer(dl, *, tf, want, draw_lines, width, dotsz, alpha, picker_budget):
+        """Draw ONE timeframe's shapes and trendlines. Returns how much picker budget it used.
 
-    if trendlines:
-        from ..indicators.trendlines import trendline_table
-        tl = trendline_table(d, **(trendline_kwargs or {}))
-        if len(tl) and v0 > 0:
-            tl = tl[tl["end_i"] >= v0]        # lines that died before the window opened
-        for kind, label, colr in ((-1, "support trendline", "#2ecc71"),
-                                  (+1, "resistance trendline", "#e74c3c")):
-            sub = tl[tl["kind"] == kind] if len(tl) else tl
+        Everything works in `dl`'s own bar space, and only becomes a chart coordinate at the moment
+        a bar index is turned into a timestamp — the one coordinate the two frames share. That is
+        why no index remapping is needed and why a slope fitted on 4h bars stays correct here.
+        """
+        tl_ = dl[time_col].to_numpy() if time_col in dl.columns else np.arange(len(dl))
+        vl = _view_index(dl, time_col)
+        n = len(dl)
+        chart_tf = tf is None
+        # An EVENT read off bar i of a HIGHER timeframe is only knowable when that bar CLOSES.
+        # Zero for the chart's own frame, where the bar you are looking at IS the bar it happened on.
+        step = np.timedelta64(0, "ns")
+        if not chart_tf and time_col in dl.columns and n > 1:
+            step = np.timedelta64(bar_interval(dl, time_col=time_col))
+
+        def ev(i):
+            """x-coordinate of an EVENT on bar `i`: this frame's bar CLOSE."""
+            return tl_[int(i)] + step
+
+        # plotly leaves `opacity` unset for None, which keeps the chart layer's JSON exactly as it
+        # was before extra timeframes existed — a full-opacity layer should not serialise differently
+        alpha = None if (alpha is None or alpha >= 1.0) else alpha
+        pref = "" if chart_tf else f"{tf} · "
+        lgp = "" if chart_tf else f"{tf}::"
+        used = 0
+
+        def _register(label, legendgroup):
+            fam_lg[label] = legendgroup
+            fams = tf_fams.setdefault(tf, [])
+            if label not in fams:
+                fams.append(label)
+
+        names_, shapes = _detect(dl, want)
+        if len(shapes) and vl > 0:
+            # a shape that confirmed entirely inside the warm-up is history: it is what taught the
+            # detector, not something to draw over the window you asked to look at
+            shapes = shapes[shapes["confirm_i"] >= vl]
+        for name in names_:
+            sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
             if not len(sub):
                 continue
-            vis = True if label.split()[0] + "_trendline" in start_visible else "legendonly"
-            lx, ly, dx, dy, bx, by = [], [], [], [], [], []
-            per_line = []          # (label, x-of-line, y-of-line, touch xs, touch ys) for the picker
+            if max_shapes_per_tf and len(sub) > int(max_shapes_per_tf):
+                sub = sub.sort_values("confirm_i").tail(int(max_shapes_per_tf))
+            up = _PD.get(name, 0) > 0
+            colr = "#2ecc71" if up else ("#e74c3c" if _PD.get(name, 0) < 0 else "#f0a30a")
+            key = name if chart_tf else f"{tf}::{name}"
+            vis = True if key in start_visible else "legendonly"
+            lx, ly = [], []          # the two fitted boundaries, extended across the shape
+            mx, my = [], []          # the pivots those lines are fitted through
+            nx, ny = [], []          # the boundary that broke
+            tx, ty = [], []          # measured-move target
+            sx, sy = [], []          # protective stop
             for r in sub.itertuples():
-                # from the FIRST TOUCH, not from born_i: the line is fitted through pivots that all
-                # sit before it became known, so drawing from born_i left every touch dot outside
-                # the segment. All 36 lines in the sample had this.
-                lx += [t[int(r.start_i)], t[int(r.end_i)], None]
-                ly += [r.y_start, r.y_end, None]
-                dx += list(r.touch_t) + [None]
-                dy += list(r.touch_price) + [None]
-                if r.broke:
-                    bx.append(t[int(r.end_i)]); by.append(r.y_end)
-                per_line.append((
-                    f"{label} @ {pd.to_datetime(str(t[int(r.start_i)])):%b-%d %H:%M}"
-                    f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
-                    [t[int(r.start_i)], t[int(r.end_i)]], [r.y_start, r.y_end],
-                    list(r.touch_t), list(r.touch_price), int(r.start_i), label,
-                    int(r.born_i), int(r.end_i), bool(r.broke)))
+                a, b = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
+                xa, xb = tl_[a], ev(b)
+                # Draw the LINE, not the segment between its two end pivots: evaluate the fit across
+                # the whole pattern. Level shapes (H&S, double tops) have no fitted boundaries, only
+                # a neckline. CONVERGING shapes are drawn all the way to their APEX, where the two
+                # boundaries meet. Stopping at the break left a triangle as two lines heading toward
+                # each other without ever closing, so it did not read as a triangle at all. Only
+                # converging pairs have an apex ahead of them; channels are parallel and broadening
+                # shapes met theirs in the past, so both are unaffected. The apex is bounded because
+                # a pattern already expires at `max_apex_frac` (0.75) of the way there.
+                xe = b
+                du, dlo = r.upper_slope, r.lower_slope
+                if du == du and dlo == dlo and abs(du - dlo) > 1e-12:
+                    apex = (r.lower_intercept - r.upper_intercept) / (du - dlo)
+                    if b < apex <= b + 4 * max(b - a, 1):
+                        xe = int(min(apex, n - 1))
+                xb2 = ev(xe)
+                for sl, ic in ((r.upper_slope, r.upper_intercept),
+                               (r.lower_slope, r.lower_intercept)):
+                    if sl == sl and ic == ic:                       # not NaN
+                        lx += [xa, xb2, None]
+                        ly += [sl * r.start_i + ic, sl * xe + ic, None]
+                # the pivots the lines were FITTED THROUGH, not every swing in the search window
+                mx += list(r.touch_t) + [None]
+                my += list(r.touch_price) + [None]
+                nx += [xa, xb, None]
+                ny += [r.boundary_slope * r.start_i + r.boundary_intercept,
+                       r.boundary_slope * b + r.boundary_intercept, None]
+                tx += [ev(r.confirm_i), xb, None]
+                ty += [r.target, r.target, None]
+                sx += [ev(r.confirm_i), xb, None]
+                sy += [r.stop, r.stop, None]
+            label = pref + name.replace("_", " ")
+            _register(label, lgp + name)
             fig.add_trace(go.Scattergl(
-                x=lx, y=ly, mode="lines", name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
-                legendgroup=label, visible=vis, line=dict(color=colr, width=2.0, dash="dash"),
+                x=lx or nx, y=ly or ny, mode="lines", name=f"{label} ({len(sub)})",
+                legendgroup=lgp + name, visible=vis, opacity=alpha,
+                line=dict(color=colr, width=round(width, 2)),
                 hovertemplate=f"{label}<extra></extra>"))
             fig.add_trace(go.Scattergl(
-                x=dx, y=dy, mode="markers", legendgroup=label, visible=vis, showlegend=False,
-                marker=dict(size=6, color=colr, line=dict(width=1, color="#111")),
+                x=mx, y=my, mode="markers", legendgroup=lgp + name, visible=vis, showlegend=False,
+                opacity=alpha,
+                marker=dict(size=dotsz, color=colr, line=dict(width=1, color="#111")),
                 hovertemplate=f"{label} touch<extra></extra>"))
-            if bx:
-                fig.add_trace(go.Scattergl(
-                    x=bx, y=by, mode="markers", legendgroup=label, visible=vis, showlegend=False,
-                    marker=dict(size=11, color=colr, symbol="x", line=dict(width=1.5)),
-                    hovertemplate=f"{label} BREAK<extra></extra>"))
-            if line_picker:
-                # only offer lines that are actually VISIBLE in the opening view. Warm-up history
-                # can carry a hundred more, and a dropdown of 130 entries is no more usable than
-                # the overlapping lines it was meant to untangle.
+            for X, Y, colr2, dash, wid in ((nx, ny, "#f0a30a", "solid", width - 0.6),
+                                           (tx, ty, colr, "dot", width - 1.2),
+                                           (sx, sy, "#888888", "dot", width - 1.4)):
+                if X:
+                    fig.add_trace(go.Scattergl(
+                        x=X, y=Y, mode="lines", legendgroup=lgp + name, visible=vis,
+                        showlegend=False, opacity=alpha,
+                        line=dict(color=colr2, width=max(0.8, round(wid, 2)), dash=dash),
+                        hoverinfo="skip"))
+            # WHERE IT CONFIRMED. A shape is only a signal from the bar price closed through its
+            # boundary, and that bar is often far to the right of the shape itself — the median wait
+            # on BTC 15m is 15 bars and a double top waits about 42. Marking it makes the lag visible
+            # instead of leaving the shape looking as though it fired when it formed.
+            fig.add_trace(go.Scattergl(
+                x=[ev(r.confirm_i) for r in sub.itertuples()],
+                y=[float(r.entry) for r in sub.itertuples()],
+                mode="markers", legendgroup=lgp + name, visible=vis, showlegend=False,
+                opacity=alpha,
+                marker=dict(size=dotsz + 6, color=colr, symbol="star",
+                            line=dict(width=1.5, color="#fff")),
+                customdata=[[int(r.confirm_i) - int(max(r.pivot_i))] for r in sub.itertuples()],
+                hovertemplate=(f"{label} CONFIRMED here<br>entry %{{y:.2f}}"
+                               "<br>%{customdata[0]} bars after its last pivot<extra></extra>")))
+
+            if line_picker and (picker_budget is None or used < picker_budget):
+                # scope the picker to shapes that CONFIRM inside the opening view. Warm-up history
+                # carries just as many again, and an instance list you have to scroll past a hundred
+                # entries to use is no better than the overlap it replaces.
+                _keep = sub
                 if view_start is not None:
-                    vs = pd.to_datetime(view_start)
-                    # bar timestamps are tz-aware; a bare date string is not
-                    if vs.tzinfo is None:
-                        vs = vs.tz_localize("UTC")
-                    per_line = [pl for pl in per_line
-                                if pd.to_datetime(str(pl[1][1])).tz_convert("UTC") >= vs]
-                for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke in per_line:
-                    picker.append((fam, lbl, len(fig.data), si))
-                    # same dashed style as the grouped view, just thicker — isolating a line should
-                    # not make it look like a different kind of object
+                    _vs0 = pd.to_datetime(view_start)
+                    if _vs0.tzinfo is None:
+                        _vs0 = _vs0.tz_localize("UTC")
+                    _keep = sub[[pd.to_datetime(str(ev(r.confirm_i))).tz_convert("UTC") >= _vs0
+                                 for r in sub.itertuples()]]
+                if picker_budget is not None and len(_keep) > max(0, picker_budget - used):
+                    # keep the MOST RECENT: those are the ones near the right edge you would inspect
+                    _keep = _keep.sort_values("confirm_i").tail(max(0, picker_budget - used))
+                for r in _keep.itertuples():
+                    a2, b2 = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
+                    ix, iy = [], []
+                    for sl, ic in ((r.upper_slope, r.upper_intercept),
+                                   (r.lower_slope, r.lower_intercept)):
+                        if sl == sl and ic == ic:
+                            ix += [tl_[a2], ev(b2), None]
+                            iy += [sl * a2 + ic, sl * b2 + ic, None]
+                    if not ix:
+                        ix = [tl_[a2], ev(b2), None]
+                        iy = [r.boundary_slope * a2 + r.boundary_intercept,
+                              r.boundary_slope * b2 + r.boundary_intercept, None]
+                    picker.append((label,
+                                   f"{label} @ {pd.to_datetime(str(tl_[a2])):%b-%d %H:%M}"
+                                   f"  (confirms {pd.to_datetime(str(ev(r.confirm_i))):%b-%d %H:%M})",
+                                   len(fig.data), pd.Timestamp(str(tl_[a2])).value))
+                    used += 1
+                    fig.add_trace(go.Scattergl(x=ix, y=iy, mode="lines", visible=False,
+                                               showlegend=False,
+                                               line=dict(color=colr, width=round(width + 0.6, 2)),
+                                               hovertemplate=f"{label}<extra></extra>"))
                     fig.add_trace(go.Scattergl(
-                        x=xs, y=ys, mode="lines", visible=False, showlegend=False,
-                        line=dict(color=colr, width=3.0, dash="dash"),
-                        hovertemplate=f"{lbl}<extra></extra>"))
-                    # touches, then the bar the line became KNOWN, then the break. The isolated view
-                    # was drawing only the touches, so the two events that matter — when it became
-                    # tradable and when it failed — were visible in the grouped view and nowhere else.
-                    mx2 = list(txs) + [t[bi]]
-                    my2 = list(tys) + [float(r_y(xs, ys, bi))]
-                    syms = ["circle"] * len(txs) + ["diamond"]
-                    szs = [9] * len(txs) + [13]
-                    txt = ["touch"] * len(txs) + ["line CONFIRMED here (last pivot in place)"]
-                    if broke:
-                        mx2.append(t[ei]); my2.append(float(r_y(xs, ys, ei)))
-                        syms.append("x"); szs.append(16); txt.append("BROKE here")
+                        x=list(r.touch_t) + [ev(r.confirm_i)],
+                        y=list(r.touch_price) + [float(r.entry)],
+                        mode="markers", visible=False, showlegend=False,
+                        marker=dict(size=[dotsz + 2] * len(r.touch_t) + [dotsz + 8], color=colr,
+                                    symbol=["circle"] * len(r.touch_t) + ["star"],
+                                    line=dict(width=1.5, color="#fff")),
+                        hovertemplate="touch / CONFIRMED<extra></extra>"))
+
+        if draw_lines:
+            from ..indicators.trendlines import trendline_table
+            tl = trendline_table(dl, **(trendline_kwargs or {}))
+            if len(tl) and vl > 0:
+                tl = tl[tl["end_i"] >= vl]        # lines that died before the window opened
+            for kind, base_label, colr in ((-1, "support trendline", "#2ecc71"),
+                                           (+1, "resistance trendline", "#e74c3c")):
+                sub = tl[tl["kind"] == kind] if len(tl) else tl
+                if not len(sub):
+                    continue
+                if max_shapes_per_tf and len(sub) > int(max_shapes_per_tf):
+                    # the same cap the shapes get: a 1m layer offered 80 resistance lines over nine
+                    # days, which is a mesh rather than a chart. The most recent are the live ones.
+                    sub = sub.sort_values("end_i").tail(int(max_shapes_per_tf))
+                label = pref + base_label
+                _register(label, lgp + base_label)
+                key = (base_label.split()[0] + "_trendline") if chart_tf else f"{tf}::{base_label}"
+                vis = True if key in start_visible else "legendonly"
+                lx, ly, dx, dy, bx, by = [], [], [], [], [], []
+                per_line = []      # one entry per line, for the picker
+                for r in sub.itertuples():
+                    # from the FIRST TOUCH, not from born_i: the line is fitted through pivots that
+                    # all sit before it became known, so drawing from born_i left every touch dot
+                    # outside the segment. All 36 lines in the sample had this.
+                    lx += [tl_[int(r.start_i)], ev(r.end_i), None]
+                    ly += [r.y_start, r.y_end, None]
+                    dx += list(r.touch_t) + [None]
+                    dy += list(r.touch_price) + [None]
+                    if r.broke:
+                        bx.append(ev(r.end_i)); by.append(r.y_end)
+                    per_line.append((
+                        f"{label} @ {pd.to_datetime(str(tl_[int(r.start_i)])):%b-%d %H:%M}"
+                        f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
+                        [tl_[int(r.start_i)], ev(r.end_i)], [r.y_start, r.y_end],
+                        list(r.touch_t), list(r.touch_price), int(r.start_i), label,
+                        int(r.born_i), int(r.end_i), bool(r.broke)))
+                fig.add_trace(go.Scattergl(
+                    x=lx, y=ly, mode="lines",
+                    name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
+                    legendgroup=lgp + base_label, visible=vis, opacity=alpha,
+                    line=dict(color=colr, width=max(0.8, round(width - 0.6, 2)), dash="dash"),
+                    hovertemplate=f"{label}<extra></extra>"))
+                fig.add_trace(go.Scattergl(
+                    x=dx, y=dy, mode="markers", legendgroup=lgp + base_label, visible=vis,
+                    showlegend=False, opacity=alpha,
+                    marker=dict(size=max(3, dotsz - 1), color=colr,
+                                line=dict(width=1, color="#111")),
+                    hovertemplate=f"{label} touch<extra></extra>"))
+                if bx:
                     fig.add_trace(go.Scattergl(
-                        x=mx2, y=my2, mode="markers", visible=False, showlegend=False,
-                        marker=dict(size=szs, color=colr, symbol=syms,
-                                    line=dict(width=1.6, color="#fff")),
-                        text=txt, hovertemplate="%{text}<extra></extra>"))
+                        x=bx, y=by, mode="markers", legendgroup=lgp + base_label, visible=vis,
+                        showlegend=False, opacity=alpha,
+                        marker=dict(size=dotsz + 4, color=colr, symbol="x", line=dict(width=1.5)),
+                        hovertemplate=f"{label} BREAK<extra></extra>"))
+                if line_picker and (picker_budget is None or used < picker_budget):
+                    # only offer lines that are actually VISIBLE in the opening view. Warm-up history
+                    # can carry a hundred more, and a dropdown of 130 entries is no more usable than
+                    # the overlapping lines it was meant to untangle.
+                    if view_start is not None:
+                        vs = pd.to_datetime(view_start)
+                        # bar timestamps are tz-aware; a bare date string is not
+                        if vs.tzinfo is None:
+                            vs = vs.tz_localize("UTC")
+                        per_line = [pl for pl in per_line
+                                    if pd.to_datetime(str(pl[1][1])).tz_convert("UTC") >= vs]
+                    if picker_budget is not None:
+                        room = max(0, picker_budget - used)
+                        per_line = per_line[-room:] if len(per_line) > room else per_line
+                    for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke in per_line:
+                        picker.append((fam, lbl, len(fig.data), pd.Timestamp(str(tl_[si])).value))
+                        used += 1
+                        # same dashed style as the grouped view, just thicker — isolating a line
+                        # should not make it look like a different kind of object
+                        fig.add_trace(go.Scattergl(
+                            x=xs, y=ys, mode="lines", visible=False, showlegend=False,
+                            line=dict(color=colr, width=round(width + 0.4, 2), dash="dash"),
+                            hovertemplate=f"{lbl}<extra></extra>"))
+
+                        def _y_at(i, _ys=ys, _si=si, _ei=ei):
+                            """Height of the drawn segment at bar `i`, by linear interpolation."""
+                            if _ei == _si:
+                                return _ys[0]
+                            return _ys[0] + (_ys[1] - _ys[0]) * (i - _si) / (_ei - _si)
+
+                        # touches, then the bar the line became KNOWN, then the break. The isolated
+                        # view was drawing only the touches, so the two events that matter — when it
+                        # became tradable and when it failed — were visible in the grouped view and
+                        # nowhere else.
+                        mx2 = list(txs) + [ev(bi)]
+                        my2 = list(tys) + [float(_y_at(bi))]
+                        syms = ["circle"] * len(txs) + ["diamond"]
+                        szs = [dotsz + 2] * len(txs) + [dotsz + 6]
+                        txt = ["touch"] * len(txs) + ["line CONFIRMED here (last pivot in place)"]
+                        if broke:
+                            mx2.append(ev(ei)); my2.append(float(_y_at(ei)))
+                            syms.append("x"); szs.append(dotsz + 9); txt.append("BROKE here")
+                        fig.add_trace(go.Scattergl(
+                            x=mx2, y=my2, mode="markers", visible=False, showlegend=False,
+                            marker=dict(size=szs, color=colr, symbol=syms,
+                                        line=dict(width=1.6, color="#fff")),
+                            text=txt, hovertemplate="%{text}<extra></extra>"))
+        return used
+
+    # ---- the chart's own timeframe, then any extra ones ----------------------------------
+    _draw_layer(d, tf=None, want=patterns, draw_lines=trendlines,
+                width=2.6, dotsz=7, alpha=1.0, picker_budget=None)
+
+    if tf_frames:
+        base_min = max(1.0, bar_interval(d, time_col=time_col) / pd.Timedelta(minutes=1))
+        # coarsest first: a 4h line is the structure a 5m shape sits inside
+        order = sorted(tf_frames, key=tf_minutes, reverse=True)
+        # Split the picker budget between the extra timeframes and hand back what the quiet ones do
+        # not use. Left uncapped, a 1m layer alone contributed 335 instance entries and ~9.8 MB of
+        # dropdown JSON: every button carries a visibility vector as long as the trace list, so the
+        # cost is buttons x traces and bounding the buttons is what keeps the chart openable.
+        share = max(1, int(max_picker_instances) // max(1, len(order)))
+        budget = {k: share for k in order}
+        budget[order[0]] += max(0, int(max_picker_instances) - share * len(order))
+        for pos, tf in enumerate(order):
+            dl = tf_frames[tf].reset_index(drop=True)
+            rank = float(np.log2(max(tf_minutes(tf), 1) / base_min))
+            if rank >= 0:      # coarser than the chart: heavier, fully opaque — this is structure
+                width, alpha = min(4.4, 2.6 + 0.55 * rank), 1.0
+                dotsz = min(11, int(round(7 + 1.2 * rank)))
+            else:              # finer: thinner and semi-transparent — this is detail, not structure
+                width, alpha = max(1.2, 2.6 + 0.45 * rank), 0.55
+                dotsz = max(4, int(round(7 + 1.2 * rank)))
+            spent = _draw_layer(
+                dl, tf=tf, want=(tf_patterns or {}).get(tf, patterns),
+                draw_lines=trendlines if tf_trendlines is None else tf_trendlines,
+                width=width, dotsz=dotsz, alpha=alpha,
+                picker_budget=budget[tf])
+            if budget[tf] > spent and pos + 1 < len(order):
+                budget[order[pos + 1]] += budget[tf] - spent     # rolls on to the next timeframe
 
     # ---- TWO dropdowns: pick a family, then pick one instance inside it ------------------
     # A single flat list does not scale: with warm-up history it reached 130 entries, which is no
     # more readable than the overlapping lines it was meant to untangle. The first menu narrows to
     # one family (S/R zones, support trendlines, rising wedges...), the second isolates a single
     # occurrence within it. Instances are listed EARLIEST FIRST so the order matches the chart.
+    # With extra timeframes the family carries its timeframe (`4h · rising wedge`) and the list is
+    # grouped under per-timeframe headers rather than growing a THIRD cascading menu — a third menu
+    # nests multiplicatively (a timeframe button would carry the family list, whose buttons each
+    # carry an instance list), which is exactly what made the naive version unopenable.
     if picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
         owned = {i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
@@ -722,18 +864,16 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         for fam, lbl, idx, sortk in sorted(picker, key=lambda z: z[3]):
             fam_groups.setdefault(fam, []).append((lbl, idx))
 
-        def _grouped(only_family=None):
-            """Restore the normal grouped drawing, optionally showing just one family."""
+        def _grouped(keep=None):
+            """Restore the normal grouped drawing, optionally showing only `keep` legendgroups."""
             v = list(base)
             for i in owned:
                 v[i] = False
-            if only_family is not None:
+            if keep is not None:
                 for j, tr in enumerate(fig.data):
                     g = getattr(tr, "legendgroup", "") or ""
-                    if g and g not in ("price", "sr") and not g.startswith("ema"):
-                        v[j] = (g.replace("_", " ") == only_family)
-                    elif g == "sr":
-                        v[j] = (only_family == "S/R zones")
+                    if g and g != "price" and not g.startswith("ema"):
+                        v[j] = (g in keep)
             return v
 
         def _isolate(first):
@@ -748,18 +888,35 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             v[first + 1] = True
             return v
 
-        def _inst_buttons(fams):
-            """The instance menu's contents for a given set of families."""
+        def _inst_buttons(fams, instances=True):
+            """The instance menu's contents for a given set of families.
+
+            `instances=False` lists the families only. Every button carries a visibility vector as
+            long as the whole trace list, so the menu costs buttons x traces; listing an instance in
+            the initial menu AND under its timeframe AND under its family tripled the dominant term
+            for nothing. With several timeframes loaded a flat list of every instance is unusable
+            anyway, so the wide selections show families and the family itself shows its instances.
+            """
+            keep = {fam_lg[fams[0]]} if len(fams) == 1 else None
             out = [dict(label="▸ all in this group", method="update",
-                        args=[{"visible": _grouped(fams[0] if len(fams) == 1 else None)}])]
+                        args=[{"visible": _grouped(keep)}])]
             for fam in fams:
                 if len(fams) > 1:
-                    out.append(dict(label=f"── {fam.upper()} ──", method="update",
-                                    args=[{"visible": _grouped(fam)}]))
+                    out.append(dict(label=f"── {fam.upper()}"
+                                          f"{'' if instances else f'  ({len(fam_groups[fam])})'} ──",
+                                    method="update",
+                                    args=[{"visible": _grouped({fam_lg[fam]})}]))
+                if not instances:
+                    continue
                 for lbl, idx in fam_groups[fam]:
                     out.append(dict(label=("    " if len(fams) > 1 else "") + lbl,
                                     method="update", args=[{"visible": _isolate(idx)}]))
             return out
+
+        multi_tf = len(tf_fams) > 1
+        def _wide_buttons(fams):
+            """Menu 2 for a selection spanning several families."""
+            return _inst_buttons(fams, instances=not multi_tf)
 
         # CASCADING: picking a family REWRITES the instance menu, so the second dropdown only ever
         # lists what belongs to the first one's selection. Plotly has no native cascade, but a
@@ -768,29 +925,48 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         all_fams = list(fam_groups)
         fam_buttons = [dict(label="▸ everything", method="update",
                             args=[{"visible": _grouped(None)},
-                                  {"updatemenus[1].buttons": _inst_buttons(all_fams),
+                                  {"updatemenus[1].buttons": _wide_buttons(all_fams),
                                    "updatemenus[1].active": 0}])]
         if sr_zones:
             fam_buttons.append(dict(
                 label="S/R zones", method="update",
-                args=[{"visible": _grouped("S/R zones")},
+                args=[{"visible": _grouped({"sr"})},
                       {"updatemenus[1].buttons": [dict(
                           label="(S/R zones have no individual entries)", method="update",
-                          args=[{"visible": _grouped("S/R zones")}])],
+                          args=[{"visible": _grouped({"sr"})}])],
                        "updatemenus[1].active": 0}]))
-        for fam in all_fams:
-            fam_buttons.append(dict(
-                label=f"{fam}  ({len(fam_groups[fam])})", method="update",
-                args=[{"visible": _grouped(fam)},
-                      {"updatemenus[1].buttons": _inst_buttons([fam]),
-                       "updatemenus[1].active": 0}]))
+
+        def _fam_button(fam):
+            return dict(label=f"{fam}  ({len(fam_groups[fam])})", method="update",
+                        args=[{"visible": _grouped({fam_lg[fam]})},
+                              {"updatemenus[1].buttons": _inst_buttons([fam]),
+                               "updatemenus[1].active": 0}])
+
+        if multi_tf:
+            # one section per timeframe, coarsest first, each opening with an "all of it" entry
+            for tf in sorted(tf_fams, key=lambda k: (0, 0) if k is None else (1, -tf_minutes(k))):
+                fams = [f for f in tf_fams[tf] if f in fam_groups]
+                if not fams:
+                    continue
+                fam_buttons.append(dict(
+                    label=f"━━ {'this chart' if tf is None else tf}"
+                          f"  —  all patterns ({len(fams)})",
+                    method="update",
+                    args=[{"visible": _grouped({fam_lg[f] for f in fams})},
+                          {"updatemenus[1].buttons": _wide_buttons(fams),
+                           "updatemenus[1].active": 0}]))
+                for fam in fams:
+                    fam_buttons.append(_fam_button(fam))
+        else:
+            for fam in all_fams:
+                fam_buttons.append(_fam_button(fam))
 
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
                     font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
         fig.update_layout(updatemenus=[
             dict(buttons=fam_buttons, x=0.0, xanchor="left", **menu),
-            dict(buttons=_inst_buttons(all_fams), x=0.185, xanchor="left", **menu)])
+            dict(buttons=_wide_buttons(all_fams), x=0.185, xanchor="left", **menu)])
 
     if view_start is not None:
         # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown
@@ -798,6 +974,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         if _vs.tzinfo is None:
             _vs = _vs.tz_localize("UTC")
         fig.update_xaxes(range=[_vs, t[-1]])
+
+    if y_from_price:
+        # scale to the candles, not to whatever geometry hangs off them — see the docstring
+        _ypad = 0.04 * max(_hi - _lo, 1e-9)
+        fig.update_yaxes(range=[_lo - _ypad, _hi + _ypad])
 
     fig.update_layout(
         title=title or "Chart patterns — click the legend to show/hide each one",
