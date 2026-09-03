@@ -227,7 +227,10 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 16_trendline_research = reads experiments/trendline_settings_search
+notebooks/               # 17_multi_timeframe_patterns = ONE chart, patterns from SEVERAL
+                         #   timeframes (tf_frames=); the window_holds diagnostic says up front
+                         #   whether a timeframe's shapes can even fit on screen
+                         # 16_trendline_research = reads experiments/trendline_settings_search
                          #   (144 settings x 3 TFs x 2 instruments x 9 windows, 4 stages)
                          # 15_tuned_pattern_viewer = all 22 chart patterns at their CALIBRATED
                          #   per-pattern settings (quant.indicators.TUNED_SPECS) + trendlines, one toggle each
