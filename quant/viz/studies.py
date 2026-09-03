@@ -507,6 +507,13 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         names = list(patterns) if patterns else list(_PD)
         shapes = chart_pattern_shapes(d, patterns=names, **(detect_kwargs or {}))
     n = len(d)
+    def r_y(xs, ys, i):
+        """Height of a drawn two-point segment at bar `i`, by linear interpolation."""
+        i0 = int(np.searchsorted(t, xs[0])); i1 = int(np.searchsorted(t, xs[1]))
+        if i1 == i0:
+            return ys[0]
+        return ys[0] + (ys[1] - ys[0]) * (i - i0) / (i1 - i0)
+
     picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
     if len(shapes) and v0 > 0:
         # a shape that confirmed entirely inside the warm-up is history: it is what taught the
@@ -652,7 +659,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     f"{label} @ {pd.to_datetime(str(t[int(r.start_i)])):%b-%d %H:%M}"
                     f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
                     [t[int(r.start_i)], t[int(r.end_i)]], [r.y_start, r.y_end],
-                    list(r.touch_t), list(r.touch_price), int(r.start_i), label))
+                    list(r.touch_t), list(r.touch_price), int(r.start_i), label,
+                    int(r.born_i), int(r.end_i), bool(r.broke)))
             fig.add_trace(go.Scattergl(
                 x=lx, y=ly, mode="lines", name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
                 legendgroup=label, visible=vis, line=dict(color=colr, width=2.0, dash="dash"),
@@ -677,16 +685,30 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         vs = vs.tz_localize("UTC")
                     per_line = [pl for pl in per_line
                                 if pd.to_datetime(str(pl[1][1])).tz_convert("UTC") >= vs]
-                for lbl, xs, ys, txs, tys, si, fam in per_line:
+                for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke in per_line:
                     picker.append((fam, lbl, len(fig.data), si))
+                    # same dashed style as the grouped view, just thicker — isolating a line should
+                    # not make it look like a different kind of object
                     fig.add_trace(go.Scattergl(
                         x=xs, y=ys, mode="lines", visible=False, showlegend=False,
-                        line=dict(color=colr, width=3.2),
+                        line=dict(color=colr, width=3.0, dash="dash"),
                         hovertemplate=f"{lbl}<extra></extra>"))
+                    # touches, then the bar the line became KNOWN, then the break. The isolated view
+                    # was drawing only the touches, so the two events that matter — when it became
+                    # tradable and when it failed — were visible in the grouped view and nowhere else.
+                    mx2 = list(txs) + [t[bi]]
+                    my2 = list(tys) + [float(r_y(xs, ys, bi))]
+                    syms = ["circle"] * len(txs) + ["diamond"]
+                    szs = [9] * len(txs) + [13]
+                    txt = ["touch"] * len(txs) + ["line CONFIRMED here (last pivot in place)"]
+                    if broke:
+                        mx2.append(t[ei]); my2.append(float(r_y(xs, ys, ei)))
+                        syms.append("x"); szs.append(16); txt.append("BROKE here")
                     fig.add_trace(go.Scattergl(
-                        x=txs, y=tys, mode="markers", visible=False, showlegend=False,
-                        marker=dict(size=9, color=colr, line=dict(width=1.5, color="#fff")),
-                        hovertemplate="touch<extra></extra>"))
+                        x=mx2, y=my2, mode="markers", visible=False, showlegend=False,
+                        marker=dict(size=szs, color=colr, symbol=syms,
+                                    line=dict(width=1.6, color="#fff")),
+                        text=txt, hovertemplate="%{text}<extra></extra>"))
 
     # ---- TWO dropdowns: pick a family, then pick one instance inside it ------------------
     # A single flat list does not scale: with warm-up history it reached 130 entries, which is no
