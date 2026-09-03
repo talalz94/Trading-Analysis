@@ -378,7 +378,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
                    extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
                    per_pattern=None, trendlines: bool = False, trendline_kwargs=None,
-                   emas=(), view_start=None, line_picker: bool = True):
+                   emas=(), view_start=None, line_picker: bool = True,
+                   zone_lookback_bars: int = 2000):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -391,6 +392,12 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     everything else starts in `legendonly`. S/R zones are their own toggle.
 
     `emas=(20, 50, 100, 200)` overlays moving averages, one legend toggle each.
+
+    `zone_lookback_bars` is how far back S/R zones are built from, counted back from the start of
+    the view. Warm-up helps most indicators and HURTS this one: the tracker keeps the most-touched
+    levels, and in a trending market those are all old. Measured on BTC 5m running 66k to 82k, a
+    two-month warm-up left **1 of 40 zones anywhere near the price on screen**; a 2,000-bar lookback
+    leaves 39. A level from 20% ago is history, not support.
 
     `view_start` sets where the x-axis OPENS while leaving the data intact. Indicators that need
     history — S/R zones, trendlines, long EMAs — are only as good as the bars before them, so load
@@ -457,19 +464,29 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             hovertemplate=f"EMA {p}: %{{y:.2f}}<extra></extra>"))
 
     if sr_zones:
-        zt = sr_zone_table(d, left=zones_left, right=zones_right, cluster_pct=cluster_pct,
-                           max_zones=max_zones, time_col=time_col)
+        # built from a BOUNDED history ending at the view, not the whole warm-up — see the docstring
+        z0 = max(0, v0 - int(zone_lookback_bars)) if zone_lookback_bars else 0
+        zt = sr_zone_table(d.iloc[z0:].reset_index(drop=True), left=zones_left, right=zones_right,
+                           cluster_pct=cluster_pct, max_zones=max_zones, time_col=time_col)
+        if len(zt):
+            zt = zt.copy()
+            zt[["start_i", "end_i"]] += z0
         zt = zt[zt["touches"] >= min_touches]
         # A zone is a level price is respecting NOW. Two filters, both about relevance rather than
         # correctness: the segment has to reach the visible window at all, and its price has to be
         # near the prices on screen. Without the second, a long warm-up in a trending market fills
         # the chart with levels from 20% below — 767 segments, none of them next to price.
         if len(zt):
-            zt = zt[(zt["end_i"] >= v0)
-                    & zt["price"].between(_lo - _pad, _hi + _pad)]
+            # ONE line per zone at its CURRENT level. A zone emits a row per price revision, so
+            # drawing every row stacks a zone's whole history of slightly-different levels on the
+            # chart — 1,366 segments for 40 zones. The last revision is the level in force.
+            zt = zt.sort_values("end_i").groupby("zone", as_index=False).tail(1)
+            zt = zt[zt["price"].between(_lo - _pad, _hi + _pad)]
         xs, ys, widths = [], [], []
         for r in zt.itertuples():
-            xs += [max(r.start_t, tv[0]) if r.start_i < v0 else r.start_t, r.end_t, None]
+            # drawn across the whole visible window: a level established earlier is still the level
+            x_from = tv[0] if r.start_i < v0 else r.start_t
+            xs += [x_from, tv[-1], None]
             ys += [r.price, r.price, None]
             widths.append(r.touches)
         if xs:
@@ -707,30 +724,49 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             v[first + 1] = True
             return v
 
-        fam_buttons = [dict(label="▸ everything", method="update",
-                            args=[{"visible": _grouped(None)}])]
-        if sr_zones:
-            fam_buttons.append(dict(label="S/R zones", method="update",
-                                    args=[{"visible": _grouped("S/R zones")}]))
-        for fam in fam_groups:
-            fam_buttons.append(dict(label=f"{fam}  ({len(fam_groups[fam])})", method="update",
+        def _inst_buttons(fams):
+            """The instance menu's contents for a given set of families."""
+            out = [dict(label="▸ all in this group", method="update",
+                        args=[{"visible": _grouped(fams[0] if len(fams) == 1 else None)}])]
+            for fam in fams:
+                if len(fams) > 1:
+                    out.append(dict(label=f"── {fam.upper()} ──", method="update",
                                     args=[{"visible": _grouped(fam)}]))
+                for lbl, idx in fam_groups[fam]:
+                    out.append(dict(label=("    " if len(fams) > 1 else "") + lbl,
+                                    method="update", args=[{"visible": _isolate(idx)}]))
+            return out
 
-        inst_buttons = [dict(label="▸ all instances", method="update",
-                             args=[{"visible": _grouped(None)}])]
-        for fam, items in fam_groups.items():
-            inst_buttons.append(dict(label=f"── {fam.upper()} ──", method="update",
-                                     args=[{"visible": _grouped(fam)}]))
-            for lbl, idx in items:
-                inst_buttons.append(dict(label=f"    {lbl}", method="update",
-                                         args=[{"visible": _isolate(idx)}]))
+        # CASCADING: picking a family REWRITES the instance menu, so the second dropdown only ever
+        # lists what belongs to the first one's selection. Plotly has no native cascade, but a
+        # button's `update` carries a layout patch alongside the trace patch, and a menu's buttons
+        # are a layout property — so the first menu can rebuild the second.
+        all_fams = list(fam_groups)
+        fam_buttons = [dict(label="▸ everything", method="update",
+                            args=[{"visible": _grouped(None)},
+                                  {"updatemenus[1].buttons": _inst_buttons(all_fams),
+                                   "updatemenus[1].active": 0}])]
+        if sr_zones:
+            fam_buttons.append(dict(
+                label="S/R zones", method="update",
+                args=[{"visible": _grouped("S/R zones")},
+                      {"updatemenus[1].buttons": [dict(
+                          label="(S/R zones have no individual entries)", method="update",
+                          args=[{"visible": _grouped("S/R zones")}])],
+                       "updatemenus[1].active": 0}]))
+        for fam in all_fams:
+            fam_buttons.append(dict(
+                label=f"{fam}  ({len(fam_groups[fam])})", method="update",
+                args=[{"visible": _grouped(fam)},
+                      {"updatemenus[1].buttons": _inst_buttons([fam]),
+                       "updatemenus[1].active": 0}]))
 
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
                     font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
         fig.update_layout(updatemenus=[
             dict(buttons=fam_buttons, x=0.0, xanchor="left", **menu),
-            dict(buttons=inst_buttons, x=0.185, xanchor="left", **menu)])
+            dict(buttons=_inst_buttons(all_fams), x=0.185, xanchor="left", **menu)])
 
     if view_start is not None:
         # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown
