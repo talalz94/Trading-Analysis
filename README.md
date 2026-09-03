@@ -196,7 +196,9 @@ works. Crypto/FX/stocks/indices become available as their data providers are add
   the measured-move target — plus standalone support/resistance trendlines, S/R zones and EMAs, each
   on its own legend toggle, with two cascading dropdowns to isolate a single instance.
   [`notebooks/15_tuned_pattern_viewer.ipynb`](notebooks/15_tuned_pattern_viewer.ipynb) is the ready
-  configuration; notebook 14 is the same thing with one shared detector setting.
+  configuration; notebook 14 is the same thing with one shared detector setting, and
+  [`notebooks/17_multi_timeframe_patterns.ipynb`](notebooks/17_multi_timeframe_patterns.ipynb) adds
+  other timeframes to one chart.
 - **Patterns from other timeframes on one chart:**
 
   ```python
@@ -564,8 +566,8 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 - [`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md) — running context: research findings, gotchas, next steps
 - [`notebooks/`](notebooks/) — `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
   `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `14_pattern_viewer` ·
-  `15_tuned_pattern_viewer` (calibrated settings + trendlines + other timeframes) ·
-  `16_trendline_research`
+  `15_tuned_pattern_viewer` (calibrated settings + trendlines) · `16_trendline_research` ·
+  `17_multi_timeframe_patterns` (one chart, patterns from several timeframes)
 
 ## License
 This project is released under the MIT License.

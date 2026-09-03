@@ -976,6 +976,9 @@ destroy the edit without telling you.
 
 `pattern_figure(df_15m, tf_frames={"4h": df_4h, "1h": df_1h})` draws other timeframes' shapes and
 trendlines over the chart you are watching. Load the frames with `quant.data.tf_frames`.
+**`notebooks/17_multi_timeframe_patterns.ipynb`** is the ready configuration. It is a NEW notebook
+rather than more edits to 15, because a running Jupyter kernel saved its in-memory copy of 15 over
+the committed one three separate times this session.
 
 **Why it is additive rather than a rewrite.** Everything `pattern_figure` emits is already
 `(timestamp, price)`, and a fitted slope is only ever evaluated at an index *of the frame it was
