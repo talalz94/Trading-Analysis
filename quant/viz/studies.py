@@ -196,16 +196,38 @@ def _add_atr_bands(fig, d, x, line_col, mults, atr_period=14):
                 row=1, col=1)
 
 
+_MTF_EMA_SHAPES = ("('1h', 200)  |  ('1h', [50, 200])  |  [('1h', 200), ('4h', 200)]")
+
+
 def _norm_mtf_ema(spec):
     """Accept any of:  ('5min', 200)  |  ('5min', [100, 200])  |  [('5min',100), ('15min',200)]
-    and return a flat list of (timeframe, period) pairs."""
-    if not spec:
+    and return a flat list of (timeframe, period) pairs.
+
+    Every entry needs a PERIOD as well as a timeframe. A bare timeframe is rejected explicitly
+    rather than recursed into: a `str` is not a tuple or list, so it used to fall through to the
+    loop below, iterate its own characters, and recurse on each one forever — `["4h", "1h"]` (the
+    shape `PATTERN_TFS` takes) died 3,000 frames deep in a RecursionError that named nothing.
+    """
+    if spec is None or (not isinstance(spec, str) and not spec):
         return []
+    if isinstance(spec, str):
+        raise ValueError(
+            f"mtf_emas got the bare timeframe {spec!r}; each entry needs a PERIOD too. "
+            f"Write one of:  {_MTF_EMA_SHAPES}   (unlike `pattern_tfs`, which is timeframes alone)")
     # a single (tf, period-or-list) pair
     if isinstance(spec, (tuple, list)) and len(spec) == 2 and isinstance(spec[0], str):
         tf, per = spec
         pers = per if isinstance(per, (list, tuple)) else [per]
-        return [(tf, int(p)) for p in pers]
+        out = []
+        for pp in pers:
+            try:
+                out.append((tf, int(pp)))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"mtf_emas: {pp!r} is not an EMA period. Got the pair ({tf!r}, {per!r}); "
+                    f"if you meant two timeframes, each needs its own period — "
+                    f"{_MTF_EMA_SHAPES}") from None
+        return out
     out = []
     for item in spec:
         out.extend(_norm_mtf_ema(item))

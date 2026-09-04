@@ -1193,3 +1193,31 @@ def test_a_higher_timeframe_ema_reuses_a_loaded_frame_and_says_so_when_it_cannot
                             mtf_emas=("1h", 200), **kw)
     line = [tr for tr in loaded.data if (tr.name or "").startswith("1h EMA")]
     assert len(line) == 1 and np.isfinite(np.asarray(line[0].y, float)).any()
+
+
+@pytest.mark.parametrize("bad", [["4h", "1h", "15m"], ["1h"], "1h", ("4h", "1h")])
+def test_mtf_emas_says_what_is_wrong_instead_of_recursing_forever(rnd, bad):
+    """A bare timeframe used to die 3,000 frames deep in a RecursionError naming nothing.
+
+    A `str` is not a tuple or list, so it fell past the pair check into the flattening loop,
+    iterated its own characters, and recursed on each one. `["4h", "1h"]` is an easy thing to write
+    — it is exactly the shape `pattern_tfs` takes — so the error has to name the difference.
+    """
+    from quant.viz.studies import _norm_mtf_ema, pattern_figure
+
+    with pytest.raises(ValueError, match="(?i)period"):
+        _norm_mtf_ema(bad)
+    with pytest.raises(ValueError, match="(?i)period"):
+        pattern_figure(rnd, patterns=[], sr_zones=False, emas=(), mtf_emas=bad)
+
+
+@pytest.mark.parametrize("spec,want", [
+    (("1h", 200), [("1h", 200)]),
+    (("1h", [50, 200]), [("1h", 50), ("1h", 200)]),
+    ([("1h", 200), ("4h", 200)], [("1h", 200), ("4h", 200)]),
+    (None, []), ((), []), ([], []),
+])
+def test_mtf_emas_accepts_every_documented_shape(spec, want):
+    from quant.viz.studies import _norm_mtf_ema
+
+    assert _norm_mtf_ema(spec) == want
