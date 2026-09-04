@@ -373,6 +373,11 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 # ---------------------------------------------------------------------------
 # Pattern overlays (toggleable from any figure)
 # ---------------------------------------------------------------------------
+#: higher-timeframe EMA colours — deliberately unlike the chart's own EMAs, which use the
+#: template defaults, so you can tell at a glance which timeframe a line belongs to
+_MTF_EMA_SHADES = ["#42a5f5", "#ab47bc", "#26c6da", "#ffa726", "#7e57c2", "#ec407a"]
+
+
 def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height: int = 820,
                    sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
                    cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
@@ -381,7 +386,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    emas=(20, 50, 100, 200), view_start=None, line_picker: bool = True,
                    zone_lookback_bars: int = 2000, tf_frames=None, tf_patterns=None,
                    tf_trendlines=None, max_picker_instances: int = 60,
-                   max_shapes_per_tf: int = 40, y_from_price: bool = True):
+                   max_shapes_per_tf: int = 40, y_from_price: bool = True,
+                   mtf_emas=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -446,7 +452,14 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     converging at 51,800 stretched a 60k-76k chart out to 50k-85k, shrinking the price action to a
     third of the pane. The chart is there to show price; an annotation should not rescale it.
 
-    S/R zones and EMAs stay on the chart frame only: a 4h zone and a 15m zone are the same
+    `mtf_emas` draws HIGHER-TIMEFRAME EMAs, taking the same spec as `scenario_figure`:
+    `("1h", 200)`, `("1h", [50, 200])`, or `[("1h", 200), ("4h", 200)]`. A frame already loaded in
+    `tf_frames` is reused (it has the deeper history); otherwise the chart frame is resampled. Each
+    line is a STEP that changes only at its own bar's close, because that is the only moment the
+    value is final — an interpolated 1h EMA shows a number nobody could have read at the time. They
+    are ON by default; `"-1h_ema200"` in `start_visible` turns one off.
+
+    S/R zones stay on the chart frame only: a 4h zone and a 15m zone are the same
     horizontal line at the same price, so drawing both adds clutter and no information.
 
     Nothing here is forward-looking: shapes are drawn from the bar the pattern CONFIRMED, using only
@@ -498,6 +511,43 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             legendgroup=f"ema{p}", line=dict(width=1.4),
             visible=False if f"-ema{p}" in start_visible else True,   # ON by default
             hovertemplate=f"EMA {p}: %{{y:.2f}}<extra></extra>"))
+
+    if mtf_emas:
+        # HIGHER-TIMEFRAME EMAs. Drawn as a STEP that changes only at each HTF bar's close, because
+        # that is the only moment the value is final — a 1h EMA interpolated across the hour shows a
+        # number nobody could have read at the time. Same rule as every other event on this chart.
+        from ..indicators.overlays import ema as _ema_of
+        for k, (etf, per) in enumerate(_norm_mtf_ema(mtf_emas)):
+            src = (tf_frames or {}).get(etf)
+            if src is None:
+                # no frame was loaded for it, so resample the chart's own — cheap, but its history
+                # is capped by the chart frame's start, which a long period may not have enough of
+                from ..data.timeframe import resample_ohlcv
+                src = resample_ohlcv(d, f"{tf_minutes(etf)}min", time_col=time_col)
+            src = src.reset_index(drop=True)
+            ey = _ema_of(src["close"], int(per)).to_numpy()
+            # a tz-aware column comes back as dtype=object, which will not take a timedelta64, so
+            # the shift is done in pandas and only then handed to plotly
+            ex = pd.to_datetime(src[time_col]) + bar_interval(src, time_col=time_col)
+            i0 = max(0, int(ex.searchsorted(pd.Timestamp(str(tv[0])).tz_localize(None)
+                                            if ex.dt.tz is None else pd.Timestamp(str(tv[0])))) - 1)
+            ex = ex.to_numpy()      # one step back, so the line enters from the left edge
+            label = f"{etf} EMA {int(per)}"
+            if not np.isfinite(ey[i0:]).any():
+                # an EMA needs `per` bars of its OWN timeframe. Resampling a three-week 15m chart
+                # gives 126 4h bars, so a 4h EMA200 comes out entirely NaN and draws as nothing at
+                # all — a silently missing line looks exactly like a line you forgot to turn on.
+                import warnings as _w
+                _w.warn(f"{label} has no value over this window: {len(src)} {etf} bars is fewer "
+                        f"than the {int(per)} it needs. Load {etf} through quant.data.tf_frames "
+                        f"(or widen the chart's warm-up) so it has the history.", stacklevel=2)
+                continue
+            fig.add_trace(go.Scattergl(
+                x=ex[i0:], y=ey[i0:], mode="lines", name=label,
+                legendgroup=f"mtfema{etf}{per}", line_shape="hv",
+                line=dict(width=2.0, color=_MTF_EMA_SHADES[k % len(_MTF_EMA_SHADES)]),
+                visible=False if f"-{etf}_ema{int(per)}" in start_visible else True,
+                hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"))
 
     if sr_zones:
         # built from a BOUNDED history ending at the view, not the whole warm-up — see the docstring

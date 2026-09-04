@@ -1026,6 +1026,15 @@ bug. At the other end 1m confirmed 155 shapes over the same window, which is the
 a feature. `PATTERN_TFS = ("4h", "1h")` is the useful default; reach for 1m/5m on a one- or two-day
 window.
 
+**Higher-timeframe EMAs (`mtf_emas=`).** Same spec as `scenario_figure` — `("1h", 200)`,
+`("1h", [50, 200])`, or a list of pairs. Drawn as a **step** (`line_shape="hv"`) that changes only at
+its own bar's close, for the same reason the event markers do: that is the only moment the value is
+final, and an interpolated 1h EMA shows numbers nobody could have read. A timeframe already in
+`tf_frames` is reused rather than resampled, which is not cosmetic — an EMA needs `period` bars of
+its OWN timeframe, and a three-week 15m chart resamples to only 126 4h bars, so a 4h EMA200 came out
+**entirely NaN**. That now raises a warning naming the shortfall instead of silently drawing nothing,
+because a missing line looks exactly like one you forgot to switch on.
+
 **`y_from_price` (new, on by default).** A 1h falling wedge that began before the window ran from
 86,000 down to a 51,800 apex, and plotly's autorange stretched a 60k-76k chart out to 50k-85k,
 leaving the price action a third of the pane. The line was correct — it really is that tall. The
