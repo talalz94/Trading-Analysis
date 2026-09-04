@@ -1221,3 +1221,23 @@ def test_mtf_emas_accepts_every_documented_shape(spec, want):
     from quant.viz.studies import _norm_mtf_ema
 
     assert _norm_mtf_ema(spec) == want
+
+
+def test_mtf_emas_groups_by_timeframe_in_colour_and_by_period_in_weight(rnd):
+    """Six lines need to read as two groups of three, not as six unrelated colours."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h"), "30min": resample_ohlcv(rnd, "30min")}
+    fig = pattern_figure(rnd, patterns=[], sr_zones=False, emas=(), trendlines=False,
+                         tf_frames=frames,
+                         mtf_emas=[("30min", [20, 50, 100]), ("1h", 20, 50, 100)])
+    lines = {tr.name: tr for tr in fig.data if " EMA " in (tr.name or "")}
+    assert len(lines) == 6
+
+    for tf in ("30min", "1h"):
+        group = [lines[f"{tf} EMA {p}"] for p in (20, 50, 100)]
+        assert len({g.line.color for g in group}) == 1          # one hue per timeframe
+        widths = [g.line.width for g in group]
+        assert widths == sorted(widths) and widths[0] < widths[-1]   # weight rises with period
+    assert lines["30min EMA 20"].line.color != lines["1h EMA 20"].line.color

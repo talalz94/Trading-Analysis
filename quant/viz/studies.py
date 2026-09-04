@@ -196,7 +196,8 @@ def _add_atr_bands(fig, d, x, line_col, mults, atr_period=14):
                 row=1, col=1)
 
 
-_MTF_EMA_SHAPES = ("('1h', 200)  |  ('1h', [50, 200])  |  [('1h', 200), ('4h', 200)]")
+_MTF_EMA_SHAPES = ("('1h', 200)  |  ('1h', [50, 200])  |  ('1h', 50, 100, 200)  |  "
+                   "[('1h', 200), ('4h', 200)]")
 
 
 def _norm_mtf_ema(spec):
@@ -214,19 +215,21 @@ def _norm_mtf_ema(spec):
         raise ValueError(
             f"mtf_emas got the bare timeframe {spec!r}; each entry needs a PERIOD too. "
             f"Write one of:  {_MTF_EMA_SHAPES}   (unlike `pattern_tfs`, which is timeframes alone)")
-    # a single (tf, period-or-list) pair
-    if isinstance(spec, (tuple, list)) and len(spec) == 2 and isinstance(spec[0], str):
-        tf, per = spec
-        pers = per if isinstance(per, (list, tuple)) else [per]
+    # one timeframe followed by its period(s): ('1h', 200), ('1h', [50, 200]) and the loose
+    # ('1h', 50, 100, 200) are all the same thing, so all three are accepted
+    if isinstance(spec, (tuple, list)) and len(spec) >= 2 and isinstance(spec[0], str):
+        tf, rest = spec[0], spec[1:]
+        pers = []
+        for chunk in rest:
+            pers.extend(chunk if isinstance(chunk, (list, tuple)) else [chunk])
         out = []
         for pp in pers:
             try:
                 out.append((tf, int(pp)))
             except (TypeError, ValueError):
                 raise ValueError(
-                    f"mtf_emas: {pp!r} is not an EMA period. Got the pair ({tf!r}, {per!r}); "
-                    f"if you meant two timeframes, each needs its own period — "
-                    f"{_MTF_EMA_SHAPES}") from None
+                    f"mtf_emas: {pp!r} is not an EMA period. Got {tuple(spec)!r}; if you meant "
+                    f"several timeframes, each needs its own period — {_MTF_EMA_SHAPES}") from None
         return out
     out = []
     for item in spec:
@@ -395,8 +398,10 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 # ---------------------------------------------------------------------------
 # Pattern overlays (toggleable from any figure)
 # ---------------------------------------------------------------------------
-#: higher-timeframe EMA colours — deliberately unlike the chart's own EMAs, which use the
-#: template defaults, so you can tell at a glance which timeframe a line belongs to
+#: higher-timeframe EMA colours — deliberately unlike the chart's own EMAs, which use the template
+#: defaults. One hue per TIMEFRAME rather than one per line: asking for 50/100/200 on two
+#: timeframes is six lines, and six unrelated colours make it impossible to see which three belong
+#: together. Within a timeframe the PERIOD sets the weight, so the slow line reads as the slow line.
 _MTF_EMA_SHADES = ["#42a5f5", "#ab47bc", "#26c6da", "#ffa726", "#7e57c2", "#ec407a"]
 
 
@@ -479,7 +484,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     `tf_frames` is reused (it has the deeper history); otherwise the chart frame is resampled. Each
     line is a STEP that changes only at its own bar's close, because that is the only moment the
     value is final — an interpolated 1h EMA shows a number nobody could have read at the time. They
-    are ON by default; `"-1h_ema200"` in `start_visible` turns one off.
+    are ON by default; `"-1h_ema200"` in `start_visible` turns one off. Hue is the TIMEFRAME and
+    weight is the PERIOD within it: `[("5m", 50, 100, 200), ("15m", 50, 100, 200)]` is six lines, and
+    six unrelated colours would hide which three belong together.
 
     S/R zones stay on the chart frame only: a 4h zone and a 15m zone are the same
     horizontal line at the same price, so drawing both adds clutter and no information.
@@ -539,7 +546,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         # that is the only moment the value is final — a 1h EMA interpolated across the hour shows a
         # number nobody could have read at the time. Same rule as every other event on this chart.
         from ..indicators.overlays import ema as _ema_of
-        for k, (etf, per) in enumerate(_norm_mtf_ema(mtf_emas)):
+        _pairs = _norm_mtf_ema(mtf_emas)
+        _tf_order = list(dict.fromkeys(tf for tf, _ in _pairs))
+        _by_tf = {tf: sorted({p for t, p in _pairs if t == tf}) for tf in _tf_order}
+        for etf, per in _pairs:
             src = (tf_frames or {}).get(etf)
             if src is None:
                 # no frame was loaded for it, so resample the chart's own — cheap, but its history
@@ -555,6 +565,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                                             if ex.dt.tz is None else pd.Timestamp(str(tv[0])))) - 1)
             ex = ex.to_numpy()      # one step back, so the line enters from the left edge
             label = f"{etf} EMA {int(per)}"
+            # hue says which timeframe, weight says which period within it
+            _ranks = _by_tf[etf]
+            _r = _ranks.index(per) / max(1, len(_ranks) - 1)
             if not np.isfinite(ey[i0:]).any():
                 # an EMA needs `per` bars of its OWN timeframe. Resampling a three-week 15m chart
                 # gives 126 4h bars, so a 4h EMA200 comes out entirely NaN and draws as nothing at
@@ -567,7 +580,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             fig.add_trace(go.Scattergl(
                 x=ex[i0:], y=ey[i0:], mode="lines", name=label,
                 legendgroup=f"mtfema{etf}{per}", line_shape="hv",
-                line=dict(width=2.0, color=_MTF_EMA_SHADES[k % len(_MTF_EMA_SHADES)]),
+                line=dict(width=round(1.3 + 1.2 * _r, 2),
+                          color=_MTF_EMA_SHADES[_tf_order.index(etf) % len(_MTF_EMA_SHADES)]),
+                opacity=None if _r >= 1.0 else round(0.65 + 0.35 * _r, 2),
                 visible=False if f"-{etf}_ema{int(per)}" in start_visible else True,
                 hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"))
 
