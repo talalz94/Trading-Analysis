@@ -1152,3 +1152,44 @@ def test_the_y_axis_is_scaled_to_the_candles_not_to_the_geometry_hanging_off_the
     assert (y1 - y0) < 1.5 * (hi - lo)               # ...without the pane being given away
     assert pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames,
                           y_from_price=False).layout.yaxis.range is None
+
+
+def test_higher_timeframe_emas_step_at_their_own_bar_close(rnd):
+    """An interpolated 1h EMA shows a number nobody could have read at the time.
+
+    The value is only final when the 1h bar closes, so the line is a step that changes there and
+    holds until the next one — the same causality rule the pattern markers follow.
+    """
+    from quant.data import bar_interval, resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    h1 = resample_ohlcv(rnd, "1h")
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), patterns=[], tf_frames={"1h": h1},
+                         mtf_emas=("1h", [50, 200]))
+    lines = [tr for tr in fig.data if (tr.name or "").startswith("1h EMA ")]
+    assert [tr.name for tr in lines] == ["1h EMA 50", "1h EMA 200"]
+
+    closes = set(pd.to_datetime(h1["t"]) + bar_interval(h1))
+    for tr in lines:
+        assert tr.line.shape == "hv"                      # a step, not an interpolation
+        assert all(pd.Timestamp(str(x)) in closes for x in tr.x)
+
+
+def test_a_higher_timeframe_ema_reuses_a_loaded_frame_and_says_so_when_it_cannot(rnd):
+    """A 1h EMA200 needs 200 1h bars. Resampling a short chart frame yields NaN, not a line."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    short = rnd.iloc[-400:].reset_index(drop=True)        # 400 x 15m = 100 1h bars, short of 200
+    kw = dict(sr_zones=False, emas=(), patterns=[])
+
+    with pytest.warns(UserWarning, match="fewer than the 200"):
+        bare = pattern_figure(short, mtf_emas=("1h", 200), **kw)
+    assert not any((tr.name or "").startswith("1h EMA") for tr in bare.data)
+
+    # the SAME request succeeds once the frame is supplied with its own history — which is the
+    # whole reason tf_frames loads each timeframe rather than resampling the chart
+    loaded = pattern_figure(short, tf_frames={"1h": resample_ohlcv(rnd, "1h")},
+                            mtf_emas=("1h", 200), **kw)
+    line = [tr for tr in loaded.data if (tr.name or "").startswith("1h EMA")]
+    assert len(line) == 1 and np.isfinite(np.asarray(line[0].y, float)).any()

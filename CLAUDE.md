@@ -181,7 +181,11 @@ quant/
 │   │                    #     timeframe folds into the family (`4h - rising wedge`) rather than
 │   │                    #     adding a third menu: buttons carry a visibility vector as long as the
 │   │                    #     trace list, so a nested cascade cost 9.8 MB of JSON. max_picker_
-│   │                    #     instances= / max_shapes_per_tf= bound it; y_from_price= scales the
+│   │                    #     instances= / max_shapes_per_tf= bound it; mtf_emas=[("1h",[50,200])]
+│   │                    #     draws OTHER TIMEFRAMES' EMAs as STEPS that change only at their own
+│   │                    #     bar close (an interpolated 1h EMA shows a number nobody could read);
+│   │                    #     reuses a tf_frames frame for the history, warns when it cannot warm
+│   │                    #     up rather than drawing an all-NaN line; y_from_price= scales the
 │   │                    #     y-axis to the CANDLES, not to geometry that may be far taller,
 │   │                    #     zone_lookback_bars= (S/R zones from BOUNDED history -- warm-up makes
 │   │                    #     them stale in a trend: 1 of 40 near price vs 38 at a 2000-bar lookback),
