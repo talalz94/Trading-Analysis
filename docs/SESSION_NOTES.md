@@ -1000,15 +1000,28 @@ to the nine-day BTC 15m window gave **1,027 traces x 479 buttons = 9.8 MB of dro
 11.4 s build** — a chart that does not open, which is worse than one that is cluttered. Three changes
 brought it to **447 traces / 67 buttons / 1.23 MB**:
 
-* a **third cascading menu was rejected** — it nests multiplicatively (a timeframe button carries the
-  family list, whose buttons each carry an instance list). The timeframe folds into the family label
-  instead, and menu 1 groups families under per-timeframe headers;
+* **three cascading menus** — timeframe, then pattern, then occurrence. The first attempt folded the
+  timeframe into the family label to avoid the nesting cost, but that left one 51-row list, and
+  **plotly menus do not scroll**: they render every button and clip the overflow, so at 969px in a
+  900px figure the last families could not be reached. Cascading keeps each menu short by
+  construction. It is affordable because the wide `▸ all timeframes` state lists no families at all
+  (it prompts for one) and each occurrence appears under its own family only;
+* **multi-select is the LEGEND, not the menus.** A plotly dropdown is single-choice, so choosing a
+  family promotes its occurrences to individual legend entries — that is what lets you keep two of
+  five channel-ups with the EMAs untouched. For whole families across timeframes, the legend already
+  lists them all;
 * **each instance is listed once.** It used to appear in the initial menu, under its timeframe and
   under its family; three copies of the dominant term was 1.1 MB of the 1.6 MB. Wide selections now
   list families, and the family itself lists its instances;
-* **caps**: `max_picker_instances` (60) bounds what the extra layers may add to the dropdown between
-  them — shared out evenly, unspent budget rolling from coarse to fine — and `max_shapes_per_tf` (40)
-  bounds shapes and trendlines per pattern per timeframe. The chart's own picker is never trimmed.
+* **the caps bound what is DRAWN and what is LISTED together.** They used to trim only the menu,
+  which left a legend reading `(11)` beside a dropdown offering nine and two lines on the chart that
+  could not be isolated at all. The cap is now derived from the family count BEFORE anything is
+  drawn, so the two numbers cannot disagree. `max_picker_instances` (60) is shared across a layer's
+  families with a floor of one each, so it steers the total rather than capping it exactly;
+  `max_shapes_per_tf` (40) is the per-family ceiling. The chart's own layer is never trimmed.
+
+With the cascade and 1h + 5m + 1m loaded: **461 traces, menus of 5 / 3 / 1 rows, 1.39 MB**, and the
+tallest menu you can ever open is 21 rows.
 
 **Measured cost** (BTCUSDT, view 2026-06-01 -> 2026-06-10, 800 bars warm-up per timeframe):
 

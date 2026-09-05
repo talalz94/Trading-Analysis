@@ -178,9 +178,13 @@ quant/
 │   │                    #     their open, so a 4h star at the open is a 4h lookahead); geometry
 │   │                    #     stays at the open. WEIGHT encodes timeframe, colour still means
 │   │                    #     direction, only the chart's own timeframe is visible at open. The
-│   │                    #     timeframe folds into the family (`4h - rising wedge`) rather than
-│   │                    #     adding a third menu: buttons carry a visibility vector as long as the
-│   │                    #     trace list, so a nested cascade cost 9.8 MB of JSON. max_picker_
+│   │                    #     THREE cascading menus: timeframe -> pattern -> occurrence, each
+│   │                    #     narrowing the next (plotly menus do NOT scroll -- they clip, so a
+│   │                    #     51-row list had unreachable entries). MULTI-SELECT is the LEGEND:
+│   │                    #     choosing a family promotes its occurrences to their own entries, so
+│   │                    #     you can keep 2 of 5. Caps bound DRAWN and LISTED together -- trimming
+│   │                    #     only the menu left a legend saying (11) beside a dropdown of 9.
+│   │                    #     max_picker_
 │   │                    #     instances= / max_shapes_per_tf= bound it; mtf_emas=("1h",50,100,200)
 │   │                    #     draws OTHER TIMEFRAMES' EMAs as STEPS that change only at their own
 │   │                    #     bar close (an interpolated 1h EMA shows a number nobody could read);
