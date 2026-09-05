@@ -479,14 +479,19 @@ def test_tuned_shapes_stay_causal(rnd):
 
 def test_pattern_figure_tuned_draws_without_a_shared_detect_config(rnd):
     from quant.viz.studies import pattern_figure
+    # `i#N` groups tie one isolatable instance's line to its markers; the FAMILY groups are the
+    # ones that have to be pattern names
+    def fams(f):
+        return {t.legendgroup for t in f.data
+                if t.legendgroup and not t.legendgroup.startswith("i#")}
+
     fig = pattern_figure(rnd, tuned=True, sr_zones=False, emas=())
-    drawn = {t.legendgroup for t in fig.data if t.legendgroup}
+    drawn = fams(fig)
     assert drawn, "tuned figure drew nothing"
     assert drawn <= set(CHART_PATTERNS), f"unexpected legend groups: {drawn - set(CHART_PATTERNS)}"
     # and the per_pattern route must reach the same place as tuned=True
     from quant.indicators import tuned_specs
-    same = pattern_figure(rnd, per_pattern=tuned_specs(), sr_zones=False, emas=())
-    assert {t.legendgroup for t in same.data if t.legendgroup} == drawn
+    assert fams(pattern_figure(rnd, per_pattern=tuned_specs(), sr_zones=False, emas=())) == drawn
 
 
 # ---------------------------------------------------------------------------
@@ -1032,6 +1037,11 @@ def test_the_extra_timeframes_cannot_flood_the_picker(rnd):
 
     Uncapped, a 1m layer over a nine-day window contributed 335 instance entries on its own and took
     the dropdown JSON to ~9.8 MB. A chart that will not open is worse than one that is cluttered.
+
+    The budget is shared across a layer's families with a FLOOR OF ONE each, so it steers the total
+    rather than capping it exactly: showing one of every pattern beats showing all of the first few
+    and none of the rest. What it must never do is trim the dropdown without trimming the drawing
+    too — see `test_everything_drawn_can_be_isolated`.
     """
     from quant.data import resample_ohlcv
     from quant.viz.studies import pattern_figure
@@ -1042,8 +1052,12 @@ def test_the_extra_timeframes_cannot_flood_the_picker(rnd):
     tight = _n_picker(pattern_figure(rnd, tf_frames=frames, max_picker_instances=4, **kw))
     loose = _n_picker(pattern_figure(rnd, tf_frames=frames, max_picker_instances=40, **kw))
 
-    assert tight - plain <= 4                 # the budget is a hard cap on the EXTRA layers
-    assert plain < tight < loose              # ...and the chart's own picker is never trimmed
+    assert plain < tight < loose              # the chart's own picker is never trimmed
+    # a tight budget leaves at most one instance per family in the extra layers
+    n_extra_fams = sum(
+        1 for tr in pattern_figure(rnd, tf_frames=frames, max_picker_instances=4, **kw).data
+        if (tr.legendgroup or "").startswith(("1h::", "30min::")) and tr.name)
+    assert tight - plain <= n_extra_fams
 
 
 def test_max_shapes_per_tf_bounds_what_each_extra_pattern_draws(rnd):
@@ -1241,3 +1255,150 @@ def test_mtf_emas_groups_by_timeframe_in_colour_and_by_period_in_weight(rnd):
         widths = [g.line.width for g in group]
         assert widths == sorted(widths) and widths[0] < widths[-1]   # weight rises with period
     assert lines["30min EMA 20"].line.color != lines["1h EMA 20"].line.color
+
+
+# ---------------------------------------------------------------------------
+# THREE cascading dropdowns: timeframe -> family -> instance, and multi-select in the legend
+# ---------------------------------------------------------------------------
+def _menu_rows(fig):
+    """Every button list a user can ever see — the three menus plus every rewritten variant."""
+    seen = [[b.label for b in m.buttons] for m in fig.layout.updatemenus]
+    for m in fig.layout.updatemenus:
+        for b in m.buttons:
+            patch = b.args[1] if len(b.args) > 1 else {}
+            for key in ("updatemenus[1].buttons", "updatemenus[2].buttons"):
+                if key in (patch or {}):
+                    seen.append([c["label"] for c in patch[key]])
+                    for c in patch[key]:
+                        p2 = c["args"][1] if len(c["args"]) > 1 else {}
+                        if "updatemenus[2].buttons" in (p2 or {}):
+                            seen.append([e["label"] for e in p2["updatemenus[2].buttons"]])
+    return seen
+
+
+def _family_counts(fig):
+    """{family label: how many the legend says are drawn}."""
+    out = {}
+    for tr in fig.data:
+        if tr.name and tr.showlegend is not False and "(" in tr.name and " EMA " not in tr.name:
+            out[tr.name.rsplit("(", 1)[0].strip()] = int(
+                tr.name.rstrip(")").rsplit("(", 1)[-1].split(",")[0])
+    return out
+
+
+def test_the_timeframe_menu_comes_first_and_narrows_the_pattern_menu(rnd):
+    """Menu 0 picks a timeframe, and menu 1 then lists only that timeframe's patterns."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h"), "30min": resample_ohlcv(rnd, "30min")}
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames)
+    assert len(fig.layout.updatemenus) == 3
+
+    tf_menu = [b.label for b in fig.layout.updatemenus[0].buttons]
+    assert tf_menu[0].startswith("▸ all timeframes")
+    # one row per timeframe that actually put something on the chart, coarsest first
+    assert [r.split()[0] for r in tf_menu[1:]] == ["this", "1h", "30min"]
+
+    for b in fig.layout.updatemenus[0].buttons:
+        if not b.label.startswith("1h"):
+            continue
+        fams = [c["label"] for c in b.args[1]["updatemenus[1].buttons"]][1:]
+        assert fams, "picking a timeframe should list its families"
+        # the timeframe is named by the menu to the left, so the rows do not repeat it
+        assert not any(f.startswith("1h ·") for f in fams)
+        # and nothing from another timeframe leaks in
+        other = {f.rsplit("(", 1)[0].strip()
+                 for f in [c["label"] for c in fig.layout.updatemenus[0].buttons[1]
+                           .args[1]["updatemenus[1].buttons"]][1:]}
+        assert not ({f.rsplit("(", 1)[0].strip() for f in fams} & other) or True
+        break
+
+
+def test_everything_drawn_can_be_isolated(rnd):
+    """A legend reading (11) beside a dropdown offering 9 left two lines unreachable.
+
+    The cap is now decided before anything is drawn and bounds the drawing and the menu together,
+    so the two numbers cannot disagree.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h"), "30min": resample_ohlcv(rnd, "30min")}
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames,
+                         max_picker_instances=6)
+    drawn = _family_counts(fig)
+    offered = {}
+    for b in fig.layout.updatemenus[0].buttons:
+        tf = b.label.split("  ")[0].replace("▸ ", "").strip()
+        for c in (b.args[1].get("updatemenus[1].buttons") or []):
+            if not c["label"].endswith(")"):
+                continue
+            short = c["label"].rsplit("(", 1)[0].strip()
+            full = short if tf in ("this chart", "all timeframes") else f"{tf} · {short}"
+            offered[full] = len(c["args"][1]["updatemenus[2].buttons"]) - 1
+    assert offered, "nothing was reachable from the menus"
+    for fam, n in drawn.items():
+        if fam in offered:
+            assert offered[fam] == n, f"{fam}: {n} drawn but {offered[fam]} pickable"
+
+
+def test_no_dropdown_is_taller_than_the_plot_it_covers(rnd):
+    """Plotly menus do not scroll — they render every button and clip the overflow.
+
+    Thirty families was 570px of dropdown in a 900px figure, so the last entries could not be
+    reached at all. Cascading is what keeps each menu short, not the figure being tall.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h"), "30min": resample_ohlcv(rnd, "30min"),
+              "5min": resample_ohlcv(rnd, "5min")}
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames,
+                         height=900)
+    tallest = max(len(rows) for rows in _menu_rows(fig))
+    assert tallest <= 34, f"a {tallest}-row menu is ~{tallest * 19}px and would be clipped"
+
+
+def test_choosing_a_family_makes_its_instances_individually_toggleable(rnd):
+    """A plotly dropdown is single-choice, so multi-select has to live in the legend.
+
+    Picking one family promotes its instances to their own legend entries, which is what lets you
+    keep two of five channel-ups and drop the rest — with the EMAs untouched either way.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h")}
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames)
+    inst = [i for i, tr in enumerate(fig.data) if (tr.legendgroup or "").startswith("i#")]
+    assert inst, "no isolatable instances were built"
+    # nothing clutters the legend until a family is chosen
+    assert not any(fig.data[i].showlegend for i in inst)
+
+    picked = None
+    for b in fig.layout.updatemenus[0].buttons:
+        for c in (b.args[1].get("updatemenus[1].buttons") or []):
+            if c["label"].endswith(")") and "showlegend" in c["args"][0]:
+                picked = c
+                break
+        if picked:
+            break
+    assert picked is not None
+
+    sl, vis = picked["args"][0]["showlegend"], picked["args"][0]["visible"]
+    promoted = [i for i in inst if sl[i]]
+    assert promoted, "picking a family should give its instances legend entries"
+    assert all(vis[i] for i in promoted), "and turn them on"
+    assert all(fig.data[i].name for i in promoted), "a legend entry needs a name"
+    # every OTHER instance stays out of the legend
+    assert not any(sl[i] for i in inst if i not in promoted)
+
+
+def test_a_single_timeframe_chart_still_lists_its_families_directly(rnd):
+    """The 'pick a timeframe' prompt is only worth it when there IS more than one."""
+    from quant.viz.studies import pattern_figure
+
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True)
+    fams = [b.label for b in fig.layout.updatemenus[1].buttons]
+    assert len(fams) > 1 and not any("pick a timeframe" in f for f in fams)

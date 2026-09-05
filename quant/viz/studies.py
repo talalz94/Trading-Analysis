@@ -402,6 +402,9 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 #: defaults. One hue per TIMEFRAME rather than one per line: asking for 50/100/200 on two
 #: timeframes is six lines, and six unrelated colours make it impossible to see which three belong
 #: together. Within a timeframe the PERIOD sets the weight, so the slow line reads as the slow line.
+#: "no timeframe chosen" — distinct from None, which is the chart's OWN timeframe
+_SENTINEL = object()
+
 _MTF_EMA_SHADES = ["#42a5f5", "#ab47bc", "#26c6da", "#ffa726", "#7e57c2", "#ec407a"]
 
 
@@ -672,12 +675,29 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             # a shape that confirmed entirely inside the warm-up is history: it is what taught the
             # detector, not something to draw over the window you asked to look at
             shapes = shapes[shapes["confirm_i"] >= vl]
+
+        # THE CAP IS DECIDED BEFORE ANYTHING IS DRAWN, and then bounds the drawing and the dropdown
+        # equally. Trimming only the dropdown is what produced a legend reading "(11)" beside a menu
+        # offering nine, with two lines on the chart that could not be isolated. Counting the
+        # families first is what lets one budget be shared without starving whichever came last.
+        lines_tbl = None
+        n_fams = int(shapes["pattern"].nunique()) if len(shapes) else 0
+        if draw_lines:
+            from ..indicators.trendlines import trendline_table
+            lines_tbl = trendline_table(dl, **(trendline_kwargs or {}))
+            if len(lines_tbl) and vl > 0:
+                lines_tbl = lines_tbl[lines_tbl["end_i"] >= vl]   # died before the window opened
+            n_fams += int(lines_tbl["kind"].nunique()) if len(lines_tbl) else 0
+        cap = int(max_shapes_per_tf) if max_shapes_per_tf else 10 ** 6
+        if picker_budget is not None and n_fams:
+            cap = max(1, min(cap, -(-int(picker_budget) // n_fams)))
+
         for name in names_:
             sub = shapes[shapes["pattern"] == name] if len(shapes) else shapes
             if not len(sub):
                 continue
-            if max_shapes_per_tf and len(sub) > int(max_shapes_per_tf):
-                sub = sub.sort_values("confirm_i").tail(int(max_shapes_per_tf))
+            if len(sub) > cap:
+                sub = sub.sort_values("confirm_i").tail(cap)     # the most recent are the live ones
             up = _PD.get(name, 0) > 0
             colr = "#2ecc71" if up else ("#e74c3c" if _PD.get(name, 0) < 0 else "#f0a30a")
             key = name if chart_tf else f"{tf}::{name}"
@@ -756,21 +776,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 hovertemplate=(f"{label} CONFIRMED here<br>entry %{{y:.2f}}"
                                "<br>%{customdata[0]} bars after its last pivot<extra></extra>")))
 
-            if line_picker and (picker_budget is None or used < picker_budget):
-                # scope the picker to shapes that CONFIRM inside the opening view. Warm-up history
-                # carries just as many again, and an instance list you have to scroll past a hundred
-                # entries to use is no better than the overlap it replaces.
-                _keep = sub
-                if view_start is not None:
-                    _vs0 = pd.to_datetime(view_start)
-                    if _vs0.tzinfo is None:
-                        _vs0 = _vs0.tz_localize("UTC")
-                    _keep = sub[[pd.to_datetime(str(ev(r.confirm_i))).tz_convert("UTC") >= _vs0
-                                 for r in sub.itertuples()]]
-                if picker_budget is not None and len(_keep) > max(0, picker_budget - used):
-                    # keep the MOST RECENT: those are the ones near the right edge you would inspect
-                    _keep = _keep.sort_values("confirm_i").tail(max(0, picker_budget - used))
-                for r in _keep.itertuples():
+            if line_picker:
+                # EVERY shape drawn above gets an entry. `sub` was already capped, so the count in
+                # the legend and the length of the dropdown are the same number by construction.
+                for r in sub.itertuples():
                     a2, b2 = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
                     ix, iy = [], []
                     for sl, ic in ((r.upper_slope, r.upper_intercept),
@@ -782,38 +791,39 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         ix = [tl_[a2], ev(b2), None]
                         iy = [r.boundary_slope * a2 + r.boundary_intercept,
                               r.boundary_slope * b2 + r.boundary_intercept, None]
+                    short = f"{pd.to_datetime(str(tl_[a2])):%b-%d %H:%M}"
                     picker.append((label,
-                                   f"{label} @ {pd.to_datetime(str(tl_[a2])):%b-%d %H:%M}"
+                                   f"{label} @ {short}"
                                    f"  (confirms {pd.to_datetime(str(ev(r.confirm_i))):%b-%d %H:%M})",
                                    len(fig.data), pd.Timestamp(str(tl_[a2])).value))
                     used += 1
+                    # the two traces share a legendgroup so that ONE legend entry moves both. The
+                    # entry only appears once a family is selected — see the menu block below.
+                    grp = f"i#{len(fig.data)}"
                     fig.add_trace(go.Scattergl(x=ix, y=iy, mode="lines", visible=False,
-                                               showlegend=False,
+                                               showlegend=False, name=short, legendgroup=grp,
                                                line=dict(color=colr, width=round(width + 0.6, 2)),
                                                hovertemplate=f"{label}<extra></extra>"))
                     fig.add_trace(go.Scattergl(
                         x=list(r.touch_t) + [ev(r.confirm_i)],
                         y=list(r.touch_price) + [float(r.entry)],
-                        mode="markers", visible=False, showlegend=False,
+                        mode="markers", visible=False, showlegend=False, legendgroup=grp,
                         marker=dict(size=[dotsz + 2] * len(r.touch_t) + [dotsz + 8], color=colr,
                                     symbol=["circle"] * len(r.touch_t) + ["star"],
                                     line=dict(width=1.5, color="#fff")),
                         hovertemplate="touch / CONFIRMED<extra></extra>"))
 
         if draw_lines:
-            from ..indicators.trendlines import trendline_table
-            tl = trendline_table(dl, **(trendline_kwargs or {}))
-            if len(tl) and vl > 0:
-                tl = tl[tl["end_i"] >= vl]        # lines that died before the window opened
+            tl = lines_tbl if lines_tbl is not None else pd.DataFrame(columns=["kind"])
             for kind, base_label, colr in ((-1, "support trendline", "#2ecc71"),
                                            (+1, "resistance trendline", "#e74c3c")):
                 sub = tl[tl["kind"] == kind] if len(tl) else tl
                 if not len(sub):
                     continue
-                if max_shapes_per_tf and len(sub) > int(max_shapes_per_tf):
+                if len(sub) > cap:
                     # the same cap the shapes get: a 1m layer offered 80 resistance lines over nine
                     # days, which is a mesh rather than a chart. The most recent are the live ones.
-                    sub = sub.sort_values("end_i").tail(int(max_shapes_per_tf))
+                    sub = sub.sort_values("end_i").tail(cap)
                 label = pref + base_label
                 _register(label, lgp + base_label)
                 key = (base_label.split()[0] + "_trendline") if chart_tf else f"{tf}::{base_label}"
@@ -854,27 +864,19 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         showlegend=False, opacity=alpha,
                         marker=dict(size=dotsz + 4, color=colr, symbol="x", line=dict(width=1.5)),
                         hovertemplate=f"{label} BREAK<extra></extra>"))
-                if line_picker and (picker_budget is None or used < picker_budget):
-                    # only offer lines that are actually VISIBLE in the opening view. Warm-up history
-                    # can carry a hundred more, and a dropdown of 130 entries is no more usable than
-                    # the overlapping lines it was meant to untangle.
-                    if view_start is not None:
-                        vs = pd.to_datetime(view_start)
-                        # bar timestamps are tz-aware; a bare date string is not
-                        if vs.tzinfo is None:
-                            vs = vs.tz_localize("UTC")
-                        per_line = [pl for pl in per_line
-                                    if pd.to_datetime(str(pl[1][1])).tz_convert("UTC") >= vs]
-                    if picker_budget is not None:
-                        room = max(0, picker_budget - used)
-                        per_line = per_line[-room:] if len(per_line) > room else per_line
+                if line_picker:
+                    # one entry per line DRAWN, for the same reason as the shapes above
                     for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke in per_line:
                         picker.append((fam, lbl, len(fig.data), pd.Timestamp(str(tl_[si])).value))
                         used += 1
+                        grp = f"i#{len(fig.data)}"
                         # same dashed style as the grouped view, just thicker — isolating a line
                         # should not make it look like a different kind of object
                         fig.add_trace(go.Scattergl(
                             x=xs, y=ys, mode="lines", visible=False, showlegend=False,
+                            name=f"{pd.to_datetime(str(tl_[si])):%b-%d %H:%M}"
+                                 f" ({'broke' if broke else 'faded'})",
+                            legendgroup=grp,
                             line=dict(color=colr, width=round(width + 0.4, 2), dash="dash"),
                             hovertemplate=f"{lbl}<extra></extra>"))
 
@@ -898,6 +900,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                             syms.append("x"); szs.append(dotsz + 9); txt.append("BROKE here")
                         fig.add_trace(go.Scattergl(
                             x=mx2, y=my2, mode="markers", visible=False, showlegend=False,
+                            legendgroup=grp,
                             marker=dict(size=szs, color=colr, symbol=syms,
                                         line=dict(width=1.6, color="#fff")),
                             text=txt, hovertemplate="%{text}<extra></extra>"))
@@ -935,32 +938,54 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             if budget[tf] > spent and pos + 1 < len(order):
                 budget[order[pos + 1]] += budget[tf] - spent     # rolls on to the next timeframe
 
-    # ---- TWO dropdowns: pick a family, then pick one instance inside it ------------------
-    # A single flat list does not scale: with warm-up history it reached 130 entries, which is no
-    # more readable than the overlapping lines it was meant to untangle. The first menu narrows to
-    # one family (S/R zones, support trendlines, rising wedges...), the second isolates a single
-    # occurrence within it. Instances are listed EARLIEST FIRST so the order matches the chart.
-    # With extra timeframes the family carries its timeframe (`4h · rising wedge`) and the list is
-    # grouped under per-timeframe headers rather than growing a THIRD cascading menu — a third menu
-    # nests multiplicatively (a timeframe button would carry the family list, whose buttons each
-    # carry an instance list), which is exactly what made the naive version unopenable.
+    # ---- THREE dropdowns: timeframe -> family -> one instance ---------------------------
+    # Each menu narrows the next, because a flat list does not scale and, worse, plotly menus do
+    # not SCROLL: they render every button and clip whatever runs past the plot area. Thirty
+    # families was 570px of dropdown in a 900px figure, so the last few were simply unreachable.
+    # Cascading keeps every menu short by construction — one timeframe's families, one family's
+    # instances — rather than relying on the figure being tall enough.
+    #
+    # MULTI-SELECT lives in the LEGEND, not here: a plotly dropdown is single-choice by nature.
+    # Picking a family promotes its instances to individual legend entries, so you can then tick
+    # exactly the two channel-ups you want and leave everything else off, EMAs included.
     if picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
         owned = {i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
         fam_groups = {}
         for fam, lbl, idx, sortk in sorted(picker, key=lambda z: z[3]):
             fam_groups.setdefault(fam, []).append((lbl, idx))
+        # instance traces are hidden from the legend until a family is chosen
+        base_showlegend = [tr.showlegend if tr.showlegend is not None else True for tr in fig.data]
+
+        def _legend_for(fams=None):
+            """Which instance traces appear as their own legend entries."""
+            want = set()
+            for fam in (fams or ()):
+                want |= {i for _, i in fam_groups.get(fam, ())}
+            v = list(base_showlegend)
+            for entries in fam_groups.values():
+                for _, i in entries:
+                    v[i] = i in want          # the line carries the entry...
+                    v[i + 1] = False          # ...its markers ride the same legendgroup
+            return v
 
         def _grouped(keep=None):
-            """Restore the normal grouped drawing, optionally showing only `keep` legendgroups."""
+            """The normal grouped drawing, optionally showing only `keep` legendgroups."""
             v = list(base)
             for i in owned:
                 v[i] = False
             if keep is not None:
                 for j, tr in enumerate(fig.data):
                     g = getattr(tr, "legendgroup", "") or ""
-                    if g and g != "price" and not g.startswith("ema"):
+                    if g and g != "price" and not g.startswith(("ema", "mtfema", "i#")):
                         v[j] = (g in keep)
+            return v
+
+        def _family(fam):
+            """One family, with every instance of it ON and individually toggleable."""
+            v = _grouped({fam_lg[fam]})
+            for _, i in fam_groups[fam]:
+                v[i] = v[i + 1] = True
             return v
 
         def _isolate(first):
@@ -969,91 +994,99 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 v[i] = False
             for j, tr in enumerate(fig.data):
                 g = getattr(tr, "legendgroup", "") or ""
-                if g and g not in ("price",) and not g.startswith("ema"):
+                if g and g != "price" and not g.startswith(("ema", "mtfema")):
                     v[j] = False          # everything else out of the way
-            v[first] = True
-            v[first + 1] = True
+            v[first] = v[first + 1] = True
             return v
 
-        def _inst_buttons(fams, instances=True):
-            """The instance menu's contents for a given set of families.
+        def _tf_sort(k):
+            return (0, 0) if k is None else (1, -tf_minutes(k))
 
-            `instances=False` lists the families only. Every button carries a visibility vector as
-            long as the whole trace list, so the menu costs buttons x traces; listing an instance in
-            the initial menu AND under its timeframe AND under its family tripled the dominant term
-            for nothing. With several timeframes loaded a flat list of every instance is unusable
-            anyway, so the wide selections show families and the family itself shows its instances.
-            """
-            keep = {fam_lg[fams[0]]} if len(fams) == 1 else None
-            out = [dict(label="▸ all in this group", method="update",
-                        args=[{"visible": _grouped(keep)}])]
-            for fam in fams:
-                if len(fams) > 1:
-                    out.append(dict(label=f"── {fam.upper()}"
-                                          f"{'' if instances else f'  ({len(fam_groups[fam])})'} ──",
-                                    method="update",
-                                    args=[{"visible": _grouped({fam_lg[fam]})}]))
-                if not instances:
-                    continue
-                for lbl, idx in fam_groups[fam]:
-                    out.append(dict(label=("    " if len(fams) > 1 else "") + lbl,
-                                    method="update", args=[{"visible": _isolate(idx)}]))
+        def _tf_name(k):
+            return "this chart" if k is None else k
+
+        live_tfs = [k for k in sorted(tf_fams, key=_tf_sort)
+                    if any(f in fam_groups for f in tf_fams[k])]
+        fams_of = {k: [f for f in tf_fams[k] if f in fam_groups] for k in live_tfs}
+
+        # ---- menu 2: the instances of one family --------------------------------------
+        def _inst_buttons(fam=None):
+            if fam is None:
+                return [dict(label="▸ pick a pattern to list its occurrences", method="update",
+                             args=[{"visible": _grouped(None)}, {}])]
+            out = [dict(label=f"▸ all {len(fam_groups[fam])} — tick them in the legend",
+                        method="update",
+                        args=[{"visible": _family(fam), "showlegend": _legend_for([fam])}, {}])]
+            for lbl, idx in fam_groups[fam]:
+                out.append(dict(label=lbl, method="update",
+                                args=[{"visible": _isolate(idx)}, {}]))
             return out
 
-        multi_tf = len(tf_fams) > 1
-        def _wide_buttons(fams):
-            """Menu 2 for a selection spanning several families."""
-            return _inst_buttons(fams, instances=not multi_tf)
+        # ---- menu 1: the families of one timeframe ------------------------------------
+        # With several timeframes loaded the cross-timeframe list ran to 51 rows — 969px of
+        # dropdown in a plot area of 760 — so it was clipped exactly like the flat list it replaced.
+        # A menu that cannot show its own last entry is not a menu, so the wide selection prompts
+        # for a timeframe instead. Nothing is lost: with no timeframe chosen every family is a
+        # legend entry already, which is also the only way to tick several at once.
+        multi_tf = len(live_tfs) > 1
 
-        # CASCADING: picking a family REWRITES the instance menu, so the second dropdown only ever
-        # lists what belongs to the first one's selection. Plotly has no native cascade, but a
-        # button's `update` carries a layout patch alongside the trace patch, and a menu's buttons
-        # are a layout property — so the first menu can rebuild the second.
-        all_fams = list(fam_groups)
-        fam_buttons = [dict(label="▸ everything", method="update",
-                            args=[{"visible": _grouped(None)},
-                                  {"updatemenus[1].buttons": _wide_buttons(all_fams),
-                                   "updatemenus[1].active": 0}])]
-        if sr_zones:
-            fam_buttons.append(dict(
-                label="S/R zones", method="update",
-                args=[{"visible": _grouped({"sr"})},
-                      {"updatemenus[1].buttons": [dict(
-                          label="(S/R zones have no individual entries)", method="update",
-                          args=[{"visible": _grouped({"sr"})}])],
-                       "updatemenus[1].active": 0}]))
+        def _fam_buttons(tf=_SENTINEL):
+            wide = tf is _SENTINEL
+            fams = [] if (wide and multi_tf) else (
+                [f for k in live_tfs for f in fams_of[k]] if wide else fams_of.get(tf, []))
+            head = ("▸ every pattern" if wide else f"▸ every {_tf_name(tf)} pattern")
+            keep = {fam_lg[f] for f in fams_of.get(tf, ())} if not wide else None
+            out = [dict(label=head, method="update",
+                        args=[{"visible": _grouped(keep), "showlegend": _legend_for(None)},
+                              {"updatemenus[2].buttons": _inst_buttons(None),
+                               "updatemenus[2].active": 0}])]
+            if sr_zones and wide:
+                out.append(dict(label="S/R zones", method="update",
+                                args=[{"visible": _grouped({"sr"}),
+                                       "showlegend": _legend_for(None)},
+                                      {"updatemenus[2].buttons": _inst_buttons(None),
+                                       "updatemenus[2].active": 0}]))
+            if wide and multi_tf:
+                out.append(dict(label="── pick a timeframe on the left ──", method="update",
+                                args=[{"visible": _grouped(None),
+                                       "showlegend": _legend_for(None)},
+                                      {"updatemenus[2].buttons": _inst_buttons(None),
+                                       "updatemenus[2].active": 0}]))
+            for fam in fams:
+                # the label drops the timeframe prefix once a timeframe is selected — it is already
+                # named by the menu to the left, and repeating it just makes every row longer
+                short = fam.split(" · ", 1)[-1] if (not wide and tf is not None) else fam
+                out.append(dict(label=f"{short}  ({len(fam_groups[fam])})", method="update",
+                                args=[{"visible": _family(fam), "showlegend": _legend_for([fam])},
+                                      {"updatemenus[2].buttons": _inst_buttons(fam),
+                                       "updatemenus[2].active": 0}]))
+            return out
 
-        def _fam_button(fam):
-            return dict(label=f"{fam}  ({len(fam_groups[fam])})", method="update",
-                        args=[{"visible": _grouped({fam_lg[fam]})},
-                              {"updatemenus[1].buttons": _inst_buttons([fam]),
-                               "updatemenus[1].active": 0}])
-
-        if multi_tf:
-            # one section per timeframe, coarsest first, each opening with an "all of it" entry
-            for tf in sorted(tf_fams, key=lambda k: (0, 0) if k is None else (1, -tf_minutes(k))):
-                fams = [f for f in tf_fams[tf] if f in fam_groups]
-                if not fams:
-                    continue
-                fam_buttons.append(dict(
-                    label=f"━━ {'this chart' if tf is None else tf}"
-                          f"  —  all patterns ({len(fams)})",
-                    method="update",
-                    args=[{"visible": _grouped({fam_lg[f] for f in fams})},
-                          {"updatemenus[1].buttons": _wide_buttons(fams),
-                           "updatemenus[1].active": 0}]))
-                for fam in fams:
-                    fam_buttons.append(_fam_button(fam))
-        else:
-            for fam in all_fams:
-                fam_buttons.append(_fam_button(fam))
+        # ---- menu 0: the timeframe ----------------------------------------------------
+        tf_buttons = [dict(label="▸ all timeframes", method="update",
+                           args=[{"visible": _grouped(None), "showlegend": _legend_for(None)},
+                                 {"updatemenus[1].buttons": _fam_buttons(),
+                                  "updatemenus[1].active": 0,
+                                  "updatemenus[2].buttons": _inst_buttons(None),
+                                  "updatemenus[2].active": 0}])]
+        for k in live_tfs:
+            n_inst = sum(len(fam_groups[f]) for f in fams_of[k])
+            tf_buttons.append(dict(
+                label=f"{_tf_name(k)}   ({len(fams_of[k])} patterns, {n_inst})", method="update",
+                args=[{"visible": _grouped({fam_lg[f] for f in fams_of[k]}),
+                       "showlegend": _legend_for(None)},
+                      {"updatemenus[1].buttons": _fam_buttons(k),
+                       "updatemenus[1].active": 0,
+                       "updatemenus[2].buttons": _inst_buttons(None),
+                       "updatemenus[2].active": 0}]))
 
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
                     font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
         fig.update_layout(updatemenus=[
-            dict(buttons=fam_buttons, x=0.0, xanchor="left", **menu),
-            dict(buttons=_wide_buttons(all_fams), x=0.185, xanchor="left", **menu)])
+            dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
+            dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
+            dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)])
 
     if view_start is not None:
         # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown
