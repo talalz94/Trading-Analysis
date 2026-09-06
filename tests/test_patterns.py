@@ -1402,3 +1402,94 @@ def test_a_single_timeframe_chart_still_lists_its_families_directly(rnd):
     fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True)
     fams = [b.label for b in fig.layout.updatemenus[1].buttons]
     assert len(fams) > 1 and not any("pick a timeframe" in f for f in fams)
+
+
+# ---------------------------------------------------------------------------
+# legend_instances — the only way to build a selection ACROSS families
+#
+# A plotly dropdown is single-choice and its buttons are stateless, so each press REPLACES the
+# selection. One 15m line plus two 5m lines plus a few 1m shapes therefore cannot be expressed in
+# the menus at all. Pinned families put every occurrence in the legend, where entries toggle
+# independently and accumulate.
+# ---------------------------------------------------------------------------
+def _pinned_names(fig):
+    return [tr.name for tr in fig.data
+            if tr.showlegend and (tr.legendgroup or "").startswith("i#")]
+
+
+def test_pinned_families_become_independent_legend_entries(rnd):
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h")}
+    kw = dict(sr_zones=False, emas=(), trendlines=True, tf_frames=frames)
+
+    assert _pinned_names(pattern_figure(rnd, **kw)) == []      # nothing pinned by default
+
+    fig = pattern_figure(rnd, legend_instances=["1h::resistance_trendline"], **kw)
+    names = _pinned_names(fig)
+    assert names and all(n.startswith("1h · resistance trendline") for n in names)
+    assert len(set(names)) == len(names), "two occurrences must not share a legend label"
+
+    idx = [i for i, tr in enumerate(fig.data) if tr.showlegend
+           and (tr.legendgroup or "").startswith("i#")]
+    # each is its own legendgroup, so clicking one never moves another
+    assert len({fig.data[i].legendgroup for i in idx}) == len(idx)
+    # ...and they are LISTED but off, so the legend is the selection rather than the display
+    assert all(fig.data[i].visible == "legendonly" for i in idx)
+
+
+def test_a_bare_family_name_means_the_charts_own_timeframe(rnd):
+    """Matching how `patterns=` and `start_visible=` name things; `*::` spans every timeframe."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h")}
+    kw = dict(sr_zones=False, emas=(), trendlines=True, tf_frames=frames)
+
+    bare = _pinned_names(pattern_figure(rnd, legend_instances="resistance_trendline", **kw))
+    assert bare and not any(n.startswith("1h ·") for n in bare)
+
+    both = _pinned_names(pattern_figure(rnd, legend_instances="*::resistance_trendline", **kw))
+    assert any(n.startswith("1h ·") for n in both) and any(not n.startswith("1h ·") for n in both)
+    assert len(both) > len(bare)
+
+    whole_tf = _pinned_names(pattern_figure(rnd, legend_instances="1h", **kw))
+    assert all(n.startswith("1h ·") for n in whole_tf)
+    assert len({n.split(" #")[0] for n in whole_tf}) > 1, "a timeframe pins all of its families"
+
+    everything = _pinned_names(pattern_figure(rnd, legend_instances="all", **kw))
+    assert len(everything) > len(whole_tf)
+
+
+def test_a_space_and_an_underscore_name_the_same_family(rnd):
+    """Patterns are named with underscores and trendlines with a space; nobody should have to care."""
+    from quant.viz.studies import pattern_figure
+
+    kw = dict(sr_zones=False, emas=(), trendlines=True)
+    a = _pinned_names(pattern_figure(rnd, legend_instances="resistance_trendline", **kw))
+    b = _pinned_names(pattern_figure(rnd, legend_instances="resistance trendline", **kw))
+    assert a and a == b
+
+
+def test_a_menu_press_never_removes_a_pinned_entry_from_the_legend(rnd):
+    """Otherwise the accumulated selection would be destroyed by the first dropdown click."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    frames = {"1h": resample_ohlcv(rnd, "1h")}
+    fig = pattern_figure(rnd, sr_zones=False, emas=(), trendlines=True, tf_frames=frames,
+                         legend_instances=["1h::resistance_trendline", "support_trendline"])
+    pinned = [i for i, tr in enumerate(fig.data)
+              if tr.showlegend and (tr.legendgroup or "").startswith("i#")]
+    assert pinned
+
+    checked = 0
+    for m in fig.layout.updatemenus:
+        for b in m.buttons:
+            patch = b.args[0] if b.args and isinstance(b.args[0], dict) else {}
+            if "showlegend" not in patch:
+                continue
+            checked += 1
+            assert all(patch["showlegend"][i] for i in pinned), f"{b.label} dropped a pinned entry"
+    assert checked, "no menu button carried a showlegend patch"

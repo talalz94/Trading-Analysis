@@ -1008,8 +1008,16 @@ brought it to **447 traces / 67 buttons / 1.23 MB**:
   (it prompts for one) and each occurrence appears under its own family only;
 * **multi-select is the LEGEND, not the menus.** A plotly dropdown is single-choice, so choosing a
   family promotes its occurrences to individual legend entries — that is what lets you keep two of
-  five channel-ups with the EMAs untouched. For whole families across timeframes, the legend already
-  lists them all;
+  five channel-ups with the EMAs untouched;
+* **`legend_instances=` is the only way to select ACROSS families.** Menu buttons are STATELESS:
+  each press writes a whole state, so choosing the 5m family destroys the 15m pick and *one 15m
+  resistance line plus two 5m ones plus a few 1m shapes* is inexpressible in the menus at any depth
+  of cascade. Pinning those families instead puts every one of their occurrences in the legend
+  permanently, each starting off. Legend entries toggle independently, accumulate, and the menus are
+  written never to drop a pinned one — so any combination can be clicked together. Keys are
+  `"name"` (chart timeframe, matching `patterns=`), `"5m::name"`, `"*::name"`, `"5m"`, or `"all"`,
+  with spaces and underscores equivalent because patterns use one and trendlines the other. Pin only
+  what you are working on; `"all"` is a legend hundreds of rows long. Notebook 17 prints the keys;
 * **each instance is listed once.** It used to appear in the initial menu, under its timeframe and
   under its family; three copies of the dominant term was 1.1 MB of the 1.6 MB. Wide selections now
   list families, and the family itself lists its instances;

@@ -417,7 +417,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    zone_lookback_bars: int = 2000, tf_frames=None, tf_patterns=None,
                    tf_trendlines=None, max_picker_instances: int = 60,
                    max_shapes_per_tf: int = 40, y_from_price: bool = True,
-                   mtf_emas=None):
+                   mtf_emas=None, legend_instances=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -481,6 +481,16 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     began before the window can be far taller than it: a 1h falling wedge starting at 86,000 and
     converging at 51,800 stretched a 60k-76k chart out to 50k-85k, shrinking the price action to a
     third of the pane. The chart is there to show price; an annotation should not rescale it.
+
+    `legend_instances` PINS chosen families so that every occurrence of them becomes its own
+    permanent legend entry, e.g. `["15m::resistance_trendline", "5m::resistance_trendline",
+    "1m::channel_up"]`, or `"all"`, or a bare timeframe like `"5m"` for all of its families. This is
+    the only way to build a selection ACROSS families — one 15m line plus two 5m lines plus a few 1m
+    shapes — because a plotly dropdown is single-choice and its buttons are stateless, so each press
+    replaces the selection rather than adding to it. The legend has no such limit: entries toggle
+    independently, accumulate, and it scrolls. Pinned entries start off, and the dropdowns are then a
+    bulk show/hide over them rather than the way you choose. Pin only what you are working on: every
+    occurrence of every family would be a legend hundreds of rows long.
 
     `mtf_emas` draws HIGHER-TIMEFRAME EMAs, taking the same spec as `scenario_figure`:
     `("1h", 200)`, `("1h", [50, 200])`, or `[("1h", 200), ("4h", 200)]`. A frame already loaded in
@@ -632,7 +642,34 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         nm = list(want) if want else list(_PD)
         return nm, chart_pattern_shapes(frame, patterns=nm, **(detect_kwargs or {}))
 
+    # families whose every occurrence gets a permanent legend entry — resolved to the `tf::name`
+    # keys used below, so a bare timeframe or a bare pattern name both work
+    _pin_all = isinstance(legend_instances, str) and legend_instances.lower() == "all"
+
+    def _norm(x):
+        # patterns are named with underscores and trendlines with a space, and nobody should have
+        # to remember which; "5m::resistance trendline" and "5m::resistance_trendline" are one key
+        return str(x).strip().lower().replace(" ", "_").replace("·", "::").replace("__", "_")
+
+    _pin = set()
+    if legend_instances and not _pin_all:
+        raw = [legend_instances] if isinstance(legend_instances, str) else list(legend_instances)
+        _pin = {_norm(k) for k in raw}
+
+    def _pinned(tf, name):
+        """Is this family pinned? A BARE name means the chart's own timeframe, matching how
+        `patterns=` and `start_visible=` name things; `*::name` means the family on every one."""
+        if _pin_all:
+            return True
+        keys = {_norm(f"*::{name}")}
+        keys.add(_norm(name) if tf is None else _norm(f"{tf}::{name}"))
+        if tf is not None:
+            keys.add(_norm(tf))
+        return bool(_pin & keys)
+
     picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
+    pinned_traces = set()
+    n_pin = {}       # per-family counter, so two lines born on the same bar get distinct labels
     fam_lg = {}      # family label -> the legendgroup that family's grouped traces carry
     tf_fams = {}     # timeframe label (None = this chart) -> its family labels, in drawing order
 
@@ -800,14 +837,23 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     # the two traces share a legendgroup so that ONE legend entry moves both. The
                     # entry only appears once a family is selected — see the menu block below.
                     grp = f"i#{len(fig.data)}"
-                    fig.add_trace(go.Scattergl(x=ix, y=iy, mode="lines", visible=False,
-                                               showlegend=False, name=short, legendgroup=grp,
-                                               line=dict(color=colr, width=round(width + 0.6, 2)),
-                                               hovertemplate=f"{label}<extra></extra>"))
+                    pin = _pinned(tf, name)
+                    if pin:
+                        pinned_traces.update((len(fig.data), len(fig.data) + 1))
+                        n_pin[label] = n_pin.get(label, 0) + 1
+                    fig.add_trace(go.Scattergl(
+                        x=ix, y=iy, mode="lines",
+                        # pinned entries are LISTED but off, so the legend is the selection
+                        visible="legendonly" if pin else False, showlegend=pin,
+                        name=f"{label} #{n_pin[label]} · {short}" if pin else short,
+                        legendgroup=grp,
+                        line=dict(color=colr, width=round(width + 0.6, 2)),
+                        hovertemplate=f"{label}<extra></extra>"))
                     fig.add_trace(go.Scattergl(
                         x=list(r.touch_t) + [ev(r.confirm_i)],
                         y=list(r.touch_price) + [float(r.entry)],
-                        mode="markers", visible=False, showlegend=False, legendgroup=grp,
+                        mode="markers", visible="legendonly" if pin else False,
+                        showlegend=False, legendgroup=grp,
                         marker=dict(size=[dotsz + 2] * len(r.touch_t) + [dotsz + 8], color=colr,
                                     symbol=["circle"] * len(r.touch_t) + ["star"],
                                     line=dict(width=1.5, color="#fff")),
@@ -870,12 +916,19 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         picker.append((fam, lbl, len(fig.data), pd.Timestamp(str(tl_[si])).value))
                         used += 1
                         grp = f"i#{len(fig.data)}"
+                        pin = _pinned(tf, base_label)
+                        if pin:
+                            pinned_traces.update((len(fig.data), len(fig.data) + 1))
+                            n_pin[label] = n_pin.get(label, 0) + 1
+                        _when = f"{pd.to_datetime(str(tl_[si])):%b-%d %H:%M}"
                         # same dashed style as the grouped view, just thicker — isolating a line
                         # should not make it look like a different kind of object
                         fig.add_trace(go.Scattergl(
-                            x=xs, y=ys, mode="lines", visible=False, showlegend=False,
-                            name=f"{pd.to_datetime(str(tl_[si])):%b-%d %H:%M}"
-                                 f" ({'broke' if broke else 'faded'})",
+                            x=xs, y=ys, mode="lines",
+                            visible="legendonly" if pin else False, showlegend=pin,
+                            name=(f"{label} #{n_pin[label]} · {_when}"
+                                  f" ({'broke' if broke else 'faded'})" if pin
+                                  else f"{_when} ({'broke' if broke else 'faded'})"),
                             legendgroup=grp,
                             line=dict(color=colr, width=round(width + 0.4, 2), dash="dash"),
                             hovertemplate=f"{lbl}<extra></extra>"))
@@ -899,7 +952,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                             mx2.append(ev(ei)); my2.append(float(_y_at(ei)))
                             syms.append("x"); szs.append(dotsz + 9); txt.append("BROKE here")
                         fig.add_trace(go.Scattergl(
-                            x=mx2, y=my2, mode="markers", visible=False, showlegend=False,
+                            x=mx2, y=my2, mode="markers",
+                            visible="legendonly" if pin else False, showlegend=False,
                             legendgroup=grp,
                             marker=dict(size=szs, color=colr, symbol=syms,
                                         line=dict(width=1.6, color="#fff")),
@@ -965,8 +1019,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             v = list(base_showlegend)
             for entries in fam_groups.values():
                 for _, i in entries:
-                    v[i] = i in want          # the line carries the entry...
-                    v[i + 1] = False          # ...its markers ride the same legendgroup
+                    # a PINNED entry stays in the legend whatever the menus do — it is the only
+                    # selection that survives across families, so a menu press must not erase it
+                    v[i] = (i in want) or (i in pinned_traces)
+                    v[i + 1] = False          # its markers ride the same legendgroup
             return v
 
         def _grouped(keep=None):

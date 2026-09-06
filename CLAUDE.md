@@ -182,7 +182,11 @@ quant/
 │   │                    #     narrowing the next (plotly menus do NOT scroll -- they clip, so a
 │   │                    #     51-row list had unreachable entries). MULTI-SELECT is the LEGEND:
 │   │                    #     choosing a family promotes its occurrences to their own entries, so
-│   │                    #     you can keep 2 of 5. Caps bound DRAWN and LISTED together -- trimming
+│   │                    #     you can keep 2 of 5. ACROSS families needs legend_instances=[...],
+│   │                    #     which pins a family so every occurrence is a permanent, independent
+│   │                    #     legend entry -- menu buttons are STATELESS, so a press replaces the
+│   │                    #     selection and cannot accumulate ("name"=chart tf, "5m::name",
+│   │                    #     "*::name", "5m", "all"). Caps bound DRAWN and LISTED together -- trimming
 │   │                    #     only the menu left a legend saying (11) beside a dropdown of 9.
 │   │                    #     max_picker_
 │   │                    #     instances= / max_shapes_per_tf= bound it; mtf_emas=("1h",50,100,200)
