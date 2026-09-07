@@ -119,6 +119,10 @@ quant/
 │   │                    #     published only from the bar its last pivot CONFIRMED) and flags
 │   │                    #     tl_break_up / tl_break_dn on the close through it. A broken line is
 │   │                    #     retired. trendline_table() gives one row per line for drawing.
+│   │                    #     mtf_trendlines(df_1m, frames) fits lines on EVERY timeframe and
+│   │                    #     merges them onto the base grid (align_timeframes shift_bars=1, so a
+│   │                    #     1h line is invisible until its bar closed) -> tl_res/5m__tl_res/...;
+│   │                    #     trendline_level_cols() names them, base first then coarsest.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
@@ -194,7 +198,9 @@ quant/
 │   │                    #     bar close (an interpolated 1h EMA shows a number nobody could read);
 │   │                    #     reuses a tf_frames frame for the history, warns when it cannot warm
 │   │                    #     up rather than drawing an all-NaN line, hue=timeframe weight=period;
-│   │                    #     y_from_price= scales the
+│   │                    #     trades=/trade_tp_rr= overlay a backtest -- entry marker (side, R,
+│   │                    #     close reason, trigger), entry level, stop and target running to the
+│   │                    #     exit, and an exit marker coloured by outcome; y_from_price= scales the
 │   │                    #     y-axis to the CANDLES, not to geometry that may be far taller,
 │   │                    #     zone_lookback_bars= (S/R zones from BOUNDED history -- warm-up makes
 │   │                    #     them stale in a trend: 1 of 40 near price vs 38 at a 2000-bar lookback),
@@ -215,7 +221,15 @@ quant/
 │   │                    #     time_entry = NULL BENCHMARK (enter every N bars, no signal — any entry
 │   │                    #     that can't beat a metronome on the same exits contributed nothing) ·
 │   │                    #     candle_pattern (named subset or the whole library via its score) ·
-│   │                    #     chart_pattern (fires on the neckline break, not on shape completion)
+│   │                    #     chart_pattern (fires on the neckline break, not on shape completion) ·
+│   │                    #     mtf_trendline = a FITTED trendline from ANY timeframe giving way
+│   │                    #     (long through resistance, short through support). Three combinable
+│   │                    #     conditions: tl_close_n closes beyond / tl_full_m whole candles beyond
+│   │                    #     / tl_touch_k prior touches, joined by tl_combine all|any. The level
+│   │                    #     is HELD for the confirmation window because add_trendlines retires a
+│   │                    #     line the moment it breaks -- without that, n>1 fired ZERO times on
+│   │                    #     the base timeframe. trendline_trigger() labels each trade with WHICH
+│   │                    #     timeframe fired, since the entry is an OR across them
 │   ├── support_break.py #   support_break_short v1.0 core / v1.1 +HH-HL structure / v1.2 no-structure
 │   │                    #     / v1.3 nearest-trough — short below a down-sloping smoothed 200-EMA on a
 │   │                    #     support break; entry_mode = break_close|wait_n|n_red|pullback (Q2);
@@ -240,7 +254,10 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 17_multi_timeframe_patterns = ONE chart, patterns from SEVERAL
+notebooks/               # 18_trendline_trading_sim = TRADES multi-timeframe trendline breaks on
+                         #   1m (entry rule, previous-high/low stop, BE@1R + 3R target), with the
+                         #   trades on the chart and the cost floor measured on them
+                         # 17_multi_timeframe_patterns = ONE chart, patterns from SEVERAL
                          #   timeframes (tf_frames=); the window_holds diagnostic says up front
                          #   whether a timeframe's shapes can even fit on screen
                          # 16_trendline_research = reads experiments/trendline_settings_search

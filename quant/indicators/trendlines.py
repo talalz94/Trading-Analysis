@@ -27,7 +27,7 @@ was measured and found to carry none.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -282,3 +282,50 @@ def trendline_table(df: pd.DataFrame, *, prefix: str = "tl", **kwargs) -> pd.Dat
         out["end_t"] = tv[out["end_i"].to_numpy(int)]
         out["touch_t"] = [list(tv[np.asarray(v, int)]) for v in out["touch_i"]]
     return out
+
+
+def mtf_trendlines(base_df: pd.DataFrame, frames: Optional[Dict[str, pd.DataFrame]] = None, *,
+                   time_col: str = "t", prefix: str = "tl", **kwargs) -> pd.DataFrame:
+    """Support and resistance lines from SEVERAL timeframes, all on the base frame's grid.
+
+    Fits lines on `base_df` itself and on every frame in `frames`, then merges the higher-timeframe
+    columns back with the project's usual anti-lookahead shift: a 1h line read off the bar stamped
+    12:00 is only knowable when that bar CLOSES at 13:00, so `align_timeframes(shift_bars=1)` makes
+    it visible to base bars from 13:00 onward and no earlier.
+
+    Columns are the ones `add_trendlines` produces, prefixed by timeframe for the extra frames:
+    `tl_res` / `tl_sup` for the base, `1h__tl_res` / `1h__tl_sup` and so on for the rest. Load the
+    frames with `quant.data.tf_frames` so each has its history measured in ITS OWN bars — a 1h line
+    needs `min_span_bars` 1h bars before it can exist at all.
+
+    `frames` may be None or empty, in which case this is just `add_trendlines`.
+    """
+    from ..data.timeframe import align_timeframes
+
+    out = add_trendlines(base_df, prefix=prefix, **kwargs)
+    if not frames:
+        return out
+    others = {tf: add_trendlines(f.reset_index(drop=True), prefix=prefix, **kwargs)
+              for tf, f in frames.items()}
+    return align_timeframes(out, others, time_col=time_col, shift_bars=1)
+
+
+def trendline_level_cols(df: pd.DataFrame, side: str, *, prefix: str = "tl") -> List[str]:
+    """Every `{tf}__{prefix}_{res|sup}` column present, base frame first then coarsest-first.
+
+    `side` is "long" (resistance lines, broken upward) or "short" (support lines, broken downward).
+    """
+    from ..data.timeframe import tf_minutes
+
+    which = "res" if side == "long" else "sup"
+    base = f"{prefix}_{which}"
+    cols = [base] if base in df.columns else []
+    extra = [c for c in df.columns if c.endswith(f"__{base}")]
+
+    def _key(c):
+        try:
+            return tf_minutes(c.split("__", 1)[0])
+        except ValueError:
+            return 10 ** 9
+
+    return cols + sorted(extra, key=_key, reverse=True)   # coarsest first: structure before detail

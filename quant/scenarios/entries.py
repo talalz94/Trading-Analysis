@@ -495,3 +495,136 @@ PAT_LONG, PAT_SHORT = _both(
                 "on the bar their neckline BREAKS, never when the shape first looks complete")
 
 ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]
+
+
+# ---------------------------------------------------------------------------
+# 11. mtf_trendline — a fitted support/resistance line, from any timeframe, giving way
+# ---------------------------------------------------------------------------
+# The line levels have to be on the frame ALREADY (`quant.indicators.mtf_trendlines` puts them
+# there, higher timeframes shifted so a 1h line is only visible once its bar closed). This family
+# only reads them, so one run can trade 1m, 5m, 15m and 1h lines together and the merge stays in
+# one tested place.
+#
+# LONG breaks a RESISTANCE line upward; SHORT breaks a SUPPORT line downward. Three conditions,
+# combined by `tl_combine`:
+#
+#   tl_close_n   n consecutive CLOSES beyond the line          (the standard break rule)
+#   tl_full_m    m consecutive candles ENTIRELY beyond it      (wick included — much stricter)
+#   tl_touch_k   the line had been touched k times before it broke (a quality gate on the line,
+#                not a separate trigger: a line nobody respected is not a level)
+#
+# Any set to 0 is off. `tl_combine="all"` requires every enabled one, "any" requires one.
+_MTF_TL_DEFAULTS = {
+    "tl_prefixes": ("",),          # "" is the base frame; "5m__", "1h__" are merged timeframes
+    "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0,
+    "tl_combine": "all", "tl_tol_atr": 0.0, "tl_atr_period": 14,
+}
+
+
+def _tl_beyond(df: pd.DataFrame, p: dict, side: str, pref: str):
+    """(close beyond, whole candle beyond, the level itself) for one timeframe's line.
+
+    The level is HELD for as many bars as the confirmation rule needs. `add_trendlines` RETIRES a
+    line the moment price closes through it -- correct for the indicator, fatal here: asking for two
+    closes beyond a line meant asking the second bar to compare itself against a level that no longer
+    existed, so on the base timeframe the rule fired ZERO times while the merged higher timeframes,
+    whose values persist across their own bar, fired hundreds. Holding the last published value for
+    the length of the confirmation window is what makes "n closes beyond it" mean the same thing on
+    every timeframe. It reads only past values, so it stays causal.
+    """
+    which = "res" if side == "long" else "sup"
+    col = f"{pref}tl_{which}"
+    if col not in df.columns:
+        return None
+    hold = max(int(p.get("tl_close_n") or 0), int(p.get("tl_full_m") or 0)) - 1
+    lvl = (df[col].ffill(limit=hold) if hold > 0 else df[col]).to_numpy(float)
+    tol = float(p.get("tl_tol_atr") or 0.0)
+    if tol:
+        a = add_atr(df, int(p.get("tl_atr_period", 14)))[f"atr_{int(p.get('tl_atr_period', 14))}"]
+        pad = tol * a.to_numpy(float)
+    else:
+        pad = 0.0
+    c = df["close"].to_numpy(float)
+    lo, hi = df["low"].to_numpy(float), df["high"].to_numpy(float)
+    if side == "long":
+        return c > lvl + pad, lo > lvl + pad, lvl
+    return c < lvl - pad, hi < lvl - pad, lvl
+
+
+def _tl_entry(p: dict, side: str) -> Cond:
+    prefs = tuple(p.get("tl_prefixes") or ("",))
+    n, m, k = int(p["tl_close_n"]), int(p["tl_full_m"]), int(p["tl_touch_k"])
+    combine_all = str(p.get("tl_combine", "all")).lower() == "all"
+    which = "res" if side == "long" else "sup"
+
+    def fn(df: pd.DataFrame) -> np.ndarray:
+        fired = np.zeros(len(df), bool)
+        for pref in prefs:
+            got = _tl_beyond(df, p, side, pref)
+            if got is None:
+                continue
+            beyond_c, beyond_full, lvl = got
+            live = np.isfinite(lvl)
+            parts = []
+            if n > 0:
+                parts.append(_run_of(beyond_c, n))
+            if m > 0:
+                parts.append(_run_of(beyond_full, m))
+            if k > 0:
+                tcol = f"{pref}tl_{which}_touches"
+                parts.append(df[tcol].to_numpy(float) >= k if tcol in df.columns
+                             else np.zeros(len(df), bool))
+            if not parts:
+                continue
+            ok = parts[0].copy()
+            for q in parts[1:]:
+                ok = (ok & q) if combine_all else (ok | q)
+            fired |= ok & live
+        return fired
+
+    return raw(fn, f"mtf_trendline_{side}")
+
+
+def _run_of(flags: np.ndarray, n: int) -> np.ndarray:
+    """True where `flags` has been true for the last `n` bars INCLUDING this one."""
+    if n <= 1:
+        return flags.copy()
+    out = flags.copy()
+    for j in range(1, n):
+        out[j:] &= flags[:-j]
+        out[:j] = False
+    return out
+
+
+MTF_TRENDLINE = _both(
+    "mtf_trendline", lambda df, p: df, _tl_entry,
+    description=("break of a FITTED trendline from any timeframe -- long through resistance, short "
+                 "through support. Levels must already be on the frame "
+                 "(quant.indicators.mtf_trendlines)."),
+    defaults=_MTF_TL_DEFAULTS, prepare_keys=())
+
+
+def trendline_trigger(df: pd.DataFrame, trades: pd.DataFrame, params: dict,
+                      *, prefix_names: Optional[dict] = None) -> pd.DataFrame:
+    """Label each trade with WHICH timeframe's line fired on its entry bar.
+
+    The entry is an OR across timeframes, so the engine only knows that something fired. Re-running
+    each timeframe's condition on its own and reading it at the entry bars is the cheapest way to
+    say which -- and a trade can honestly have more than one.
+    """
+    if not len(trades):
+        return trades.assign(trigger="")
+    names = prefix_names or {}
+    hits = {}
+    for pref in tuple(params.get("tl_prefixes") or ("",)):
+        for side in ("long", "short"):
+            one = dict(params, tl_prefixes=(pref,))
+            hits[(pref, side)] = _tl_entry(one, side)(df)
+    lab = []
+    for r in trades.itertuples():
+        i, side = int(r.entry_i), r.side
+        who = [names.get(p, p.rstrip("_") or "chart")
+               for p in tuple(params.get("tl_prefixes") or ("",))
+               if hits[(p, side)][i]]
+        lab.append("+".join(who) if who else "?")
+    return trades.assign(trigger=lab)

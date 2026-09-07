@@ -417,7 +417,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    zone_lookback_bars: int = 2000, tf_frames=None, tf_patterns=None,
                    tf_trendlines=None, max_picker_instances: int = 60,
                    max_shapes_per_tf: int = 40, y_from_price: bool = True,
-                   mtf_emas=None, legend_instances=None):
+                   mtf_emas=None, legend_instances=None, trades=None, trade_tp_rr=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -491,6 +491,13 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     independently, accumulate, and it scrolls. Pinned entries start off, and the dropdowns are then a
     bulk show/hide over them rather than the way you choose. Pin only what you are working on: every
     occurrence of every family would be a legend hundreds of rows long.
+
+    `trades` overlays a backtest's trades — `SimResult.trades`, or that frame with a `trigger`
+    column added. Four legend groups, because the questions are different: the entry marker (side,
+    R, close reason, what triggered it), the entry level, the stop, and the exit marker coloured by
+    outcome. Stop and target run from entry to exit, so the box you see IS the trade.
+    `trade_tp_rr` draws the target at that many R; omit it and no target line is drawn, since the
+    engine records the stop per trade but not the target.
 
     `mtf_emas` draws HIGHER-TIMEFRAME EMAs, taking the same spec as `scenario_figure`:
     `("1h", 200)`, `("1h", [50, 200])`, or `[("1h", 200), ("4h", 200)]`. A frame already loaded in
@@ -991,6 +998,77 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 picker_budget=budget[tf])
             if budget[tf] > spent and pos + 1 < len(order):
                 budget[order[pos + 1]] += budget[tf] - spent     # rolls on to the next timeframe
+
+
+    if trades is not None and len(trades):
+        # ---- TRADES: entry, stop, target, exit -------------------------------------------
+        # Drawn as four legend groups rather than one, because the questions are different: "where
+        # did it get in", "how much was risked", "what was it aiming at", "how did it end". Each
+        # trade's stop and target run from its entry to its exit, so the box you see IS the trade.
+        tq = trades.copy()
+        for c in ("entry_time", "exit_time"):
+            tq[c] = pd.to_datetime(tq[c])
+        risk = (tq["entry_price"] - tq["stop_price"]).abs()
+        with np.errstate(invalid="ignore", divide="ignore"):
+            tq["R"] = np.where(risk > 0, tq["pnl"] / (risk * tq["qty"]), np.nan)
+        sgn = np.where(tq["side"].to_numpy() == "long", 1.0, -1.0)
+        tq["target"] = tq["entry_price"] + sgn * float(trade_tp_rr or 0.0) * risk
+
+        ex, ey, sx, sy, gx, gy = [], [], [], [], [], []
+        for r in tq.itertuples():
+            x0, x1 = r.entry_time, (r.exit_time if pd.notna(r.exit_time) else tv[-1])
+            ex += [x0, x1, None]; ey += [r.entry_price, r.entry_price, None]
+            sx += [x0, x1, None]; sy += [r.stop_price, r.stop_price, None]
+            if trade_tp_rr:
+                gx += [x0, x1, None]; gy += [r.target, r.target, None]
+
+        for X, Y, nm, colr, dash, wid, grp in (
+                (ex, ey, "trade entry level", "#90a4ae", "solid", 1.0, "trades"),
+                (sx, sy, "trade stop", "#ef5350", "dot", 1.2, "trade_stop"),
+                (gx, gy, "trade target", "#26a69a", "dot", 1.2, "trade_target")):
+            if X:
+                fig.add_trace(go.Scattergl(
+                    x=X, y=Y, mode="lines", name=nm, legendgroup=grp,
+                    line=dict(color=colr, width=wid, dash=dash), opacity=0.75,
+                    hoverinfo="skip",
+                    visible=True if grp in start_visible or "trades" in start_visible
+                    else "legendonly"))
+
+        _extra = [c for c in ("trigger",) if c in tq.columns]
+        for side, sym, colr in (("long", "triangle-up", "#26a69a"),
+                                ("short", "triangle-down", "#ef5350")):
+            g = tq[tq["side"] == side]
+            if not len(g):
+                continue
+            cd = np.column_stack([g["R"].to_numpy(), g["pnl"].to_numpy(),
+                                  g["close_reason"].to_numpy(),
+                                  g[_extra[0]].to_numpy() if _extra
+                                  else np.full(len(g), "")])
+            fig.add_trace(go.Scattergl(
+                x=g["entry_time"], y=g["entry_price"], mode="markers",
+                name=f"{side} entries ({len(g)})", legendgroup="trades",
+                marker=dict(symbol=sym, size=11, color=colr,
+                            line=dict(width=1.2, color="#fff")),
+                customdata=cd,
+                visible=True if "trades" in start_visible else "legendonly",
+                hovertemplate=(f"{side.upper()} entry %{{y:.2f}}<br>%{{customdata[0]:.2f}}R"
+                               "  (%{customdata[1]:.2f})<br>closed: %{customdata[2]}"
+                               "<br>triggered by %{customdata[3]}<extra></extra>")))
+
+        done = tq[tq["exit_time"].notna()]
+        if len(done):
+            win = done["pnl"] > 0
+            fig.add_trace(go.Scattergl(
+                x=done["exit_time"], y=done["exit_price"], mode="markers",
+                name=f"exits ({int(win.sum())}W / {int((~win).sum())}L)", legendgroup="trades",
+                marker=dict(symbol="x", size=9,
+                            color=np.where(win, "#26a69a", "#ef5350"),
+                            line=dict(width=1.4)),
+                customdata=np.column_stack([done["close_reason"].to_numpy(),
+                                            done["R"].to_numpy()]),
+                visible=True if "trades" in start_visible else "legendonly",
+                hovertemplate=("exit %{y:.2f}<br>%{customdata[0]}"
+                               "<br>%{customdata[1]:.2f}R<extra></extra>")))
 
     # ---- THREE dropdowns: timeframe -> family -> one instance ---------------------------
     # Each menu narrows the next, because a flat list does not scale and, worse, plotly menus do
