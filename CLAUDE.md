@@ -122,7 +122,9 @@ quant/
 │   │                    #     mtf_trendlines(df_1m, frames) fits lines on EVERY timeframe and
 │   │                    #     merges them onto the base grid (align_timeframes shift_bars=1, so a
 │   │                    #     1h line is invisible until its bar closed) -> tl_res/5m__tl_res/...;
-│   │                    #     trendline_level_cols() names them, base first then coarsest.
+│   │                    #     trendline_level_cols() names them, base first then coarsest;
+│   │                    #     add_trendline_ids() -> tl_res_n/tl_sup_n = WHICH line is live per bar,
+│   │                    #     so a trade can name the exact line it broke, not just its timeframe.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
@@ -198,6 +200,12 @@ quant/
 │   │                    #     bar close (an interpolated 1h EMA shows a number nobody could read);
 │   │                    #     reuses a tf_frames frame for the history, warns when it cannot warm
 │   │                    #     up rather than drawing an all-NaN line, hue=timeframe weight=period;
+│   │                    #     EVERYTHING IS NAMED: a line is `5m·S7` (trendline_table's `id`, one
+│   │                    #     source so hover/legend/menu/trade all agree), a pattern `1h·wedge#2`,
+│   │                    #     a trade `#12`; the id leads every hover, so a stop line says which
+│   │                    #     trade owns it. Two more menus pick longs/shorts/winners/losers then
+│   │                    #     ONE trade, showing that trade AND the line it broke and nothing else;
+│   │                    #     a traded line is never dropped by the caps.
 │   │                    #     trades=/trade_tp_rr= overlay a backtest -- entry marker (side, R,
 │   │                    #     close reason, trigger), entry level, stop and target running to the
 │   │                    #     exit, and an exit marker coloured by outcome; y_from_price= scales the

@@ -620,11 +620,34 @@ def trendline_trigger(df: pd.DataFrame, trades: pd.DataFrame, params: dict,
         for side in ("long", "short"):
             one = dict(params, tl_prefixes=(pref,))
             hits[(pref, side)] = _tl_entry(one, side)(df)
-    lab = []
+    hold = max(int(params.get("tl_close_n") or 0), int(params.get("tl_full_m") or 0)) - 1
+    held = {}
+    for p_ in tuple(params.get("tl_prefixes") or ("",)):
+        for w in ("res", "sup"):
+            col = f"{p_}tl_{w}_n"
+            if col not in df.columns:
+                continue
+            v = df[col].where(df[col] >= 0)
+            held[(p_, w)] = (v.ffill(limit=hold) if hold > 0 else v).fillna(-1).to_numpy(int)
+    lab, cause = [], []
     for r in trades.itertuples():
         i, side = int(r.entry_i), r.side
-        who = [names.get(p, p.rstrip("_") or "chart")
-               for p in tuple(params.get("tl_prefixes") or ("",))
-               if hits[(p, side)][i]]
+        w = "res" if side == "long" else "sup"
+        who, lines = [], []
+        for p in tuple(params.get("tl_prefixes") or ("",)):
+            if not hits[(p, side)][i]:
+                continue
+            tf = names.get(p, p.rstrip("_") or "chart")
+            who.append(tf)
+            # WHICH line, not just which timeframe -- `tl_{res,sup}_n` carries the line number that
+            # `trendline_table` names R<n> / S<n>, so the trade and the chart agree by construction
+            col = f"{p}tl_{w}_n"
+            # held for the same window as the LEVEL is, and for the same reason: the line is
+            # retired on the bar it breaks, so at the entry bar of an n>1 rule its id is already
+            # gone. Without this every base-timeframe trade named its line "?" while the merged
+            # higher timeframes, whose columns persist across their own bar, named theirs correctly.
+            n = int(held[(p, w)][i]) if col in df.columns else -1
+            lines.append(f"{tf}·{'R' if w == 'res' else 'S'}{n}" if n >= 0 else f"{tf}·?")
         lab.append("+".join(who) if who else "?")
-    return trades.assign(trigger=lab)
+        cause.append("+".join(lines) if lines else "?")
+    return trades.assign(trigger=lab, cause=cause)

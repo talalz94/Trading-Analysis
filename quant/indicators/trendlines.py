@@ -265,7 +265,7 @@ def trendline_table(df: pd.DataFrame, *, prefix: str = "tl", **kwargs) -> pd.Dat
     if lines is None:
         df = add_trendlines(df, prefix=prefix, **kwargs)
         lines = df.attrs[f"{prefix}_lines"]
-    cols = ["kind", "side", "slope", "intercept", "touches", "start_i", "born_i", "end_i",
+    cols = ["id", "kind", "side", "slope", "intercept", "touches", "start_i", "born_i", "end_i",
             "broke", "y_start", "y_end", "touch_i", "touch_price"]
     if not lines:
         return pd.DataFrame(columns=cols)
@@ -276,11 +276,37 @@ def trendline_table(df: pd.DataFrame, *, prefix: str = "tl", **kwargs) -> pd.Dat
                  touch_i=list(ln.touch_i), touch_price=list(ln.touch_price))
             for ln in lines]
     out = pd.DataFrame(rows)
+    # A STABLE NAME per line: R0, R1... for resistance and S0, S1... for support, numbered in the
+    # order the fitter published them. Everything that has to agree about "which line was that"
+    # -- the chart's hover, the entry that traded it, the dropdown that isolates it -- derives the
+    # name here rather than each inventing its own, so they cannot drift apart.
+    out["id"] = [f"{'R' if k > 0 else 'S'}{n}"
+                 for k, n in zip(out["kind"], out.groupby("kind").cumcount())]
+    out = out[[c for c in cols if c in out.columns]
+              + [c for c in out.columns if c not in cols]]
     if "t" in df.columns:
         tv = df["t"].to_numpy()
         out["born_t"] = tv[out["born_i"].to_numpy(int)]
         out["end_t"] = tv[out["end_i"].to_numpy(int)]
         out["touch_t"] = [list(tv[np.asarray(v, int)]) for v in out["touch_i"]]
+    return out
+
+
+def add_trendline_ids(df: pd.DataFrame, *, prefix: str = "tl") -> pd.DataFrame:
+    """Add `{prefix}_res_n` / `{prefix}_sup_n`: WHICH line is live on each bar, or -1 for none.
+
+    `{prefix}_res` says what the level is; this says which line it belongs to. Only one line of a
+    kind is ever live, so one column per kind is enough. The number is the `id`'s digits, so bar
+    `n == 3` on the resistance side is the line `trendline_table` calls `R3` -- which is how a trade
+    can name the exact line it broke instead of only the timeframe it came from.
+    """
+    out = df if f"{prefix}_res" in df.columns else add_trendlines(df, prefix=prefix)
+    lines = out.attrs.get(f"{prefix}_lines") or []
+    for kind, nm in ((+1, "res"), (-1, "sup")):
+        ids = np.full(len(out), -1, dtype=np.int32)
+        for n, ln in enumerate(l for l in lines if l.kind == kind):
+            ids[int(ln.born_i):int(ln.end_i) + 1] = n
+        out[f"{prefix}_{nm}_n"] = ids
     return out
 
 
@@ -302,12 +328,17 @@ def mtf_trendlines(base_df: pd.DataFrame, frames: Optional[Dict[str, pd.DataFram
     """
     from ..data.timeframe import align_timeframes
 
-    out = add_trendlines(base_df, prefix=prefix, **kwargs)
+    out = add_trendline_ids(add_trendlines(base_df, prefix=prefix, **kwargs), prefix=prefix)
     if not frames:
         return out
-    others = {tf: add_trendlines(f.reset_index(drop=True), prefix=prefix, **kwargs)
-              for tf, f in frames.items()}
-    return align_timeframes(out, others, time_col=time_col, shift_bars=1)
+    others = {tf: add_trendline_ids(
+        add_trendlines(f.reset_index(drop=True), prefix=prefix, **kwargs), prefix=prefix)
+        for tf, f in frames.items()}
+    merged = align_timeframes(out, others, time_col=time_col, shift_bars=1)
+    # the shift turns the int columns into floats with a leading NaN; -1 means "no line" everywhere
+    for c in [c for c in merged.columns if c.endswith(("_res_n", "_sup_n"))]:
+        merged[c] = merged[c].fillna(-1).astype(np.int32)
+    return merged
 
 
 def trendline_level_cols(df: pd.DataFrame, side: str, *, prefix: str = "tl") -> List[str]:
