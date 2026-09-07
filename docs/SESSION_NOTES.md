@@ -1061,6 +1061,42 @@ because a missing line looks exactly like one you forgot to switch on.
 leaving the price action a third of the pane. The line was correct — it really is that tall. The
 y-axis is now scaled to the candles on screen. Pass `y_from_price=False` for the old behaviour.
 
+## Multi-timeframe trendline trading simulation (notebook 18)
+
+Trades fitted support/resistance lines from 1m, 5m, 15m and 1h on a 1m chart. Pieces:
+`quant.indicators.mtf_trendlines` (fit per timeframe, merge with `shift_bars=1`),
+`mtf_trendline_long/short@v1` in `quant/scenarios/entries.py`, `trendline_trigger()` for
+attribution, and `pattern_figure(trades=..., trade_tp_rr=...)` for the overlay.
+
+**The bug worth remembering: a line is RETIRED the moment it breaks.** So "two closes beyond the
+line" asked the second bar to compare itself against a level that had just become NaN, and NaN
+comparisons are False. Measured: the base timeframe fired **0** times at `tl_close_n=2` while the
+merged higher timeframes, whose values persist across their own bar, fired hundreds — the rule
+silently meant something different on the frame it was fitted on. The entry now holds the last
+published value for exactly the length of the confirmation window (a past value, so still causal),
+after which 1m went 0 -> 48 long / 56 short over the same window.
+
+**Result on BTCUSDT 1m, 2026-06-01 -> 2026-06-10**, `n=2` closes, stop at the 20-bar extreme,
+breakeven at 1R, target 3R, `fee_bps=8` + `slippage_bps=1.5`, 1% risk per trade:
+
+| | trades | win | PF | total R | return |
+|---|---|---|---|---|---|
+| long | 18 | **0.0%** | 0.00 | -19.2 | -10.67% |
+| short | 26 | 23.1% | 1.17 | -2.7 | +1.42% |
+| both | 44 | 13.6% | 0.48 | -21.8 | **-9.25%** |
+
+**The cost floor is the story, and it is measurable on these very trades.** Median risk was 0.568%
+of price, so 1% equity risked is a ~1.8x notional and a round trip costs **0.28R**. Break-even win
+rate `p* = (1 + 0.28) / (1 + 3) = 32.1%`; realised **13.6%**. The price move on a stop was a clean
+-1.02R, so the engine is doing exactly what it should — the losses are the rule and the costs, not
+the mechanics. Tightening the stop makes this WORSE, not better: at `STOP_N=20` on a shorter warm-up
+the risk was 0.366% and the cost went to 0.44R.
+
+This has NOT been through the phase-12 screen — no shuffled null, no metronome, no bootstrap, no
+trim-top-K — and `WHAT_WORKS.md` already records trendline breaks as carrying no directional edge
+(hit rate above 0.50 in 36% of 102 cells, below chance). Treat the numbers above as a description of
+one window.
+
 ## Not done / next
 
 * The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,
