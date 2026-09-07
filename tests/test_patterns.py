@@ -1428,7 +1428,8 @@ def test_pinned_families_become_independent_legend_entries(rnd):
 
     fig = pattern_figure(rnd, legend_instances=["1h::resistance_trendline"], **kw)
     names = _pinned_names(fig)
-    assert names and all(n.startswith("1h · resistance trendline") for n in names)
+    # every row leads with the line's own id, so it can be matched to a trade that broke it
+    assert names and all(n.startswith("1h·R") and "resistance" in n for n in names)
     assert len(set(names)) == len(names), "two occurrences must not share a legend label"
 
     idx = [i for i, tr in enumerate(fig.data) if tr.showlegend
@@ -1448,15 +1449,16 @@ def test_a_bare_family_name_means_the_charts_own_timeframe(rnd):
     kw = dict(sr_zones=False, emas=(), trendlines=True, tf_frames=frames)
 
     bare = _pinned_names(pattern_figure(rnd, legend_instances="resistance_trendline", **kw))
-    assert bare and not any(n.startswith("1h ·") for n in bare)
+    assert bare and not any(n.startswith("1h·") for n in bare)
 
     both = _pinned_names(pattern_figure(rnd, legend_instances="*::resistance_trendline", **kw))
-    assert any(n.startswith("1h ·") for n in both) and any(not n.startswith("1h ·") for n in both)
+    assert any(n.startswith("1h·") for n in both) and any(not n.startswith("1h·") for n in both)
     assert len(both) > len(bare)
 
     whole_tf = _pinned_names(pattern_figure(rnd, legend_instances="1h", **kw))
-    assert all(n.startswith("1h ·") for n in whole_tf)
-    assert len({n.split(" #")[0] for n in whole_tf}) > 1, "a timeframe pins all of its families"
+    assert all(n.startswith("1h·") for n in whole_tf)
+    kinds = {n.split(" · ")[0].split()[-1] for n in whole_tf}
+    assert len(kinds) > 1, "a timeframe pins all of its families"
 
     everything = _pinned_names(pattern_figure(rnd, legend_instances="all", **kw))
     assert len(everything) > len(whole_tf)

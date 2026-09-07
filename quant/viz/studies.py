@@ -417,7 +417,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    zone_lookback_bars: int = 2000, tf_frames=None, tf_patterns=None,
                    tf_trendlines=None, max_picker_instances: int = 60,
                    max_shapes_per_tf: int = 40, y_from_price: bool = True,
-                   mtf_emas=None, legend_instances=None, trades=None, trade_tp_rr=None):
+                   mtf_emas=None, legend_instances=None, trades=None, trade_tp_rr=None,
+                   chart_tf=None, max_trade_picker: int = 40):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -523,6 +524,20 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
     d = df.reset_index(drop=True)
     t = d[time_col].to_numpy() if time_col in d.columns else np.arange(len(d))
+
+    def _tf_name_of(frame):
+        """'1m', '15m', '4h' — read off the bars, so no caller has to tell us."""
+        mins = bar_interval(frame, time_col=time_col) / pd.Timedelta(minutes=1)
+        if not mins or mins != mins:
+            return "chart"
+        mins = int(round(mins))
+        for div, unit in ((1440, "d"), (60, "h"), (1, "m")):
+            if mins >= div and mins % div == 0:
+                return f"{mins // div}{unit}"
+        return f"{mins}m"
+
+    base_tf = chart_tf or _tf_name_of(d)
+    line_ref = {}    # "5m·S7" -> the first trace index of that line's isolatable pair
 
     def _view_index(frame, tcol):
         """First bar of `frame` at or after `view_start`; 0 when no view was asked for."""
@@ -674,7 +689,16 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             keys.add(_norm(tf))
         return bool(_pin & keys)
 
+    # Lines named as the CAUSE of a trade escape both caps. The caps exist to keep the chart
+    # openable, but a trade whose line was capped away cannot show you what it broke, which is the
+    # one question the trade picker is there to answer.
+    _wanted = set()
+    if trades is not None and len(trades) and "cause" in getattr(trades, "columns", ()):
+        for c in trades["cause"].astype(str):
+            _wanted.update(x for x in c.split("+") if x and x != "?")
+
     picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
+    trade_picker = []   # (tid, row, first_trace_index, [cause tags]) for every isolatable trade
     pinned_traces = set()
     n_pin = {}       # per-family counter, so two lines born on the same bar get distinct labels
     fam_lg = {}      # family label -> the legendgroup that family's grouped traces carry
@@ -751,7 +775,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             nx, ny = [], []          # the boundary that broke
             tx, ty = [], []          # measured-move target
             sx, sy = [], []          # protective stop
-            for r in sub.itertuples():
+            tf_nm = tf or base_tf
+            for k_, r in enumerate(sub.itertuples()):
                 a, b = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
                 xa, xb = tl_[a], ev(b)
                 # Draw the LINE, not the segment between its two end pivots: evaluate the fit across
@@ -816,14 +841,16 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 opacity=alpha,
                 marker=dict(size=dotsz + 6, color=colr, symbol="star",
                             line=dict(width=1.5, color="#fff")),
-                customdata=[[int(r.confirm_i) - int(max(r.pivot_i))] for r in sub.itertuples()],
-                hovertemplate=(f"{label} CONFIRMED here<br>entry %{{y:.2f}}"
+                customdata=[[int(r.confirm_i) - int(max(r.pivot_i)), f"{tf_nm}·{name}#{k_}"]
+                            for k_, r in enumerate(sub.itertuples())],
+                hovertemplate=("<b>%{customdata[1]}</b> CONFIRMED here<br>entry %{y:.2f}"
                                "<br>%{customdata[0]} bars after its last pivot<extra></extra>")))
 
             if line_picker:
                 # EVERY shape drawn above gets an entry. `sub` was already capped, so the count in
                 # the legend and the length of the dropdown are the same number by construction.
-                for r in sub.itertuples():
+                for _k, r in enumerate(sub.itertuples()):
+                    ptag = f"{tf_nm}·{name}#{_k}"
                     a2, b2 = int(r.start_i), min(int(r.confirm_i) + extend, n - 1)
                     ix, iy = [], []
                     for sl, ic in ((r.upper_slope, r.upper_intercept),
@@ -836,8 +863,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         iy = [r.boundary_slope * a2 + r.boundary_intercept,
                               r.boundary_slope * b2 + r.boundary_intercept, None]
                     short = f"{pd.to_datetime(str(tl_[a2])):%b-%d %H:%M}"
+                    line_ref[ptag] = len(fig.data)
                     picker.append((label,
-                                   f"{label} @ {short}"
+                                   f"{ptag}  @ {short}"
                                    f"  (confirms {pd.to_datetime(str(ev(r.confirm_i))):%b-%d %H:%M})",
                                    len(fig.data), pd.Timestamp(str(tl_[a2])).value))
                     used += 1
@@ -852,10 +880,12 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         x=ix, y=iy, mode="lines",
                         # pinned entries are LISTED but off, so the legend is the selection
                         visible="legendonly" if pin else False, showlegend=pin,
-                        name=f"{label} #{n_pin[label]} · {short}" if pin else short,
+                        # the same id-first naming the trendlines use, so a legend row, a hover
+                        # and a trade's `cause` all say the same word for the same object
+                        name=f"{ptag} · {short}" if pin else short,
                         legendgroup=grp,
                         line=dict(color=colr, width=round(width + 0.6, 2)),
-                        hovertemplate=f"{label}<extra></extra>"))
+                        hovertemplate=f"<b>{ptag}</b>  {label}<extra></extra>"))
                     fig.add_trace(go.Scattergl(
                         x=list(r.touch_t) + [ev(r.confirm_i)],
                         y=list(r.touch_price) + [float(r.entry)],
@@ -873,24 +903,32 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 sub = tl[tl["kind"] == kind] if len(tl) else tl
                 if not len(sub):
                     continue
+                tf_nm0 = tf or base_tf
                 if len(sub) > cap:
                     # the same cap the shapes get: a 1m layer offered 80 resistance lines over nine
-                    # days, which is a mesh rather than a chart. The most recent are the live ones.
-                    sub = sub.sort_values("end_i").tail(cap)
+                    # days, which is a mesh rather than a chart. The most recent are the live ones —
+                    # plus any line a trade actually broke, which is never dropped.
+                    want = sub[[f"{tf_nm0}·{i}" in _wanted for i in sub["id"]]]
+                    sub = pd.concat([sub.sort_values("end_i").tail(cap), want]).drop_duplicates(
+                        subset=["id"]).sort_values("end_i")
                 label = pref + base_label
                 _register(label, lgp + base_label)
                 key = (base_label.split()[0] + "_trendline") if chart_tf else f"{tf}::{base_label}"
                 vis = True if key in start_visible else "legendonly"
-                lx, ly, dx, dy, bx, by = [], [], [], [], [], []
+                lx, ly, dx, dy, bx, by, lcd, dcd = [], [], [], [], [], [], [], []
                 per_line = []      # one entry per line, for the picker
+                tf_nm = tf or base_tf
                 for r in sub.itertuples():
+                    tag = f"{tf_nm}·{getattr(r, 'id', '?')}"    # the name everything else uses
                     # from the FIRST TOUCH, not from born_i: the line is fitted through pivots that
                     # all sit before it became known, so drawing from born_i left every touch dot
                     # outside the segment. All 36 lines in the sample had this.
                     lx += [tl_[int(r.start_i)], ev(r.end_i), None]
                     ly += [r.y_start, r.y_end, None]
+                    lcd += [tag, tag, tag]
                     dx += list(r.touch_t) + [None]
                     dy += list(r.touch_price) + [None]
+                    dcd += [tag] * (len(r.touch_t) + 1)
                     if r.broke:
                         bx.append(ev(r.end_i)); by.append(r.y_end)
                     per_line.append((
@@ -898,28 +936,34 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
                         [tl_[int(r.start_i)], ev(r.end_i)], [r.y_start, r.y_end],
                         list(r.touch_t), list(r.touch_price), int(r.start_i), label,
-                        int(r.born_i), int(r.end_i), bool(r.broke)))
+                        int(r.born_i), int(r.end_i), bool(r.broke), tag, int(r.touches)))
                 fig.add_trace(go.Scattergl(
                     x=lx, y=ly, mode="lines",
                     name=f"{label} ({len(sub)}, {int(sub.broke.sum())} broke)",
                     legendgroup=lgp + base_label, visible=vis, opacity=alpha,
                     line=dict(color=colr, width=max(0.8, round(width - 0.6, 2)), dash="dash"),
-                    hovertemplate=f"{label}<extra></extra>"))
+                    customdata=lcd,
+                    hovertemplate=f"<b>%{{customdata}}</b>  {label}<extra></extra>"))
                 fig.add_trace(go.Scattergl(
                     x=dx, y=dy, mode="markers", legendgroup=lgp + base_label, visible=vis,
                     showlegend=False, opacity=alpha,
                     marker=dict(size=max(3, dotsz - 1), color=colr,
                                 line=dict(width=1, color="#111")),
-                    hovertemplate=f"{label} touch<extra></extra>"))
+                    customdata=dcd,
+                    hovertemplate=f"<b>%{{customdata}}</b> touch<extra></extra>"))
                 if bx:
                     fig.add_trace(go.Scattergl(
                         x=bx, y=by, mode="markers", legendgroup=lgp + base_label, visible=vis,
                         showlegend=False, opacity=alpha,
                         marker=dict(size=dotsz + 4, color=colr, symbol="x", line=dict(width=1.5)),
                         hovertemplate=f"{label} BREAK<extra></extra>"))
-                if line_picker:
+                if line_picker or (_wanted & {p[10] for p in per_line}):
                     # one entry per line DRAWN, for the same reason as the shapes above
-                    for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke in per_line:
+                    for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke, tag, ntouch in per_line:
+                        if not line_picker and tag not in _wanted:
+                            continue
+                        lbl = f"{tag}  {lbl.split(' @ ', 1)[-1]}"
+                        line_ref[tag] = len(fig.data)
                         picker.append((fam, lbl, len(fig.data), pd.Timestamp(str(tl_[si])).value))
                         used += 1
                         grp = f"i#{len(fig.data)}"
@@ -933,12 +977,14 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         fig.add_trace(go.Scattergl(
                             x=xs, y=ys, mode="lines",
                             visible="legendonly" if pin else False, showlegend=pin,
-                            name=(f"{label} #{n_pin[label]} · {_when}"
-                                  f" ({'broke' if broke else 'faded'})" if pin
-                                  else f"{_when} ({'broke' if broke else 'faded'})"),
+                            # id first, then what it is, then when — a legend row has to be
+                            # readable on its own, and the id is what ties it to a trade
+                            name=(f"{tag} {base_label.split()[0]} · {_when}" if pin
+                                  else f"{tag}  {_when} ({'broke' if broke else 'faded'})"),
                             legendgroup=grp,
                             line=dict(color=colr, width=round(width + 0.4, 2), dash="dash"),
-                            hovertemplate=f"{lbl}<extra></extra>"))
+                            hovertemplate=(f"<b>{tag}</b>  {label}<br>{ntouch} touches, "
+                                           f"{'broke' if broke else 'faded'}<extra></extra>")))
 
                         def _y_at(i, _ys=ys, _si=si, _ei=ei):
                             """Height of the drawn segment at bar `i`, by linear interpolation."""
@@ -1014,23 +1060,37 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         sgn = np.where(tq["side"].to_numpy() == "long", 1.0, -1.0)
         tq["target"] = tq["entry_price"] + sgn * float(trade_tp_rr or 0.0) * risk
 
+        # A TRADE ID, and it goes on everything the trade owns. Four separate concatenated traces
+        # meant the stop you were hovering could belong to any of forty-four trades; naming them all
+        # `#07` is what lets you read one trade off the chart instead of inferring it from position.
+        if "tid" not in tq.columns:
+            tq = tq.sort_values("entry_time").reset_index(drop=True)
+            tq["tid"] = [f"#{i + 1:02d}" for i in range(len(tq))]
+        tq["cause"] = tq["cause"] if "cause" in tq.columns else ""
+
         ex, ey, sx, sy, gx, gy = [], [], [], [], [], []
+        ecd, scd, gcd = [], [], []
         for r in tq.itertuples():
             x0, x1 = r.entry_time, (r.exit_time if pd.notna(r.exit_time) else tv[-1])
             ex += [x0, x1, None]; ey += [r.entry_price, r.entry_price, None]
             sx += [x0, x1, None]; sy += [r.stop_price, r.stop_price, None]
+            ecd += [[r.tid, r.side, r.cause]] * 3
+            scd += [[r.tid, r.side, r.cause]] * 3
             if trade_tp_rr:
                 gx += [x0, x1, None]; gy += [r.target, r.target, None]
+                gcd += [[r.tid, r.side, r.cause]] * 3
 
-        for X, Y, nm, colr, dash, wid, grp in (
-                (ex, ey, "trade entry level", "#90a4ae", "solid", 1.0, "trades"),
-                (sx, sy, "trade stop", "#ef5350", "dot", 1.2, "trade_stop"),
-                (gx, gy, "trade target", "#26a69a", "dot", 1.2, "trade_target")):
+        for X, Y, CD, nm, what, colr, dash, wid, grp in (
+                (ex, ey, ecd, "trade entry level", "entry", "#90a4ae", "solid", 1.0, "trades"),
+                (sx, sy, scd, "trade stop", "STOP", "#ef5350", "dot", 1.2, "trade_stop"),
+                (gx, gy, gcd, "trade target", "TARGET", "#26a69a", "dot", 1.2, "trade_target")):
             if X:
                 fig.add_trace(go.Scattergl(
                     x=X, y=Y, mode="lines", name=nm, legendgroup=grp,
                     line=dict(color=colr, width=wid, dash=dash), opacity=0.75,
-                    hoverinfo="skip",
+                    customdata=CD,
+                    hovertemplate=("<b>%{customdata[0]}</b> " + what + " %{y:.2f}"
+                                   "<br>%{customdata[1]} off %{customdata[2]}<extra></extra>"),
                     visible=True if grp in start_visible or "trades" in start_visible
                     else "legendonly"))
 
@@ -1042,8 +1102,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 continue
             cd = np.column_stack([g["R"].to_numpy(), g["pnl"].to_numpy(),
                                   g["close_reason"].to_numpy(),
-                                  g[_extra[0]].to_numpy() if _extra
-                                  else np.full(len(g), "")])
+                                  g["cause"].to_numpy(), g["tid"].to_numpy()])
             fig.add_trace(go.Scattergl(
                 x=g["entry_time"], y=g["entry_price"], mode="markers",
                 name=f"{side} entries ({len(g)})", legendgroup="trades",
@@ -1051,9 +1110,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                             line=dict(width=1.2, color="#fff")),
                 customdata=cd,
                 visible=True if "trades" in start_visible else "legendonly",
-                hovertemplate=(f"{side.upper()} entry %{{y:.2f}}<br>%{{customdata[0]:.2f}}R"
+                hovertemplate=("<b>%{customdata[4]}</b>  " + side.upper()
+                               + " entry %{y:.2f}<br>%{customdata[0]:.2f}R"
                                "  (%{customdata[1]:.2f})<br>closed: %{customdata[2]}"
-                               "<br>triggered by %{customdata[3]}<extra></extra>")))
+                               "<br>broke %{customdata[3]}<extra></extra>")))
 
         done = tq[tq["exit_time"].notna()]
         if len(done):
@@ -1065,10 +1125,41 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                             color=np.where(win, "#26a69a", "#ef5350"),
                             line=dict(width=1.4)),
                 customdata=np.column_stack([done["close_reason"].to_numpy(),
-                                            done["R"].to_numpy()]),
+                                            done["R"].to_numpy(), done["tid"].to_numpy()]),
                 visible=True if "trades" in start_visible else "legendonly",
-                hovertemplate=("exit %{y:.2f}<br>%{customdata[0]}"
+                hovertemplate=("<b>%{customdata[2]}</b> exit %{y:.2f}<br>%{customdata[0]}"
                                "<br>%{customdata[1]:.2f}R<extra></extra>")))
+
+        # ONE TRACE PAIR PER TRADE, hidden, so a single trade can be pulled out of the pile along
+        # with the line that caused it. The concatenated traces above are the overview; this is the
+        # only way to answer "show me just #23 and the line it broke".
+        keep = tq if max_trade_picker <= 0 or len(tq) <= max_trade_picker \
+            else tq.tail(int(max_trade_picker))
+        for r in keep.itertuples():
+            x0, x1 = r.entry_time, (r.exit_time if pd.notna(r.exit_time) else tv[-1])
+            up = r.side == "long"
+            colr = "#26a69a" if r.pnl > 0 else "#ef5350"
+            gx2 = [x0, x1, None, x0, x1, None]
+            gy2 = [r.entry_price, r.entry_price, None, r.stop_price, r.stop_price, None]
+            dsh = ["entry", "stop"]
+            if trade_tp_rr:
+                gx2 += [x0, x1, None]; gy2 += [r.target, r.target, None]; dsh.append("target")
+            trade_picker.append((r.tid, r, len(fig.data),
+                                 [c for c in str(r.cause).split("+") if c in line_ref]))
+            fig.add_trace(go.Scattergl(
+                x=gx2, y=gy2, mode="lines", visible=False, showlegend=False,
+                line=dict(color=colr, width=1.6),
+                hovertemplate=f"<b>{r.tid}</b> {'/'.join(dsh)}<extra></extra>"))
+            fig.add_trace(go.Scattergl(
+                x=[x0, x1], y=[r.entry_price, r.exit_price], mode="markers+lines",
+                visible=False, showlegend=False,
+                line=dict(color=colr, width=1.0, dash="dot"),
+                marker=dict(size=[13, 11], color=colr,
+                            symbol=["triangle-up" if up else "triangle-down", "x"],
+                            line=dict(width=1.4, color="#fff")),
+                text=[f"{r.tid} {r.side} entry {r.entry_price:,.2f} · broke {r.cause}",
+                      f"{r.tid} exit {r.exit_price:,.2f} · {r.close_reason} · {r.R:.2f}R"],
+                hovertemplate="%{text}<extra></extra>"))
 
     # ---- THREE dropdowns: timeframe -> family -> one instance ---------------------------
     # Each menu narrows the next, because a flat list does not scale and, worse, plotly menus do
@@ -1080,9 +1171,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     # MULTI-SELECT lives in the LEGEND, not here: a plotly dropdown is single-choice by nature.
     # Picking a family promotes its instances to individual legend entries, so you can then tick
     # exactly the two channel-ups you want and leave everything else off, EMAs included.
-    if picker:
+    if picker or trade_picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
-        owned = {i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
+        owned = ({i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
+                 | {i for _, _, i, _ in trade_picker} | {i + 1 for _, _, i, _ in trade_picker})
         fam_groups = {}
         for fam, lbl, idx, sortk in sorted(picker, key=lambda z: z[3]):
             fam_groups.setdefault(fam, []).append((lbl, idx))
@@ -1217,10 +1309,86 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
                     font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
-        fig.update_layout(updatemenus=[
-            dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
-            dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
-            dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)])
+        menus = [dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
+                 dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
+                 dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)]
+
+        if trade_picker:
+            # A TRADE and everything it owns, in one click -- its entry, stop, target and exit, plus
+            # the trendline it broke. Grouped by side and outcome first, because forty-four rows is
+            # 836px of dropdown and plotly menus clip rather than scroll.
+            def _isolate_trade(first, causes):
+                v = list(base)
+                for i in owned:
+                    v[i] = False
+                for j, tr in enumerate(fig.data):
+                    g = getattr(tr, "legendgroup", "") or ""
+                    if g and g != "price" and not g.startswith(("ema", "mtfema")):
+                        v[j] = False
+                v[first] = v[first + 1] = True
+                for tag in causes:               # ...and the line that caused it
+                    k = line_ref[tag]
+                    v[k] = v[k + 1] = True
+                return v
+
+            def _all_trades():
+                v = list(base)
+                for i in owned:
+                    v[i] = False
+                for j, tr in enumerate(fig.data):
+                    g = getattr(tr, "legendgroup", "") or ""
+                    if g.startswith("trade"):
+                        v[j] = True
+                return v
+
+            def _row(tid, r, idx, causes):
+                sd = "L" if r.side == "long" else "S"
+                got = "".join(w[0] for w in str(r.close_reason).split("_"))
+                return dict(label=f"{tid} {sd} {r.cause or '?'}  {r.R:+.2f}R {got}",
+                            method="update", args=[{"visible": _isolate_trade(idx, causes)}, {}])
+
+            # No "all trades" group: every trade is in longs or shorts, and each group's first row
+            # already restores all of them. Listing all forty again cost 0.5 MB for nothing, and the
+            # menus are the dominant term in this figure's size.
+            groups = {
+                "longs": lambda z: z[1].side == "long",
+                "shorts": lambda z: z[1].side == "short",
+                "winners": lambda z: z[1].pnl > 0,
+                "losers": lambda z: z[1].pnl <= 0,
+            }
+
+            def _trade_buttons(which):
+                rows = [z for z in trade_picker if groups[which](z)]
+                out = [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
+                            args=[{"visible": _all_trades()}, {}])]
+                out += [_row(*z) for z in rows]
+                return out
+
+            grp_buttons = []
+            for g in groups:
+                n = sum(1 for z in trade_picker if groups[g](z))
+                grp_buttons.append(dict(
+                    label=f"{g}  ({n})", method="update",
+                    args=[{"visible": _all_trades()},
+                          {"updatemenus[4].buttons": _trade_buttons(g),
+                           "updatemenus[4].active": 0}]))
+            # 41 rows is 780px of dropdown in a plot area of about 760, and plotly menus clip
+            # rather than scroll, so a long list opens on a prompt and the groups on the left are
+            # what make every trade reachable.
+            def _all_rows():
+                out = [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
+                            args=[{"visible": _all_trades()}, {}])]
+                return out + [_row(*z) for z in trade_picker]
+
+            opening = (_all_rows() if len(trade_picker) <= 30
+                       else [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
+                                  args=[{"visible": _all_trades()}, {}]),
+                             dict(label="── pick a group on the left ──", method="update",
+                                  args=[{"visible": _all_trades()}, {}])])
+            menus.append(dict(buttons=grp_buttons, x=0.60, xanchor="left", **menu))
+            menus.append(dict(buttons=opening, x=0.74, xanchor="left", **menu))
+
+        fig.update_layout(updatemenus=menus)
 
     if view_start is not None:
         # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown

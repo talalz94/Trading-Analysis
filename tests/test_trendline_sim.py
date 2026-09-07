@@ -230,3 +230,124 @@ def test_the_chart_draws_entries_stops_targets_and_exits(mtf):
     ys, yt = np.array(stp.y, float), np.array(tgt.y, float)
     m = np.isfinite(ys) & np.isfinite(yt)
     assert (ys[m] > yt[m]).all(), "a short's stop must be drawn above its target"
+
+
+# ---------------------------------------------------------------------------
+# IDs: one name per line, per pattern and per trade, used by the hover, the legend, the dropdown
+# and the trade that broke it — all derived in one place so they cannot drift apart.
+# ---------------------------------------------------------------------------
+def test_every_line_gets_a_stable_name(mtf):
+    from quant.indicators.trendlines import trendline_table
+
+    base, frames, _ = mtf
+    tbl = trendline_table(frames["5min"], min_span_bars=20, max_age_bars=400)
+    assert len(tbl) and "id" in tbl.columns
+    assert tbl["id"].is_unique
+    # R for resistance and S for support, numbered from zero within each kind
+    for kind, letter in ((+1, "R"), (-1, "S")):
+        got = list(tbl.loc[tbl["kind"] == kind, "id"])
+        assert got == [f"{letter}{i}" for i in range(len(got))]
+
+
+def test_the_per_bar_id_column_agrees_with_the_table(mtf):
+    """`tl_res_n` on a bar must be the number of the line whose level `tl_res` reports there."""
+    from quant.indicators.trendlines import add_trendline_ids, add_trendlines, trendline_table
+
+    base, _, _ = mtf
+    d = add_trendline_ids(add_trendlines(base, min_span_bars=20, max_age_bars=400))
+    tbl = trendline_table(d)
+    for kind, nm in ((+1, "res"), (-1, "sup")):
+        rows = tbl[tbl["kind"] == kind].reset_index(drop=True)
+        ids = d[f"tl_{nm}_n"].to_numpy()
+        for k, r in rows.iterrows():
+            live = ids[int(r.born_i):int(r.end_i) + 1]
+            assert (live == k).all(), f"{r.id} does not own its own bars"
+        assert (ids[np.isfinite(d[f"tl_{nm}"].to_numpy(float)) & (ids < 0)]).size == 0
+
+
+def test_a_trade_names_the_exact_line_it_broke(mtf):
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+
+    _, _, D = mtf
+    p = dict(tl_prefixes=("", "5min__", "15min__"), tl_close_n=2, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0)
+    run = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                     params=p, cfg=dict(initial_cash=10_000, exit_enabled=False))
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    out = trendline_trigger(run.df, run.trades, p, prefix_names=names)
+    assert len(out) and "cause" in out.columns
+    # never "?" — the level is held across the confirmation window and so is the id beside it
+    assert (out["cause"] != "?").all(), "a trade could not name the line it broke"
+    for c in out["cause"]:
+        for part in c.split("+"):
+            tf, ident = part.split("·")
+            assert tf in names.values() and ident[0] == "S" and ident[1:].isdigit()
+
+
+def test_the_chart_can_isolate_one_trade_together_with_its_line(mtf):
+    """The question the trade picker exists to answer: show me #23 and what caused it."""
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+    from quant.viz.studies import pattern_figure
+
+    _, frames, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=2, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0)
+    run = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                     params=p, cfg=dict(initial_cash=10_000, exit_enabled=False))
+    tr = trendline_trigger(run.df, run.trades, p,
+                           prefix_names={"": "1m", "5min__": "5m"})
+    risk = (tr.entry_price - tr.stop_price).abs()
+    tr = tr.assign(R=tr.pnl / (risk * tr.qty))
+
+    fig = pattern_figure(D, patterns=[], sr_zones=False, emas=(), trendlines=True,
+                         tf_frames=frames, chart_tf="1m", trades=tr, trade_tp_rr=3.0,
+                         max_picker_instances=6, max_shapes_per_tf=4)
+
+    rows = [c for b in fig.layout.updatemenus[-2].buttons
+            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+            if c["label"].startswith("#")]
+    assert rows, "no trade rows in the picker"
+    for c in rows:                                  # the label carries id, side, line, R, outcome
+        assert "·" in c["label"] and "R " in c["label"]
+
+    seen_with_line = 0
+    for c in rows:
+        vis = c["args"][0]["visible"]
+        on = [i for i, v in enumerate(vis) if v is True]
+        # price, the trade's two traces, and (when its line survived the caps) that line's two
+        assert 3 <= len(on) <= 5
+        names = [str(getattr(fig.data[i], "hovertemplate", None)
+                     or getattr(fig.data[i], "name", None) or "") for i in on]
+        assert any("entry/stop/target" in nm for nm in names)
+        seen_with_line += len(on) == 5
+    assert seen_with_line, "no trade was shown together with the line it broke"
+
+
+def test_a_line_a_trade_broke_survives_the_caps(mtf):
+    """The caps keep the chart openable, but never at the price of hiding a traded line."""
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+    from quant.viz.studies import pattern_figure
+
+    _, frames, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=2, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0)
+    run = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                     params=p, cfg=dict(initial_cash=10_000, exit_enabled=False))
+    tr = trendline_trigger(run.df, run.trades, p, prefix_names={"": "1m", "5min__": "5m"})
+    tr = tr.assign(R=0.0)
+
+    # caps as tight as they go
+    fig = pattern_figure(D, patterns=[], sr_zones=False, emas=(), trendlines=True,
+                         tf_frames=frames, chart_tf="1m", trades=tr, trade_tp_rr=3.0,
+                         max_picker_instances=1, max_shapes_per_tf=1)
+    drawn = set()
+    for t_ in fig.data:
+        for cd in (t_.customdata if t_.customdata is not None else []):
+            v = cd if isinstance(cd, str) else (cd[0] if len(cd) else "")
+            if isinstance(v, str) and "·" in v:
+                drawn.add(v)
+    wanted = {x for c in tr["cause"] for x in str(c).split("+") if x != "?"}
+    assert wanted and wanted <= drawn, f"the caps hid a traded line: {sorted(wanted - drawn)}"

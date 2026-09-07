@@ -1097,6 +1097,28 @@ trim-top-K — and `WHAT_WORKS.md` already records trendline breaks as carrying 
 (hit rate above 0.50 in 36% of 102 cells, below chance). Treat the numbers above as a description of
 one window.
 
+### Naming every object on the chart
+
+Reading the chart was guesswork: four concatenated traces meant the stop you hovered could belong to
+any of forty-four trades, and "which line caused this" was not answerable at all. Everything now
+carries an id, and all of them come from ONE place so they cannot drift:
+
+* a **line** is `5m·S7` — `trendline_table` gained an `id` column (`R0`, `S0`, … per kind, in
+  publication order) and the figure prefixes the timeframe;
+* a **pattern** is `1h·rising_wedge#2`;
+* a **trade** is `#12`, and its entry, entry level, stop, target and exit all hover with it.
+
+`add_trendline_ids` adds `tl_res_n` / `tl_sup_n` — which line is live on each bar — merged across
+timeframes like the levels. `trendline_trigger` reads it at the entry bar and returns a `cause`
+column naming the exact line. It needed the same hold as the level: the line retires on the bar it
+breaks, so at an `n=2` entry its id was already gone and every base-timeframe trade reported `?`.
+
+Two more dropdowns (longs / shorts / winners / losers, then a trade) isolate **one trade plus the
+line that caused it** — nothing else on the chart. Rows read `#07 S 1m·S59  -2.88R sl`. A line named
+as a cause is exempt from `max_picker_instances` and `max_shapes_per_tf`: the caps exist to keep the
+figure openable, but not at the price of hiding the answer the picker exists to give. Cost: 693
+traces and 3.6 MB with 40 trades and four timeframes loaded.
+
 ## Not done / next
 
 * The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,
