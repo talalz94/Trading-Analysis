@@ -454,3 +454,33 @@ def test_a_stop_that_walked_to_breakeven_says_so(mtf):
     assert rows and all("sl@be" in c["label"] for c in rows)
     txt = " ".join(str(t_.text) for t_ in fig.data if getattr(t_, "text", None) is not None)
     assert "breakeven" in txt
+
+
+def test_a_per_timeframe_wait_survives_a_whole_run_and_a_preset(mtf):
+    """The dict has to reach the kernel through `run_pieces`, and through Preset JSON."""
+    import json
+
+    from quant.scenarios import run_pieces
+    from quant.scenarios.base import Preset
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    p = dict(tl_prefixes=tuple(names), tl_tf_names=names,
+             tl_close_n={"1m": 2, "5m": 4, "*": 3}, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0)
+    cfg = dict(initial_cash=10_000, exit_enabled=False)
+
+    run = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                     params=p, cfg=cfg)
+    assert len(run.trades), "a dict wait produced no trades at all"
+
+    # ...and asking every timeframe to wait longer must not produce MORE of them
+    slower = dict(p, tl_close_n={"1m": 5, "5m": 6, "*": 6})
+    assert len(run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                          params=slower, cfg=cfg).trades) <= len(run.trades)
+
+    # a Preset is JSON, and a dict param has to come back a dict rather than a string
+    ps = Preset(name="t", scenario="mtf_trendline_short@v1", stop="high_of_n@v1",
+                tp="be_ladder@v1", params=p, cfg=cfg)
+    back = Preset.from_dict(json.loads(json.dumps(ps.to_dict())))
+    assert back.params["tl_close_n"] == {"1m": 2, "5m": 4, "*": 3}
