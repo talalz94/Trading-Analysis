@@ -1119,6 +1119,47 @@ as a cause is exempt from `max_picker_instances` and `max_shapes_per_tf`: the ca
 figure openable, but not at the price of hiding the answer the picker exists to give. Cost: 693
 traces and 3.6 MB with 40 trades and four timeframes loaded.
 
+### How long to wait before trading a break (`experiments/trendline_wait_search.py`)
+
+`TL_CLOSE_N` was one number for every timeframe, which cannot be right: two 15m closes is half an
+hour and two 1m closes is two minutes. It now takes a dict keyed by timeframe, resolved by
+`tl_per_tf()`, and the same applies to `tl_full_m` and `tl_touch_k`.
+
+Swept on BTCUSDT 5m + 15m + 1h lines, **5.5 months in 6 windows**, each timeframe alone so a good
+15m number cannot be an artifact of 5m trades that happened to be open. Scored by **windows
+positive**, not total R.
+
+| tf | side | trades | windows + | total R | |
+|---|---|---|---|---|---|
+| 5m | long | 53 | 4/6 | -2.0 | wait=4; R rises monotonically from -33.8 at wait 1 |
+| 5m | short | 54 | 4/6 | +1.3 | wait=4; -8.0 at wait 1 |
+| 15m | short | 19 | 4/6 | +9.4 | wait=5, thin |
+| 15m | long | 35 | 3/6 | -9.2 | negative at every wait |
+| 1h | either | 9-11 | 1-3/6 | - | too few trades to infer anything |
+
+**Nothing cleared 6 of 6**, and six settings over six windows produce a 6/6 winner by luck about 9%
+of the time, so no wait is validated. The one thing worth keeping is the **monotone trend on 5m**:
+longer waits improve total R *and* per-trade R (-0.32 -> -0.08 for longs), so it is not merely fewer
+trades paying fewer fees. Hence the notebook default `{"5m": 4, "15m": 5, "1h": 4, "*": 2}`, with 1h
+matched to the others rather than set to its own 11-trade argmax.
+
+The sweep says something louder than any wait: **longs lose at every wait on every timeframe** and
+shorts do not. That is a downtrending sample, not an edge.
+
+### Two red lines
+
+The isolated trade view drew entry, stop and target as ONE trace, so a losing trade rendered all
+three in red and the reader reasonably concluded the stop was below a short's entry. Each level is
+its own trace now, in the grouped view's colours: grey entry, red stop, green target.
+
+The same screenshot showed the second half of the confusion. Trade `#05` was a short with entry
+63,203 and a stop at 64,010, and it exited at 63,213 — 1.2% of the way to that stop. Nothing was
+wrong: `BE_AT_RR=1.0` had walked the stop to breakeven after the trade reached +1R, and the chart
+draws the stop **as set at entry**. Such trades are now tagged `sl@be` in the picker and say so on
+hover.
+
+Notebook 18 was cut from 26 cells to 10 — config, run, chart, results, one appendix.
+
 ## Not done / next
 
 * The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,

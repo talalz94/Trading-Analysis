@@ -316,12 +316,14 @@ def test_the_chart_can_isolate_one_trade_together_with_its_line(mtf):
     for c in rows:
         vis = c["args"][0]["visible"]
         on = [i for i, v in enumerate(vis) if v is True]
-        # price, the trade's two traces, and (when its line survived the caps) that line's two
-        assert 3 <= len(on) <= 5
+        # price, the trade's FOUR traces (entry / stop / target / markers, one colour each) and,
+        # when its line survived the caps, that line's two
+        assert 5 <= len(on) <= 7
         names = [str(getattr(fig.data[i], "hovertemplate", None)
                      or getattr(fig.data[i], "name", None) or "") for i in on]
-        assert any("entry/stop/target" in nm for nm in names)
-        seen_with_line += len(on) == 5
+        # the three levels are separate traces now, each naming itself
+        assert sum(any(w in nm.upper() for w in ("ENTRY", "STOP", "TARGET")) for nm in names) >= 3
+        seen_with_line += len(on) == 7
     assert seen_with_line, "no trade was shown together with the line it broke"
 
 
@@ -351,3 +353,104 @@ def test_a_line_a_trade_broke_survives_the_caps(mtf):
                 drawn.add(v)
     wanted = {x for c in tr["cause"] for x in str(c).split("+") if x != "?"}
     assert wanted and wanted <= drawn, f"the caps hid a traded line: {sorted(wanted - drawn)}"
+
+
+# ---------------------------------------------------------------------------
+# Per-timeframe wait, and telling the three trade levels apart on the chart
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("spec,pref,want", [
+    (4, "5min__", 4),                                   # a plain number applies everywhere
+    ({"5m": 2, "15m": 3}, "5min__", 2),                 # ...looked up by timeframe NAME
+    ({"5m": 2, "15m": 3}, "15min__", 3),
+    ({"5min__": 7}, "5min__", 7),                       # ...or by raw column prefix
+    ({"5m": 2, "*": 9}, "1h__", 9),                     # "*" is the fallback
+    ({"5m": 2}, "1h__", 0),                             # ...and without one, off
+])
+def test_a_wait_can_be_set_per_timeframe(spec, pref, want):
+    from quant.scenarios.entries import tl_per_tf
+
+    p = dict(tl_tf_names={"": "1m", "5min__": "5m", "15min__": "15m", "1h__": "1h"},
+             tl_close_n=spec)
+    assert tl_per_tf(p, "tl_close_n", pref) == want
+
+
+def test_each_timeframe_waits_its_own_number_of_candles(mtf):
+    """Two 15m closes is half an hour and two 1m closes is two minutes, so one number cannot fit."""
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    base = dict(tl_prefixes=("", "5min__"), tl_tf_names=names, tl_full_m=0, tl_touch_k=0,
+                tl_combine="all")
+
+    fast = _tl_entry(dict(base, tl_close_n={"1m": 1, "5m": 1}), "long")(D).sum()
+    slow = _tl_entry(dict(base, tl_close_n={"1m": 1, "5m": 4}), "long")(D).sum()
+    assert 0 < slow < fast, "asking 5m to wait longer must cut its entries and nothing else's"
+
+    # ...and it really is only 5m that changed
+    only_1m = dict(base, tl_prefixes=("",))
+    a = _tl_entry(dict(only_1m, tl_close_n={"1m": 1, "5m": 1}), "long")(D).sum()
+    b = _tl_entry(dict(only_1m, tl_close_n={"1m": 1, "5m": 4}), "long")(D).sum()
+    assert a == b
+
+
+def test_the_three_trade_levels_are_drawn_in_three_colours(mtf):
+    """A losing trade used to draw entry, stop and target as one red trace.
+
+    Two red lines with nothing to tell them apart, and the reader reasonably concluded the stop was
+    on the wrong side of the entry. Each level is its own trace in its own colour now, matching the
+    grouped view: grey entry, red stop, green target.
+    """
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+    from quant.viz.studies import pattern_figure
+
+    _, frames, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=2, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0)
+    run = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                     params=p, cfg=dict(initial_cash=10_000, exit_enabled=False))
+    tr = trendline_trigger(run.df, run.trades, p, prefix_names={"": "1m", "5min__": "5m"})
+    tr = tr.assign(R=0.0)
+    fig = pattern_figure(D, patterns=[], sr_zones=False, emas=(), trendlines=True,
+                         tf_frames=frames, chart_tf="1m", trades=tr, trade_tp_rr=3.0,
+                         max_picker_instances=6, max_shapes_per_tf=4)
+
+    rows = [c for b in fig.layout.updatemenus[-2].buttons
+            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+            if c["label"].startswith("#")]
+    assert rows
+    for c in rows:
+        on = [i for i, v in enumerate(c["args"][0]["visible"]) if v is True]
+        levels = [fig.data[i] for i in on
+                  if "ENTRY" in str(getattr(fig.data[i], "hovertemplate", "")).upper()
+                  or "STOP" in str(getattr(fig.data[i], "hovertemplate", "")).upper()
+                  or "TARGET" in str(getattr(fig.data[i], "hovertemplate", "")).upper()]
+        assert len(levels) == 3, "entry, stop and target must each be their own trace"
+        assert len({lv.line.color for lv in levels}) == 3, "and each its own colour"
+        by = {("stop" if "STOP" in str(lv.hovertemplate).upper() else
+               "target" if "TARGET" in str(lv.hovertemplate).upper() else "entry"): lv
+              for lv in levels}
+        assert by["stop"].line.color == "#ef5350" and by["target"].line.color == "#26a69a"
+
+
+def test_a_stop_that_walked_to_breakeven_says_so(mtf):
+    """Otherwise the exit sits at the entry level, nowhere near the red line, and reads as a bug."""
+    import numpy as np
+    from quant.viz.studies import pattern_figure
+
+    _, _, D = mtf
+    t = pd.to_datetime(D["t"])
+    # one short whose stop was hit a hair from ENTRY, not from the stop it was given
+    tr = pd.DataFrame([dict(side="short", entry_time=t.iloc[100], exit_time=t.iloc[200],
+                            entry_i=100, exit_i=200, entry_price=100.0, exit_price=100.2,
+                            stop_price=110.0, qty=1.0, pnl=-0.2, fees=0.0, bars_held=100,
+                            close_reason="stop_loss", R=-0.02, cause="1m·S0")])
+    fig = pattern_figure(D, patterns=[], sr_zones=False, emas=(), trendlines=False,
+                         chart_tf="1m", trades=tr, trade_tp_rr=3.0)
+    rows = [c for b in fig.layout.updatemenus[-2].buttons
+            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+            if c["label"].startswith("#")]
+    assert rows and all("sl@be" in c["label"] for c in rows)
+    txt = " ".join(str(t_.text) for t_ in fig.data if getattr(t_, "text", None) is not None)
+    assert "breakeven" in txt
