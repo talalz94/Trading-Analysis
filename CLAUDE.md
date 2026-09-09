@@ -206,6 +206,11 @@ quant/
 │   │                    #     trade owns it. Two more menus pick longs/shorts/winners/losers then
 │   │                    #     ONE trade, showing that trade AND the line it broke and nothing else;
 │   │                    #     a traded line is never dropped by the caps.
+│   │                    #     The isolated trade draws entry/stop/target as THREE traces in the
+│   │                    #     grouped view's colours (grey/red/green) -- one trace meant one colour,
+│   │                    #     so a losing trade showed two red lines and the stop looked wrong-sided.
+│   │                    #     A stop that walked to breakeven before being hit is tagged `sl@be`,
+│   │                    #     because its exit sits at entry, nowhere near the stop drawn at entry.
 │   │                    #     trades=/trade_tp_rr= overlay a backtest -- entry marker (side, R,
 │   │                    #     close reason, trigger), entry level, stop and target running to the
 │   │                    #     exit, and an exit marker coloured by outcome; y_from_price= scales the
@@ -233,7 +238,10 @@ quant/
 │   │                    #     mtf_trendline = a FITTED trendline from ANY timeframe giving way
 │   │                    #     (long through resistance, short through support). Three combinable
 │   │                    #     conditions: tl_close_n closes beyond / tl_full_m whole candles beyond
-│   │                    #     / tl_touch_k prior touches, joined by tl_combine all|any. The level
+│   │                    #     / tl_touch_k prior touches, joined by tl_combine all|any. EACH takes
+│   │                    #     a DICT keyed by timeframe ({"5m":4,"15m":5,"*":2}) via tl_per_tf(),
+│   │                    #     because two 15m closes is half an hour and two 1m closes is two
+│   │                    #     minutes; experiments/trendline_wait_search.py sweeps it. The level
 │   │                    #     is HELD for the confirmation window because add_trendlines retires a
 │   │                    #     line the moment it breaks -- without that, n>1 fired ZERO times on
 │   │                    #     the base timeframe. trendline_trigger() labels each trade with WHICH
@@ -259,6 +267,9 @@ quant/
 
 experiments/             # INFERENCE layer — find best settings for an idea (SEPARATE from core)
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
+├── trendline_wait_search.py  # how many candles to wait before trading a break, PER TIMEFRAME:
+│                        #   6 windows over 5.5 months, scored by WINDOWS POSITIVE not total R,
+│                        #   with the chance baseline printed beside it
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)

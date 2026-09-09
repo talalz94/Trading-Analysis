@@ -514,11 +514,29 @@ ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]
 #                not a separate trigger: a line nobody respected is not a level)
 #
 # Any set to 0 is off. `tl_combine="all"` requires every enabled one, "any" requires one.
+# `tl_close_n`, `tl_full_m` and `tl_touch_k` may each be ONE number for every timeframe, or a DICT
+# keyed by timeframe -- {"5m": 2, "15m": 3} -- because how many candles are worth waiting for is a
+# property of the timeframe, not of the strategy: two 15m closes is half an hour and two 1m closes
+# is two minutes. `tl_tf_names` maps a column prefix to the name you use in those dicts.
 _MTF_TL_DEFAULTS = {
     "tl_prefixes": ("",),          # "" is the base frame; "5m__", "1h__" are merged timeframes
+    "tl_tf_names": None,           # {"": "1m", "5m__": "5m", ...}; prefixes work as keys too
     "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0,
     "tl_combine": "all", "tl_tol_atr": 0.0, "tl_atr_period": 14,
 }
+
+
+def tl_per_tf(p: dict, key: str, pref: str) -> int:
+    """One knob's value for one timeframe. A plain number applies everywhere; a dict is looked up
+    by the timeframe's name, then by its raw column prefix, then by `"*"` as the default."""
+    v = p.get(key, 0)
+    if not isinstance(v, dict):
+        return int(v or 0)
+    names = p.get("tl_tf_names") or {}
+    for k in (names.get(pref), pref, pref.rstrip("_"), "*"):
+        if k is not None and k in v:
+            return int(v[k] or 0)
+    return 0
 
 
 def _tl_beyond(df: pd.DataFrame, p: dict, side: str, pref: str):
@@ -536,7 +554,7 @@ def _tl_beyond(df: pd.DataFrame, p: dict, side: str, pref: str):
     col = f"{pref}tl_{which}"
     if col not in df.columns:
         return None
-    hold = max(int(p.get("tl_close_n") or 0), int(p.get("tl_full_m") or 0)) - 1
+    hold = max(tl_per_tf(p, "tl_close_n", pref), tl_per_tf(p, "tl_full_m", pref)) - 1
     lvl = (df[col].ffill(limit=hold) if hold > 0 else df[col]).to_numpy(float)
     tol = float(p.get("tl_tol_atr") or 0.0)
     if tol:
@@ -553,7 +571,6 @@ def _tl_beyond(df: pd.DataFrame, p: dict, side: str, pref: str):
 
 def _tl_entry(p: dict, side: str) -> Cond:
     prefs = tuple(p.get("tl_prefixes") or ("",))
-    n, m, k = int(p["tl_close_n"]), int(p["tl_full_m"]), int(p["tl_touch_k"])
     combine_all = str(p.get("tl_combine", "all")).lower() == "all"
     which = "res" if side == "long" else "sup"
 
@@ -563,6 +580,10 @@ def _tl_entry(p: dict, side: str) -> Cond:
             got = _tl_beyond(df, p, side, pref)
             if got is None:
                 continue
+            # resolved PER TIMEFRAME, so "wait 2 candles on 5m and 3 on 15m" is one configuration
+            n = tl_per_tf(p, "tl_close_n", pref)
+            m = tl_per_tf(p, "tl_full_m", pref)
+            k = tl_per_tf(p, "tl_touch_k", pref)
             beyond_c, beyond_full, lvl = got
             live = np.isfinite(lvl)
             parts = []
@@ -600,7 +621,8 @@ MTF_TRENDLINE = _both(
     "mtf_trendline", lambda df, p: df, _tl_entry,
     description=("break of a FITTED trendline from any timeframe -- long through resistance, short "
                  "through support. Levels must already be on the frame "
-                 "(quant.indicators.mtf_trendlines)."),
+                 "(quant.indicators.mtf_trendlines). tl_close_n / tl_full_m / tl_touch_k accept a "
+                 "dict keyed by timeframe, so each one can wait a different number of candles."),
     defaults=_MTF_TL_DEFAULTS, prepare_keys=())
 
 
@@ -620,9 +642,9 @@ def trendline_trigger(df: pd.DataFrame, trades: pd.DataFrame, params: dict,
         for side in ("long", "short"):
             one = dict(params, tl_prefixes=(pref,))
             hits[(pref, side)] = _tl_entry(one, side)(df)
-    hold = max(int(params.get("tl_close_n") or 0), int(params.get("tl_full_m") or 0)) - 1
     held = {}
     for p_ in tuple(params.get("tl_prefixes") or ("",)):
+        hold = max(tl_per_tf(params, "tl_close_n", p_), tl_per_tf(params, "tl_full_m", p_)) - 1
         for w in ("res", "sup"):
             col = f"{p_}tl_{w}_n"
             if col not in df.columns:

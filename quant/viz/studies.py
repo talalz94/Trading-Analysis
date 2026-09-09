@@ -697,8 +697,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         for c in trades["cause"].astype(str):
             _wanted.update(x for x in c.split("+") if x and x != "?")
 
+    TRADE_TRACES = 4    # entry, stop, target, markers — one trace each so each has
+                        # its own colour, which is the whole point
     picker = []      # (family, label, first_trace_index, sort_key) for every isolatable instance
-    trade_picker = []   # (tid, row, first_trace_index, [cause tags]) for every isolatable trade
+    trade_picker = []   # (tid, row, first_trace_index, [cause tags], stop_walked)
     pinned_traces = set()
     n_pin = {}       # per-family counter, so two lines born on the same bar get distinct labels
     fam_lg = {}      # family label -> the legendgroup that family's grouped traces carry
@@ -1139,17 +1141,33 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             x0, x1 = r.entry_time, (r.exit_time if pd.notna(r.exit_time) else tv[-1])
             up = r.side == "long"
             colr = "#26a69a" if r.pnl > 0 else "#ef5350"
-            gx2 = [x0, x1, None, x0, x1, None]
-            gy2 = [r.entry_price, r.entry_price, None, r.stop_price, r.stop_price, None]
-            dsh = ["entry", "stop"]
-            if trade_tp_rr:
-                gx2 += [x0, x1, None]; gy2 += [r.target, r.target, None]; dsh.append("target")
+            # DID THE STOP MOVE? `stop_price` is the stop set at ENTRY. With a breakeven rung the
+            # trade can be closed by a stop that has since walked to entry, and then the exit sits
+            # nowhere near the red line — which reads as a broken chart until you know. Measured
+            # against the original risk so it is a fact about this trade, not a threshold.
+            _risk = abs(r.entry_price - r.stop_price)
+            _walked = (r.close_reason == "stop_loss" and _risk > 0
+                       and abs(r.exit_price - r.stop_price) > 0.25 * _risk)
             trade_picker.append((r.tid, r, len(fig.data),
-                                 [c for c in str(r.cause).split("+") if c in line_ref]))
-            fig.add_trace(go.Scattergl(
-                x=gx2, y=gy2, mode="lines", visible=False, showlegend=False,
-                line=dict(color=colr, width=1.6),
-                hovertemplate=f"<b>{r.tid}</b> {'/'.join(dsh)}<extra></extra>"))
+                                 [c for c in str(r.cause).split("+") if c in line_ref], _walked))
+
+            # ONE TRACE PER LEVEL, in the SAME colours the grouped view uses. Drawing all three in
+            # one trace meant one colour for all of them, so a losing trade showed two red lines
+            # and no way to tell the stop from the entry.
+            for yv, nm, colr2, dash in ((r.entry_price, "entry", "#90a4ae", "solid"),
+                                        (r.stop_price, "STOP (set at entry)", "#ef5350", "dot"),
+                                        (getattr(r, "target", np.nan),
+                                         f"TARGET {trade_tp_rr}R" if trade_tp_rr else "target",
+                                         "#26a69a", "dot")):
+                fig.add_trace(go.Scattergl(
+                    x=[x0, x1] if yv == yv else [], y=[yv, yv] if yv == yv else [],
+                    mode="lines", visible=False, showlegend=False,
+                    line=dict(color=colr2, width=1.6, dash=dash),
+                    hovertemplate=f"<b>{r.tid}</b> {nm} {yv:,.2f}<extra></extra>"))
+
+            _why = str(r.close_reason)
+            if _walked:
+                _why += " — but the stop had walked to ~breakeven, so the exit is at entry"
             fig.add_trace(go.Scattergl(
                 x=[x0, x1], y=[r.entry_price, r.exit_price], mode="markers+lines",
                 visible=False, showlegend=False,
@@ -1158,7 +1176,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                             symbol=["triangle-up" if up else "triangle-down", "x"],
                             line=dict(width=1.4, color="#fff")),
                 text=[f"{r.tid} {r.side} entry {r.entry_price:,.2f} · broke {r.cause}",
-                      f"{r.tid} exit {r.exit_price:,.2f} · {r.close_reason} · {r.R:.2f}R"],
+                      f"{r.tid} exit {r.exit_price:,.2f} · {_why} · {r.R:.2f}R"],
                 hovertemplate="%{text}<extra></extra>"))
 
     # ---- THREE dropdowns: timeframe -> family -> one instance ---------------------------
@@ -1174,7 +1192,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     if picker or trade_picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
         owned = ({i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
-                 | {i for _, _, i, _ in trade_picker} | {i + 1 for _, _, i, _ in trade_picker})
+                 | {z[2] + k for z in trade_picker for k in range(TRADE_TRACES)})
         fam_groups = {}
         for fam, lbl, idx, sortk in sorted(picker, key=lambda z: z[3]):
             fam_groups.setdefault(fam, []).append((lbl, idx))
@@ -1325,7 +1343,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     g = getattr(tr, "legendgroup", "") or ""
                     if g and g != "price" and not g.startswith(("ema", "mtfema")):
                         v[j] = False
-                v[first] = v[first + 1] = True
+                for k in range(TRADE_TRACES):
+                    v[first + k] = True
                 for tag in causes:               # ...and the line that caused it
                     k = line_ref[tag]
                     v[k] = v[k + 1] = True
@@ -1341,9 +1360,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                         v[j] = True
                 return v
 
-            def _row(tid, r, idx, causes):
+            def _row(tid, r, idx, causes, walked=False):
                 sd = "L" if r.side == "long" else "S"
                 got = "".join(w[0] for w in str(r.close_reason).split("_"))
+                if walked:
+                    got = "sl@be"     # stopped, but on a stop that had walked to breakeven
                 return dict(label=f"{tid} {sd} {r.cause or '?'}  {r.R:+.2f}R {got}",
                             method="update", args=[{"visible": _isolate_trade(idx, causes)}, {}])
 
