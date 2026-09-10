@@ -52,6 +52,14 @@ class Signals:
     exit_alt_long: Optional[np.ndarray] = None    # fires the secondary exit (if armed AND in profit)
     exit_alt_short: Optional[np.ndarray] = None
     alt_replace_tp: bool = False   # once armed, drop the take-profit ladder (stop/trailing unaffected)
+    # Arm from the trade's OWN path rather than from a signal. `arm_touch_n` counts bars that traded
+    # back through this trade's entry price; `arm_wrong_m` counts candles formed WHOLLY on its
+    # losing side. Neither is expressible as a global array — the level is the trade's own entry.
+    arm_touch_n: int = 0
+    arm_wrong_m: int = 0
+    # How far price must have moved your way, as a PERCENT OF ENTRY, before the secondary may close.
+    # 0 = any favourable move, which on a 5m chart often exits for less than the round trip costs.
+    alt_min_pct: float = 0.0
     alt_arm_on_tp: bool = False    # reaching a TP level ARMS the trade instead of closing it
 
     def as_u8(self, n: int):

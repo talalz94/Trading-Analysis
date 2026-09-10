@@ -1198,6 +1198,38 @@ It reads only already-published values, so it is still causal (truncation test).
 This DOES move existing numbers slightly -- short entry bars went 72 -> 74 on the notebook's window,
 because the level a rule is measured against now moves during the hold.
 
+### "The move stopped convincing me" — a trade that arms itself
+
+`entry_retest_bail@v1`. A trade that goes your way and then keeps coming back to where you got in is
+oscillating around your entry, not trending, and the 3R target it was given is a bet on a move that
+is not happening. Arm on either count and hand it to "exit on the first opposite candle while in
+profit":
+
+* `sec_touch_n` — bars since entry that traded back THROUGH the entry price;
+* `sec_wrong_m` — candles formed WHOLLY on the losing side of it.
+
+**Both had to go in the kernel.** Every other arming condition here is a global signal array, but
+the level these measure against is *each trade's own entry price*, which no such array can express —
+it is why `shaky_trend_bail` settles for watching an EMA instead. `o_touch` / `o_wrong` sit beside
+`o_armed`, are copied on compaction, reset at entry, and the whole block is skipped when both counts
+are 0 (golden parity holds).
+
+**"In profit" was not enough.** The engine's gate is "the fill is on the favourable side of entry",
+and on BTC 5m that let three of ten bail-outs exit for LESS THAN THE ROUND TRIP: one moved 0.92 in
+price against 15.39 of fees, closing at -14.47. `alt_min_pct` is the move the exit must clear, as a
+percent of entry. A round trip at `fee_bps=8` + `slippage_bps=1.5` is 19 bps, and `sec_min_pct=0.2`
+took the net-negative bail-outs from 3 to 0.
+
+On the notebook's window: 9 trades / +3.4R without it, 15 trades / -3.6R with it at
+`sec_touch_n=2`. More trades because closing early frees the single slot sooner. Nine days and two
+configurations is not evidence either way — it is off by default.
+
+### EMAs stay on while one trade is isolated
+
+Already true: `_isolate_trade` never touched traces whose legendgroup starts `ema`/`mtfema`, and a
+test now pins it across every trade row. The reason none showed was that notebook 18 passed
+`emas=()`. It now sets `EMAS` and `MTF_EMAS`.
+
 ### Where the breakeven stop came from
 
 Nobody asked for it explicitly. "Use the best known setting" was read against `WHAT_WORKS.md`'s

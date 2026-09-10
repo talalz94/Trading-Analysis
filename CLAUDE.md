@@ -273,7 +273,14 @@ quant/
 │   │                    #     partial at N R, then a target and/or a trail) / pattern_target
 │   │                    #     (the chart pattern's measured move)  (Q3; signal- or cfg-based)
 │   └── secondaries.py   #   POST-ENTRY rules: shaky_trend_bail@v1 (arm when price closes above/touches
-│                        #     the EMA, then bail on the first opposite candle IF in profit)
+│                        #     the EMA, then bail on the first opposite candle IF in profit) ·
+│                        #     entry_retest_bail@v1 = arm from the trade's OWN path: sec_touch_n bars
+│                        #     that traded back THROUGH its entry price, or sec_wrong_m candles
+│                        #     formed WHOLLY on its losing side. Neither is expressible as a global
+│                        #     signal array (the level is that trade's entry), so the KERNEL counts
+│                        #     them per trade -- o_touch/o_wrong beside o_armed. sec_min_pct is the
+│                        #     move the exit must clear: the engine's gate is "any favourable move",
+│                        #     which on 5m exited BELOW COST on 3 of 10 bail-outs.
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
 │   └── search.py        #   optuna_search (optional; Bayesian)
@@ -366,6 +373,11 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
 - **Time stop (`max_bars_in_trade`)**: close any trade still open N bars after entry, at that bar's
   close. Checked AFTER stop/TP and exit signals, so a trade closing for a real reason keeps that
   reason. `0` = off and the whole block is skipped — byte-identical (golden tests pass).
+- **Self-arming (`arm_touch_n` / `arm_wrong_m` on `Signals`)**: a trade arms itself from its OWN
+  path — bars that traded back through its entry price, or candles formed wholly on its losing side
+  — because a global array cannot name a per-trade level. `alt_min_pct` is how far price must have
+  moved your way before the secondary may close, since "any favourable move" routinely exits for
+  less than the round trip. All three default to 0 and the block is skipped — byte-identical.
 - Close-reason codes: `signal`, `stop_loss`, `take_profit`, `forced_close_end`, `margin_call`,
   `alt_exit` (closed by the secondary rule), `time_stop`.
 

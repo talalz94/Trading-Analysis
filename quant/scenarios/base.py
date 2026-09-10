@@ -359,12 +359,17 @@ def compose(df: pd.DataFrame, scenario: Scenario, stop: StopMethod, tp: TPMethod
         alt = np.logical_or.reduce([np.asarray(s.exit(p)(prepared), bool) for s in secs])
         rep = bool(p.get("sec_replace_tp", False))
         on_tp = bool(p.get("sec_arm_on_tp", False))
+        # per-trade arming counts. Unlike `arm`/`alt` these are not signal arrays: the level they
+        # measure against is each trade's own entry price, so the kernel has to count them.
+        cnt = dict(arm_touch_n=int(p.get("sec_touch_n", 0) or 0),
+                   arm_wrong_m=int(p.get("sec_wrong_m", 0) or 0),
+                   alt_min_pct=float(p.get("sec_min_pct", 0.0) or 0.0))
         if scenario.side == "short":
             signals = dataclasses.replace(signals, exit_arm_short=arm, exit_alt_short=alt,
-                                          alt_replace_tp=rep, alt_arm_on_tp=on_tp)
+                                          alt_replace_tp=rep, alt_arm_on_tp=on_tp, **cnt)
         else:
             signals = dataclasses.replace(signals, exit_arm_long=arm, exit_alt_long=alt,
-                                          alt_replace_tp=rep, alt_arm_on_tp=on_tp)
+                                          alt_replace_tp=rep, alt_arm_on_tp=on_tp, **cnt)
 
     cfg = dataclasses.replace(base_cfg, exit_enabled=True)
     if scenario.side == "short":

@@ -165,7 +165,7 @@ def run_kernel(
     leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
     sl_ref_long, sl_ref_short,
     exit_arm_long, exit_arm_short, exit_alt_long, exit_alt_short, alt_exit_enabled, alt_replace_tp,
-    alt_arm_on_tp, session_id,
+    alt_arm_on_tp, arm_touch_n, arm_wrong_m, alt_min_pct, session_id,
     tp_modes, tp_values, tp_close_pcts, tp_move_modes, tp_move_values, n_tp,
     initial_cash, cash_per_trade, fee_bps, slippage_bps, max_open_trades, allow_short,
     exit_enabled,
@@ -187,6 +187,13 @@ def run_kernel(
     # cannot express. With alt_exit_enabled == 0 the branch is skipped entirely — byte-identical.
     # `alt_replace_tp` additionally drops the take-profit ladder once a trade is armed (the secondary
     # rule then owns the exit); the stop-loss and trailing stop are never affected.
+    # `alt_min_pct` is how far the price must have moved your way, as a percent of entry, before the
+    # secondary may close a trade. 0 keeps the original "any favourable move" gate, which on a 5m
+    # chart routinely exits for less than the round trip costs.
+    # `arm_touch_n` / `arm_wrong_m` arm a trade from its OWN behaviour rather than from a signal:
+    # how many bars since entry have traded back through its entry price, and how many candles have
+    # formed WHOLLY on the losing side of it. Neither can be a global array — the level is the
+    # trade's own entry — which is why they are counted here. Both 0 skips the block entirely.
     # `alt_arm_on_tp` arms a trade when it REACHES a take-profit level instead of closing there, so a
     # winner can keep running and is handed to the secondary rule (it implies the TP suppression).
     #
@@ -230,6 +237,8 @@ def run_kernel(
     o_tp_px = np.zeros((mo, tp_modes.shape[0]), np.float64)
     o_leg = np.zeros(mo, np.int64)      # which rule (leg) opened each open trade
     o_armed = np.zeros(mo, np.int8)     # secondary exit armed for this trade (alt_exit_enabled)
+    o_touch = np.zeros(mo, np.int64)    # bars since entry that traded back through the entry price
+    o_wrong = np.zeros(mo, np.int64)    # candles formed wholly on the losing side of the entry
     o_cnt = 0
 
     equity_curve = np.empty(n, np.float64)
@@ -299,6 +308,22 @@ def run_kernel(
         # 1.75) secondary-exit ARMING. Done before the risk exits so that the take-profit gate
         # (alt_replace_tp) and the alt exit in step 3 both see the same armed state on the same bar.
         if alt_exit_enabled == 1:
+            # SELF-ARMING from the trade's own path. Counted before the signal check so a trade can
+            # arm on the same bar either way. This runs before entries open, so a trade never counts
+            # its own entry bar.
+            if arm_touch_n > 0 or arm_wrong_m > 0:
+                for j in range(o_cnt):
+                    if o_armed[j] == 1:
+                        continue
+                    epx = o_entry_px[j]
+                    if lo <= epx <= hi:
+                        o_touch[j] += 1
+                    elif (hi < epx) if o_side[j] == 1 else (lo > epx):
+                        o_wrong[j] += 1
+                    if arm_touch_n > 0 and o_touch[j] >= arm_touch_n:
+                        o_armed[j] = 1
+                    elif arm_wrong_m > 0 and o_wrong[j] >= arm_wrong_m:
+                        o_armed[j] = 1
             for j in range(o_cnt):
                 if o_armed[j] == 0:
                     if (exit_arm_long[i] if o_side[j] == 1 else exit_arm_short[i]) == 1:
@@ -463,6 +488,8 @@ def run_kernel(
                     o_tp_px[w, :] = o_tp_px[j, :]
                     o_leg[w] = o_leg[j]
                     o_armed[w] = o_armed[j]
+                    o_touch[w] = o_touch[j]
+                    o_wrong[w] = o_wrong[j]
                     w += 1
             o_cnt = w
 
@@ -482,7 +509,12 @@ def run_kernel(
                     alt = exit_alt_long[i] if side == 1 else exit_alt_short[i]
                     if alt == 1:
                         alt_px = _fill_px(px, side, slip, spread, 0)
-                        if side * (alt_px - o_entry_px[j]) > 0.0:
+                        # "in profit" has to mean AFTER COSTS, or it does not mean what it says.
+                        # Measured on BTC 5m: three of ten bail-outs had a favourable price move and
+                        # still lost money -- one moved 0.92 in price against 15.39 of fees.
+                        # `alt_min_pct` is the move, as a percent of entry, the exit must clear.
+                        need = o_entry_px[j] * alt_min_pct * 0.01
+                        if side * (alt_px - o_entry_px[j]) > need:
                             alt_fired = 1
                 if sig == 1 or alt_fired == 1:
                     q = o_qty[j]
@@ -512,6 +544,8 @@ def run_kernel(
                     o_tp_px[w, :] = o_tp_px[j, :]
                     o_leg[w] = o_leg[j]
                     o_armed[w] = o_armed[j]
+                    o_touch[w] = o_touch[j]
+                    o_wrong[w] = o_wrong[j]
                     w += 1
             o_cnt = w
 
@@ -545,6 +579,8 @@ def run_kernel(
                     o_tp_px[w, :] = o_tp_px[j, :]
                     o_leg[w] = o_leg[j]
                     o_armed[w] = o_armed[j]
+                    o_touch[w] = o_touch[j]
+                    o_wrong[w] = o_wrong[j]
                     w += 1
             o_cnt = w
 
@@ -649,6 +685,8 @@ def run_kernel(
                         o_tp_done[o_cnt] = 0
                         o_leg[o_cnt] = lg
                         o_armed[o_cnt] = 0
+                        o_touch[o_cnt] = 0
+                        o_wrong[o_cnt] = 0
                         if exit_enabled == 1:
                             for kk in range(n_tp):
                                 o_tp_px[o_cnt, kk] = _calc_tp(entry_px, stop, side,

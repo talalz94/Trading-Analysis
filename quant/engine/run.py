@@ -49,18 +49,21 @@ def _alt_exit_args(signals, n):
     unless the signals carry at least one `exit_alt_*` column."""
     z = np.zeros(n, np.uint8)
     if signals is None:
-        return z, z, z, z, 0, 0, 0
+        return z, z, z, z, 0, 0, 0, 0, 0, 0.0
     al = getattr(signals, "exit_alt_long", None)
     as_ = getattr(signals, "exit_alt_short", None)
     if al is None and as_ is None:
-        return z, z, z, z, 0, 0, 0
+        return z, z, z, z, 0, 0, 0, 0, 0, 0.0
 
     def u8(a):
         return z if a is None else np.ascontiguousarray(np.asarray(a, bool)).astype(np.uint8)
     replace_tp = 1 if getattr(signals, "alt_replace_tp", False) else 0
     arm_on_tp = 1 if getattr(signals, "alt_arm_on_tp", False) else 0
     return (u8(getattr(signals, "exit_arm_long", None)), u8(getattr(signals, "exit_arm_short", None)),
-            u8(al), u8(as_), 1, replace_tp, arm_on_tp)
+            u8(al), u8(as_), 1, replace_tp, arm_on_tp,
+            int(getattr(signals, "arm_touch_n", 0) or 0),
+            int(getattr(signals, "arm_wrong_m", 0) or 0),
+            float(getattr(signals, "alt_min_pct", 0.0) or 0.0))
 
 
 def _no_leg_stops(n_legs):
@@ -121,7 +124,8 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
     (per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
      leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short) = _leg_stop_args(
         signals, df, n, n_legs)
-    arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp = _alt_exit_args(signals, n)
+    (arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp,
+     arm_touch, arm_wrong, alt_min) = _alt_exit_args(signals, n)
     sess = _session_ids(df, cfg, n)
     return run_kernel(
         open_, high, low, close, el, xl, es, xs,
@@ -129,7 +133,7 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
         per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
         leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
         sl_ref_long, sl_ref_short,
-        arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp, sess,
+        arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp, arm_touch, arm_wrong, alt_min, sess,
         tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp,
         **cfg.scalar_args(),
     )
