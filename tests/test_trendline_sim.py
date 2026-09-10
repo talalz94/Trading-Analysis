@@ -682,3 +682,183 @@ def test_demanding_more_such_candles_only_removes_entries(mtf):
     a = _tl_entry(dict(base, tl_dir_full_n={"1m": 1, "5m": 1, "15m": 1}), "short")(D).sum()
     b = _tl_entry(dict(base, tl_dir_full_n={"1m": 1, "5m": 4, "15m": 4}), "short")(D).sum()
     assert b < a
+
+
+# ---------------------------------------------------------------------------
+# The trade arms ITSELF: price kept coming back to where it opened, so stop aiming
+# at the target and take what is there. The level is the trade's OWN entry, which no
+# global signal array can express — hence two per-trade counters in the kernel.
+# ---------------------------------------------------------------------------
+def _self_arm(highs, lows, closes, *, side="long", entry_bar=0, touch_n=0, wrong_m=0,
+              alt_bars=(), min_pct=0.0, replace_tp=True):
+    """One trade, hand-built bars, zero costs — so "in profit" is purely the price."""
+    from quant.engine import BacktestConfig
+    from quant.engine.config import Signals
+    from quant.engine.run import run_backtest
+
+    n = len(closes)
+    d = pd.DataFrame({"t": pd.date_range("2026-01-01", periods=n, freq="1min", tz="UTC"),
+                      "open": np.asarray(closes, float), "high": np.asarray(highs, float),
+                      "low": np.asarray(lows, float), "close": np.asarray(closes, float),
+                      "volume": 1.0})
+    z = np.zeros(n, bool)
+    ent = z.copy()
+    ent[entry_bar] = True
+    alt = z.copy()
+    for b in alt_bars:
+        alt[b] = True
+    kw = dict(entry_long=z.copy(), entry_short=z.copy(), exit_long=z.copy(), exit_short=z.copy(),
+              arm_touch_n=touch_n, arm_wrong_m=wrong_m, alt_min_pct=min_pct,
+              alt_replace_tp=replace_tp)
+    if side == "long":
+        kw.update(entry_long=ent, exit_arm_long=z.copy(), exit_alt_long=alt)
+    else:
+        kw.update(entry_short=ent, exit_arm_short=z.copy(), exit_alt_short=alt)
+    cfg = BacktestConfig(initial_cash=10_000, exit_enabled=True, allow_short=(side == "short"),
+                         sl_mode="entry_pct", sl_value=50.0,      # stop far away, never hit
+                         sizing_mode="cash", cash_per_trade=1_000)
+    return run_backtest(d, Signals(**kw), cfg).trades
+
+
+def test_the_arming_counters_are_off_by_default_and_change_nothing():
+    """Byte-identical when neither count is set — the whole block is skipped."""
+    c = [100, 102, 101, 103, 100, 104, 99, 105]
+    a = _self_arm(c, c, c, alt_bars=(5,), touch_n=0, wrong_m=0)
+    b = _self_arm(c, c, c, alt_bars=(5,))
+    assert a.to_dict() == b.to_dict()
+    # nothing armed it, so the alt signal at bar 5 did nothing and the trade ran to the end
+    assert len(a) == 1 and a.close_reason.iloc[0] == "forced_close_end"
+    # ...and switching the counter on is what changes that
+    on = _self_arm(c, c, c, alt_bars=(5,), touch_n=1)
+    assert on.close_reason.iloc[0] == "alt_exit"
+
+
+def test_a_trade_arms_once_price_has_come_back_to_its_entry_n_times():
+    # long entered at bar 0 at 100; bars 2 and 4 trade back THROUGH 100
+    hi = [100, 105, 101, 106, 101, 107]
+    lo = [100, 103, 99, 104, 99, 105]
+    cl = [100, 104, 100, 105, 100, 106]
+
+    early = _self_arm(hi, lo, cl, touch_n=2, alt_bars=(3,))     # bar 3: one touch so far
+    assert early.close_reason.iloc[0] != "alt_exit", "armed before the second touch"
+
+    late = _self_arm(hi, lo, cl, touch_n=2, alt_bars=(5,))      # bar 5: two touches are in
+    assert late.close_reason.iloc[0] == "alt_exit"
+    assert late.pnl.iloc[0] > 0, "the in-profit gate must still hold"
+
+
+def test_a_trade_arms_on_candles_formed_wholly_on_its_losing_side():
+    # long at 100; bars 1 and 2 form ENTIRELY below it (high < 100), bar 3 recovers
+    hi = [100, 99, 98, 104, 106]
+    lo = [100, 97, 96, 100, 105]
+    cl = [100, 98, 97, 103, 105]
+    assert _self_arm(hi, lo, cl, wrong_m=3, alt_bars=(4,)).close_reason.iloc[0] != "alt_exit"
+    assert _self_arm(hi, lo, cl, wrong_m=2, alt_bars=(4,)).close_reason.iloc[0] == "alt_exit"
+
+
+def test_a_short_counts_its_losing_side_the_other_way():
+    # short at 100; bars 1-2 form entirely ABOVE it, which is the losing side for a short
+    hi = [100, 104, 105, 100, 98]
+    lo = [100, 101, 102, 99, 97]
+    cl = [100, 103, 104, 99, 97]
+    tr = _self_arm(hi, lo, cl, side="short", wrong_m=2, alt_bars=(4,))
+    assert tr.close_reason.iloc[0] == "alt_exit" and tr.pnl.iloc[0] > 0
+
+
+def test_a_second_trade_does_not_inherit_the_first_trades_counts():
+    """The counters are per trade, and a fresh trade starts at zero."""
+    from quant.engine import BacktestConfig
+    from quant.engine.config import Signals
+    from quant.engine.run import run_backtest
+
+    # long at 100: bar 2 touches it, bar 3 touches again -> armed, and bar 3's alt closes it in
+    # profit. A second trade opens at bar 4 (at 107) and by bar 5 has seen ONE touch, not two.
+    hi = [100, 105, 101, 105, 108, 108]
+    lo = [100, 103, 99, 99, 106, 106]
+    cl = [100, 104, 100, 103, 107, 107]
+    n = len(cl)
+    d = pd.DataFrame({"t": pd.date_range("2026-01-01", periods=n, freq="1min", tz="UTC"),
+                      "open": np.asarray(cl, float), "high": np.asarray(hi, float),
+                      "low": np.asarray(lo, float), "close": np.asarray(cl, float), "volume": 1.0})
+    z = np.zeros(n, bool)
+    ent = z.copy()
+    ent[0] = True
+    ent[4] = True                                   # a second trade, on a clean slate
+    alt = z.copy()
+    alt[3] = True
+    alt[5] = True
+    sig = Signals(entry_long=ent, entry_short=z.copy(), exit_long=z.copy(), exit_short=z.copy(),
+                  exit_arm_long=z.copy(), exit_alt_long=alt, arm_touch_n=2, alt_replace_tp=True)
+    cfg = BacktestConfig(initial_cash=10_000, exit_enabled=True, sl_mode="entry_pct",
+                         sl_value=50.0, sizing_mode="cash", cash_per_trade=1_000,
+                         max_open_trades=1)
+    tr = run_backtest(d, sig, cfg).trades
+    assert len(tr) == 2
+    # the first armed on its own two touches (bars 2 and 3) and closed at bar 3
+    assert tr.close_reason.iloc[0] == "alt_exit" and tr.exit_i.iloc[0] == 3
+    # the second opened at bar 4 with a clean slate, so bar 5's alt signal finds it UNarmed
+    assert tr.close_reason.iloc[1] != "alt_exit", "the second trade inherited the first's count"
+
+
+def test_in_profit_must_mean_after_costs():
+    """Measured on BTC 5m: three of ten bail-outs moved price the right way and still lost money,
+    one of them 0.92 in price against 15.39 of fees. `alt_min_pct` is the gate that fixes it."""
+    hi = [100, 105, 101, 106, 100.4]
+    lo = [100, 103, 99, 104, 100.0]
+    cl = [100, 104, 100, 105, 100.2]              # bar 4 is only +0.2% up on the entry
+
+    loose = _self_arm(hi, lo, cl, touch_n=2, alt_bars=(4,), min_pct=0.0)
+    assert loose.close_reason.iloc[0] == "alt_exit", "any favourable move is enough by default"
+
+    tight = _self_arm(hi, lo, cl, touch_n=2, alt_bars=(4,), min_pct=0.5)
+    assert tight.close_reason.iloc[0] != "alt_exit", "+0.2% must not clear a 0.5% gate"
+
+
+def test_the_secondary_is_reachable_by_name_and_replaces_the_target(mtf):
+    from quant.scenarios import run_pieces
+
+    _, _, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=2, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0,
+             sec_touch_n=1, sec_wrong_m=1, sec_opp_n=1)
+    cfg = dict(initial_cash=10_000, exit_enabled=False, max_open_trades=1)
+    plain = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                       params=p, cfg=cfg).trades
+    bail = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                      secondary="entry_retest_bail@v1", params=p, cfg=cfg).trades
+    assert len(bail) and (bail.close_reason == "alt_exit").any(), "the bail-out never fired"
+    assert not (plain.close_reason == "alt_exit").any(), "it fired without being asked for"
+    # every bail-out is a favourable price move, which is the engine's gate
+    a = bail[bail.close_reason == "alt_exit"]
+    sgn = np.where(a.side == "long", 1.0, -1.0)
+    assert (sgn * (a.exit_price - a.entry_price) > 0).all()
+
+
+def test_the_enabled_emas_stay_visible_while_one_trade_is_isolated(mtf):
+    """Isolating a trade must not take away the context you judge it against."""
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+    from quant.viz.studies import pattern_figure
+
+    _, frames, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=2, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all", stop_n=20, be_at_rr=1.0, tp_rr=3.0)
+    run = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                     params=p, cfg=dict(initial_cash=10_000, exit_enabled=False))
+    tr = trendline_trigger(run.df, run.trades, p, prefix_names={"": "1m", "5min__": "5m"})
+    tr = tr.assign(R=0.0)
+
+    fig = pattern_figure(D, patterns=[], sr_zones=False, trendlines=True, tf_frames=frames,
+                         chart_tf="1m", emas=(20, 50), mtf_emas=[("5min", 50)],
+                         trades=tr, trade_tp_rr=3.0, max_picker_instances=6, max_shapes_per_tf=4)
+    ema = [i for i, t_ in enumerate(fig.data)
+           if (t_.legendgroup or "").startswith(("ema", "mtfema"))]
+    assert len(ema) == 3, [fig.data[i].name for i in ema]
+
+    rows = [c for b in fig.layout.updatemenus[-2].buttons
+            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+            if c["label"].startswith("#")]
+    assert rows
+    for c in rows:
+        vis = c["args"][0]["visible"]
+        assert all(vis[i] is True for i in ema), f"{c['label']} hid an EMA"

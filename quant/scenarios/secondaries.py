@@ -18,6 +18,13 @@ Params (flat, merged with the scenario params):
   grad_prefix    which EMA line to watch (default 'grad' -> the `grad_line` column)
   sec_replace_tp once armed, DROP the original take-profit so only this rule (or the stop) can close
                  the trade. Default False = keep both, whichever triggers first wins.
+  sec_touch_n    (entry_retest_bail) bars since entry that traded back THROUGH the entry price
+  sec_min_pct    how far price must have moved your way, as a PERCENT of entry, before the bail-out
+                 may fire. The engine's gate is "any favourable move", which on a 5m chart exits for
+                 less than the round trip costs about a third of the time. Set it above your costs.
+  sec_wrong_m    (entry_retest_bail) candles formed WHOLLY on the losing side of the entry price.
+                 Both are counted PER TRADE in the kernel — the level is the trade's own entry, so
+                 no global signal array can express them.
 """
 from __future__ import annotations
 
@@ -163,6 +170,48 @@ class _RunPastTp(SecondaryMethod):
         return red(n, src=src) if p.get("_side") == "long" else green(n, src=src)
 
 
+class _EntryRetestBail(SecondaryMethod):
+    """The move stopped convincing you, so take what is there.
+
+    A trade that goes your way and then keeps coming back to where you got in is not trending — it
+    is oscillating around your entry, and the 3R target it was given is a bet on a move that is not
+    happening. This arms on the trade's OWN behaviour and then hands it to "exit on the first
+    opposite candle, while green":
+
+      `sec_touch_n`  bars since entry that traded back THROUGH the entry price
+      `sec_wrong_m`  candles that formed WHOLLY on the losing side of the entry price
+                     (for a long, the whole candle below where you bought)
+
+    Either one alone arms the trade; set the other to 0 to use just one. Both are counted per trade
+    in the kernel, because the level is this trade's own entry — a global signal array cannot say
+    "price came back to where THIS trade opened", which is exactly what `shaky_trend_bail` has to
+    settle for by watching an EMA instead.
+
+    `sec_replace_tp` defaults to **True** here: the point is to REPLACE the target, not to race it.
+    The stop is untouched either way, and the engine's in-profit gate means this can never realise a
+    loss by itself — an armed trade that never gets green is still handed to the stop.
+    """
+    name, version = "entry_retest_bail", "v1"
+    description = ("Price kept returning to the entry, so stop aiming at the target: exit on the "
+                   "first opposite candle while in profit.")
+    default_params = {"sec_touch_n": 2, "sec_wrong_m": 0, "sec_opp_n": 1,
+                      "candle_src": "real", "sec_replace_tp": True, "sec_min_pct": 0.0}
+
+    def prepare(self, df, p):
+        if p.get("candle_src") == "ha" and "ha_close" not in df.columns:
+            return add_heikin_ashi(df)
+        return df
+
+    def arm(self, p: dict) -> Cond:
+        # never from a signal — the kernel arms it from this trade's own touch / wrong-side counts
+        return Cond(lambda df: np.zeros(len(df), dtype=bool), "arm_from_entry_retest")
+
+    def exit(self, p: dict) -> Cond:
+        n, src = int(p.get("sec_opp_n", 1)), p.get("candle_src", "real")
+        return red(n, src=src) if p.get("_side") == "long" else green(n, src=src)
+
+
+register_secondary(_EntryRetestBail())
 register_secondary(_ShakyTrendBail())
 register_secondary(_RunPastTp())
 register_secondary(_ProfitCandleBail())
