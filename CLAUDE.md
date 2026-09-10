@@ -247,12 +247,16 @@ quant/
 │   │                    #     / tl_touch_k prior touches / tl_dir_n candles of the TRADE'S OWN
 │   │                    #     COLOUR (red for a short, green for a long -- NOT the same test, a
 │   │                    #     candle can close through a support and still be green; tl_dir_src =
-│   │                    #     "chart" the execution frame or "line" the line's own timeframe),
+│   │                    #     "chart" the execution frame or "line" the line's own timeframe) /
+│   │                    #     tl_dir_full_n n candles BOTH the right colour AND wholly clear of the
+│   │                    #     line (== tl_full_m + tl_dir_n under "all", but survives "any"),
 │   │                    #     joined by tl_combine all|any. EACH takes
 │   │                    #     a DICT keyed by timeframe ({"5m":4,"15m":5,"*":2}) via tl_per_tf(),
 │   │                    #     because two 15m closes is half an hour and two 1m closes is two
 │   │                    #     minutes; experiments/trendline_wait_search.py sweeps it. The level
 │   │                    #     is HELD for the confirmation window because add_trendlines retires a
+│   │                    #     line the moment it breaks, and tl_extend (default True) carries it
+│   │                    #     along its OWN SLOPE rather than flat -- a rising support keeps rising,
 │   │                    #     line the moment it breaks -- without that, n>1 fired ZERO times on
 │   │                    #     the base timeframe. trendline_trigger() labels each trade with WHICH
 │   │                    #     timeframe fired, since the entry is an OR across them

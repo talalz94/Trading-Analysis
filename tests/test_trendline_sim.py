@@ -587,3 +587,98 @@ def test_a_green_close_below_support_passes_the_close_rule_and_fails_the_colour_
     assert _tl_entry(p, "short")(d).any(), "two closes below the line should fire"
     assert not _tl_entry(dict(p, tl_dir_n=2), "short")(d).any(), \
         "...but not once two RED candles are also required"
+
+
+# ---------------------------------------------------------------------------
+# n candles of the right colour, FULLY clear of a line that has been extended
+# ---------------------------------------------------------------------------
+def test_a_held_line_is_carried_along_its_own_slope():
+    """A rising support keeps rising. Holding the last value flat quietly makes the test easier on
+    one side and harder on the other, over exactly the bars a confirmation rule spans."""
+    from quant.scenarios.entries import _held_level
+
+    d = pd.DataFrame({"tl_sup": [100.0, 101.0, 102.0, np.nan, np.nan, np.nan],
+                      "tl_sup_slope": [1.0, 1.0, 1.0, np.nan, np.nan, np.nan]})
+    flat = _held_level(d, "tl_sup", 3)
+    ext = _held_level(d, "tl_sup", 3, slope_col="tl_sup_slope")
+    assert list(flat) == [100, 101, 102, 102, 102, 102]
+    assert list(ext) == [100, 101, 102, 103, 104, 105]
+    # the hold is bounded, and a published value is never overwritten
+    assert not np.isfinite(_held_level(d, "tl_sup", 1, slope_col="tl_sup_slope")[-1])
+    assert list(ext[:3]) == [100, 101, 102]
+
+
+def test_the_extension_only_ever_reads_values_already_published():
+    """Causality by truncation, the same test the levels themselves get."""
+    from quant.scenarios.entries import _held_level
+
+    n = 60
+    rng = np.random.default_rng(3)
+    lvl = pd.Series(np.where(rng.random(n) < 0.4, rng.normal(100, 2, n), np.nan))
+    d = pd.DataFrame({"tl_sup": lvl, "tl_sup_slope": 0.5})
+    full = _held_level(d, "tl_sup", 4, slope_col="tl_sup_slope")
+    for k in (20, 35, 50):
+        part = _held_level(d.iloc[:k].reset_index(drop=True), "tl_sup", 4,
+                           slope_col="tl_sup_slope")
+        a, b = full[:k], part
+        both = np.isfinite(a) & np.isfinite(b)
+        assert np.allclose(a[both], b[both]), f"the extension changed when the future was removed"
+
+
+def test_a_candle_must_be_both_the_right_colour_and_wholly_clear_of_the_line():
+    from quant.scenarios.entries import _tl_entry
+    from quant.indicators.candles import add_candle_runs
+
+    def frame(open_, close, high, low):
+        d = pd.DataFrame({"t": pd.date_range("2026-01-01", periods=len(close), freq="1min",
+                                             tz="UTC"),
+                          "open": open_, "close": close, "high": high, "low": low,
+                          "volume": 1.0, "tl_sup": 100.0, "tl_sup_slope": 0.0})
+        return add_candle_runs(d)
+
+    p = dict(tl_prefixes=("",), tl_close_n=0, tl_full_m=0, tl_touch_k=0, tl_dir_n=0,
+             tl_combine="all", tl_dir_full_n=2)
+
+    # red, and the whole candle below 100 -> fires
+    good = frame([98.0] * 4, [95.0] * 4, [99.0] * 4, [94.0] * 4)
+    assert _tl_entry(p, "short")(good).any()
+
+    # red, but the WICK pokes back above the line -> does not
+    wick = frame([98.0] * 4, [95.0] * 4, [101.0] * 4, [94.0] * 4)
+    assert not _tl_entry(p, "short")(wick).any()
+
+    # wholly below, but GREEN -> does not
+    green = frame([94.0] * 4, [97.0] * 4, [98.0] * 4, [93.0] * 4)
+    assert not _tl_entry(p, "short")(green).any()
+
+
+def test_the_conjoined_knob_matches_the_two_separate_ones_under_all_and_not_under_any(mtf):
+    """Which is the reason it exists: as ONE condition it survives `tl_combine='any'`."""
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    base = dict(tl_prefixes=tuple(names), tl_tf_names=names, tl_close_n=2, tl_touch_k=0)
+
+    joint = _tl_entry(dict(base, tl_dir_full_n=2, tl_combine="all"), "short")(D)
+    split = _tl_entry(dict(base, tl_full_m=2, tl_dir_n=2, tl_combine="all"), "short")(D)
+    assert (joint == split).all(), "under 'all' the two spellings are the same conjunction"
+
+    joint_any = _tl_entry(dict(base, tl_dir_full_n=2, tl_combine="any"), "short")(D).sum()
+    split_any = _tl_entry(dict(base, tl_full_m=2, tl_dir_n=2, tl_combine="any"), "short")(D).sum()
+    assert joint_any < split_any, "under 'any' they must differ — that is the point"
+
+
+def test_demanding_more_such_candles_only_removes_entries(mtf):
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    base = dict(tl_prefixes=tuple(names), tl_tf_names=names, tl_close_n=2, tl_full_m=0,
+                tl_touch_k=0, tl_dir_n=0, tl_combine="all")
+    counts = [_tl_entry(dict(base, tl_dir_full_n=n), "short")(D).sum() for n in (0, 1, 2, 3)]
+    assert counts[0] > 0 and counts == sorted(counts, reverse=True) and counts[-1] < counts[0]
+    # ...and it is per timeframe like every other knob
+    a = _tl_entry(dict(base, tl_dir_full_n={"1m": 1, "5m": 1, "15m": 1}), "short")(D).sum()
+    b = _tl_entry(dict(base, tl_dir_full_n={"1m": 1, "5m": 4, "15m": 4}), "short")(D).sum()
+    assert b < a
