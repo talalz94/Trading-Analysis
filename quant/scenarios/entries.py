@@ -512,6 +512,11 @@ ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]
 #   tl_full_m    m consecutive candles ENTIRELY beyond it      (wick included — much stricter)
 #   tl_touch_k   the line had been touched k times before it broke (a quality gate on the line,
 #                not a separate trigger: a line nobody respected is not a level)
+#   tl_dir_full_n  n consecutive candles that are BOTH the trade's colour AND entirely clear of the
+#                line, wicks included. The line is EXTENDED along its own slope to be measured
+#                against, because it is retired the moment it breaks (`tl_extend`, on by default).
+#                Always the execution frame's candles: it is a geometric test against the line, and
+#                the chart frame is what is drawn against it.
 #   tl_dir_n     n consecutive candles the trade's OWN colour -- red for a short, green for a long.
 #                Not the same test as tl_close_n: a candle can close through a support and still be
 #                green. `tl_dir_src` picks whose candles: "chart" (the execution frame, the default)
@@ -525,8 +530,9 @@ ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]
 _MTF_TL_DEFAULTS = {
     "tl_prefixes": ("",),          # "" is the base frame; "5m__", "1h__" are merged timeframes
     "tl_tf_names": None,           # {"": "1m", "5m__": "5m", ...}; prefixes work as keys too
-    "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0, "tl_dir_n": 0,
+    "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0, "tl_dir_n": 0, "tl_dir_full_n": 0,
     "tl_dir_src": "chart",         # "chart" = the frame you execute on; "line" = the line's own
+    "tl_extend": True,             # carry a held line along its OWN SLOPE, not flat
     "tl_combine": "all", "tl_tol_atr": 0.0, "tl_atr_period": 14,
 }
 
@@ -544,6 +550,31 @@ def tl_per_tf(p: dict, key: str, pref: str) -> int:
     return 0
 
 
+def _held_level(df: pd.DataFrame, col: str, hold: int, *, slope_col=None) -> np.ndarray:
+    """The line's price, carried `hold` bars past the point it stopped being published.
+
+    A line is retired the moment price closes through it, so any rule that wants more than one bar
+    of confirmation has to be told where the line WOULD have been. Holding the last value flat is
+    wrong for a sloping line -- a rising support keeps rising, and over the three or four bars a
+    confirmation rule spans, a flat hold quietly makes the test easier on one side and harder on the
+    other. With `slope_col` the held value is EXTRAPOLATED along the line's own slope, which is what
+    "extend the line" means. It reads only values the frame had already published, so it stays causal.
+    """
+    v = df[col]
+    if hold <= 0:
+        return v.to_numpy(float)
+    if slope_col is None or slope_col not in df.columns:
+        return v.ffill(limit=hold).to_numpy(float)
+
+    idx = np.arange(len(df), dtype=float)
+    live = np.isfinite(v.to_numpy(float))
+    last_v = v.ffill(limit=hold).to_numpy(float)
+    last_i = pd.Series(np.where(live, idx, np.nan)).ffill(limit=hold).to_numpy(float)
+    slope = df[slope_col].where(live).ffill(limit=hold).to_numpy(float)
+    out = last_v + np.where(np.isfinite(slope), slope, 0.0) * (idx - last_i)
+    return np.where(live, v.to_numpy(float), out)
+
+
 def _tl_beyond(df: pd.DataFrame, p: dict, side: str, pref: str):
     """(close beyond, whole candle beyond, the level itself) for one timeframe's line.
 
@@ -559,8 +590,10 @@ def _tl_beyond(df: pd.DataFrame, p: dict, side: str, pref: str):
     col = f"{pref}tl_{which}"
     if col not in df.columns:
         return None
-    hold = max(tl_per_tf(p, "tl_close_n", pref), tl_per_tf(p, "tl_full_m", pref)) - 1
-    lvl = (df[col].ffill(limit=hold) if hold > 0 else df[col]).to_numpy(float)
+    hold = max(tl_per_tf(p, "tl_close_n", pref), tl_per_tf(p, "tl_full_m", pref),
+               tl_per_tf(p, "tl_dir_full_n", pref)) - 1
+    lvl = _held_level(df, col, hold,
+                      slope_col=f"{pref}tl_{which}_slope" if p.get("tl_extend", True) else None)
     tol = float(p.get("tl_tol_atr") or 0.0)
     if tol:
         a = add_atr(df, int(p.get("tl_atr_period", 14)))[f"atr_{int(p.get('tl_atr_period', 14))}"]
@@ -590,6 +623,7 @@ def _tl_entry(p: dict, side: str) -> Cond:
             m = tl_per_tf(p, "tl_full_m", pref)
             k = tl_per_tf(p, "tl_touch_k", pref)
             dn = tl_per_tf(p, "tl_dir_n", pref)
+            dfn = tl_per_tf(p, "tl_dir_full_n", pref)
             beyond_c, beyond_full, lvl = got
             live = np.isfinite(lvl)
             parts = []
@@ -610,6 +644,15 @@ def _tl_entry(p: dict, side: str) -> Cond:
                 rcol = f"{rp}{'up_run' if side == 'long' else 'dn_run'}"
                 parts.append(df[rcol].to_numpy(float) >= dn if rcol in df.columns
                              else np.zeros(len(df), bool))
+            if dfn > 0:
+                # BOTH AT ONCE, on the same candles: the right colour AND the whole candle clear of
+                # the line. Asking for `tl_dir_n` and `tl_full_m` separately is the same conjunction
+                # only while `tl_combine` is "all"; as one condition it survives "any" and can be
+                # OR-ed against something else.
+                o = df["open"].to_numpy(float)
+                c = df["close"].to_numpy(float)
+                right_colour = (c > o) if side == "long" else (c < o)
+                parts.append(_run_of(beyond_full & right_colour, dfn))
             if not parts:
                 continue
             ok = parts[0].copy()
@@ -659,7 +702,8 @@ def trendline_trigger(df: pd.DataFrame, trades: pd.DataFrame, params: dict,
             hits[(pref, side)] = _tl_entry(one, side)(df)
     held = {}
     for p_ in tuple(params.get("tl_prefixes") or ("",)):
-        hold = max(tl_per_tf(params, "tl_close_n", p_), tl_per_tf(params, "tl_full_m", p_)) - 1
+        hold = max(tl_per_tf(params, "tl_close_n", p_), tl_per_tf(params, "tl_full_m", p_),
+                   tl_per_tf(params, "tl_dir_full_n", p_)) - 1
         for w in ("res", "sup"):
             col = f"{p_}tl_{w}_n"
             if col not in df.columns:

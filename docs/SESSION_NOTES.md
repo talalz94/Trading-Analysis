@@ -1180,6 +1180,24 @@ measured in 15m bars and stays invisible until that bar closed. Both directions 
 looser or tighter for a real reason — the line's own clock is slower, so `"line"` fires more often
 than `"chart"` at the same n.
 
+### Extending a broken line, and asking for colour AND clearance together
+
+`tl_dir_full_n` wants n candles that are BOTH the trade's colour AND wholly clear of the line, wicks
+included -- a red candle whose HIGH is still under the support. On BTC 5m short entries: 74 -> 39 ->
+15 -> 5 at n = 0/1/2/3. Under `tl_combine="all"` it is exactly `tl_full_m` and `tl_dir_n` set to the
+same number; it exists as one condition so it survives `"any"` and can be OR-ed against something
+else (82 entries vs 1,431 for the split spelling under `"any"`).
+
+**`tl_extend` (new, default True) is the part that was quietly wrong.** A line is retired the moment
+price closes through it, so any multi-bar confirmation has to be told where the line WOULD have been
+-- previously a flat `ffill`. A sloping line does not stay flat: a rising support keeps rising, so
+over the three or four bars a rule spans, a flat hold makes the test lenient on one side and strict
+on the other. The held value is now extrapolated along the line's own `{prefix}_{sup,res}_slope`.
+It reads only already-published values, so it is still causal (truncation test).
+
+This DOES move existing numbers slightly -- short entry bars went 72 -> 74 on the notebook's window,
+because the level a rule is measured against now moves during the hold.
+
 ### Where the breakeven stop came from
 
 Nobody asked for it explicitly. "Use the best known setting" was read against `WHAT_WORKS.md`'s
