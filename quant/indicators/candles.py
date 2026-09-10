@@ -45,3 +45,23 @@ def add_heikin_ashi(df: pd.DataFrame, *, prefix: str = "ha") -> pd.DataFrame:
     out[f"{prefix}_close"] = ha_close
     out[f"{prefix}_green"] = ha_close > ha_open
     return out
+
+
+def add_candle_runs(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
+    """`up_run` / `dn_run`: how many consecutive GREEN / RED candles end at each bar.
+
+    `consecutive_green(df, n)` in `quant.signals.primitives` answers "are the last n green", which
+    is the same question when n is fixed. This returns the COUNT instead, for two reasons: one
+    column serves every n, and — the reason it exists — a run counted on a 15m frame can be merged
+    onto a 5m grid, where `consecutive_green` would count 5m candles no matter whose line you were
+    trading.
+
+    A doji (close == open) is neither, so it ends both runs. That is the honest reading: nothing
+    happened, so nothing continued.
+    """
+    out = df.copy()
+    o, c = out["open"].to_numpy(float), out["close"].to_numpy(float)
+    for name, flag in ((f"{prefix}up_run", c > o), (f"{prefix}dn_run", c < o)):
+        k = np.cumsum(flag)
+        out[name] = (k - np.maximum.accumulate(np.where(~flag, k, 0))).astype(np.int32)
+    return out

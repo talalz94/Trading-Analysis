@@ -1160,6 +1160,40 @@ hover.
 
 Notebook 18 was cut from 26 cells to 10 — config, run, chart, results, one appendix.
 
+### Candle colour is not the same condition as closing beyond the line
+
+`tl_close_n` counts closes past the trendline. That is not "n red candles": a candle can close
+below a support and still be green, and on BTC 5m over this window **30 of 72 short entry bars were
+not red at all** — the entry bar is the *n*th close past the line, several bars after the break, and
+by then the candle is often a green pullback bar.
+
+`tl_dir_n` counts candles of the trade's own colour (red for a short, green for a long), per
+timeframe like the rest, joined by the same `tl_combine`. On BTC 5m + 15m + 1h lines, short entries
+went 72 -> 42 -> 18 -> 8 as `tl_dir_n` rose 0 -> 1 -> 2 -> 3.
+
+**Whose candles?** `tl_dir_src="chart"` counts the execution frame's; `"line"` counts the
+timeframe the line was fitted on, so a 15m line can demand three red *15m* candles. That needed
+`add_candle_runs()` in `quant/indicators/candles.py`, which returns the RUN LENGTH rather than a
+fixed-n predicate: `consecutive_red(df, 3)` on a 5m grid counts 5m candles no matter whose line you
+are trading, whereas a run counted on the 15m frame and merged through `align_timeframes` is
+measured in 15m bars and stays invisible until that bar closed. Both directions of the source are
+looser or tighter for a real reason — the line's own clock is slower, so `"line"` fires more often
+than `"chart"` at the same n.
+
+### Where the breakeven stop came from
+
+Nobody asked for it explicitly. "Use the best known setting" was read against `WHAT_WORKS.md`'s
+"breakeven at 1-1.5R with a 3R target, +0.0095R over a plain 3R target", so `be_ladder@v1` came in
+at its default `be_at_rr=1.0`. The notebook said "breakeven at 1R" without saying that this MOVES
+THE STOP, which is why a trade closing as `stop_loss` with its exit at the entry level read as a
+broken chart. Now stated in the config.
+
+Measured on the notebook's own nine-day window it cost **-3.55R over 8 trades**, but -3.00R of that
+is a single trade (#04, which reached 1.52R before reversing). Over the same 6 windows and 5.5
+months the wait search used, 129 trades: **+6.2R total, +0.048R per trade, helping in 4 of 6
+windows** — same sign as the documented number. Nine days says nothing either way; the expected
+value of the rung over 8 trades is about +0.08R, far smaller than one trade's swing.
+
 ## Not done / next
 
 * The multi-timeframe question is still OPEN — see the power problem above. If it is worth pursuing,

@@ -512,6 +512,10 @@ ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]
 #   tl_full_m    m consecutive candles ENTIRELY beyond it      (wick included — much stricter)
 #   tl_touch_k   the line had been touched k times before it broke (a quality gate on the line,
 #                not a separate trigger: a line nobody respected is not a level)
+#   tl_dir_n     n consecutive candles the trade's OWN colour -- red for a short, green for a long.
+#                Not the same test as tl_close_n: a candle can close through a support and still be
+#                green. `tl_dir_src` picks whose candles: "chart" (the execution frame, the default)
+#                or "line" (the timeframe the line was fitted on).
 #
 # Any set to 0 is off. `tl_combine="all"` requires every enabled one, "any" requires one.
 # `tl_close_n`, `tl_full_m` and `tl_touch_k` may each be ONE number for every timeframe, or a DICT
@@ -521,7 +525,8 @@ ENTRY_FAMILIES += ["candle_pattern", "chart_pattern"]
 _MTF_TL_DEFAULTS = {
     "tl_prefixes": ("",),          # "" is the base frame; "5m__", "1h__" are merged timeframes
     "tl_tf_names": None,           # {"": "1m", "5m__": "5m", ...}; prefixes work as keys too
-    "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0,
+    "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0, "tl_dir_n": 0,
+    "tl_dir_src": "chart",         # "chart" = the frame you execute on; "line" = the line's own
     "tl_combine": "all", "tl_tol_atr": 0.0, "tl_atr_period": 14,
 }
 
@@ -584,6 +589,7 @@ def _tl_entry(p: dict, side: str) -> Cond:
             n = tl_per_tf(p, "tl_close_n", pref)
             m = tl_per_tf(p, "tl_full_m", pref)
             k = tl_per_tf(p, "tl_touch_k", pref)
+            dn = tl_per_tf(p, "tl_dir_n", pref)
             beyond_c, beyond_full, lvl = got
             live = np.isfinite(lvl)
             parts = []
@@ -594,6 +600,15 @@ def _tl_entry(p: dict, side: str) -> Cond:
             if k > 0:
                 tcol = f"{pref}tl_{which}_touches"
                 parts.append(df[tcol].to_numpy(float) >= k if tcol in df.columns
+                             else np.zeros(len(df), bool))
+            if dn > 0:
+                # CANDLE COLOUR, which is not the same question as "closed beyond the line": a
+                # candle can close under a support and still be green. Counted on the timeframe
+                # named by `tl_dir_src` -- "line" asks for three red 15m candles, "chart" for three
+                # red bars of the frame you actually execute on.
+                rp = pref if str(p.get("tl_dir_src", "chart")).lower() == "line" else ""
+                rcol = f"{rp}{'up_run' if side == 'long' else 'dn_run'}"
+                parts.append(df[rcol].to_numpy(float) >= dn if rcol in df.columns
                              else np.zeros(len(df), bool))
             if not parts:
                 continue

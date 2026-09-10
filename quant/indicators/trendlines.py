@@ -319,6 +319,9 @@ def mtf_trendlines(base_df: pd.DataFrame, frames: Optional[Dict[str, pd.DataFram
     12:00 is only knowable when that bar CLOSES at 13:00, so `align_timeframes(shift_bars=1)` makes
     it visible to base bars from 13:00 onward and no earlier.
 
+    Each frame's candle-colour runs (`up_run` / `dn_run`) come along too, so a rule can ask for
+    three red 15m candles rather than three red bars of whatever the chart happens to be.
+
     Columns are the ones `add_trendlines` produces, prefixed by timeframe for the extra frames:
     `tl_res` / `tl_sup` for the base, `1h__tl_res` / `1h__tl_sup` and so on for the rest. Load the
     frames with `quant.data.tf_frames` so each has its history measured in ITS OWN bars — a 1h line
@@ -328,16 +331,24 @@ def mtf_trendlines(base_df: pd.DataFrame, frames: Optional[Dict[str, pd.DataFram
     """
     from ..data.timeframe import align_timeframes
 
-    out = add_trendline_ids(add_trendlines(base_df, prefix=prefix, **kwargs), prefix=prefix)
+    from .candles import add_candle_runs
+
+    out = add_candle_runs(add_trendline_ids(add_trendlines(base_df, prefix=prefix, **kwargs),
+                                            prefix=prefix))
     if not frames:
         return out
-    others = {tf: add_trendline_ids(
-        add_trendlines(f.reset_index(drop=True), prefix=prefix, **kwargs), prefix=prefix)
+    # each timeframe's OWN candle runs ride along, so "three red 15m candles" is a question the base
+    # grid can answer. Counted on the 15m frame and merged, never recounted here — on a 5m grid a
+    # run of 15m reds would otherwise be measured in 5m bars.
+    others = {tf: add_candle_runs(add_trendline_ids(
+        add_trendlines(f.reset_index(drop=True), prefix=prefix, **kwargs), prefix=prefix))
         for tf, f in frames.items()}
     merged = align_timeframes(out, others, time_col=time_col, shift_bars=1)
     # the shift turns the int columns into floats with a leading NaN; -1 means "no line" everywhere
     for c in [c for c in merged.columns if c.endswith(("_res_n", "_sup_n"))]:
         merged[c] = merged[c].fillna(-1).astype(np.int32)
+    for c in [c for c in merged.columns if c.endswith(("up_run", "dn_run"))]:
+        merged[c] = merged[c].fillna(0).astype(np.int32)
     return merged
 
 
