@@ -484,3 +484,106 @@ def test_a_per_timeframe_wait_survives_a_whole_run_and_a_preset(mtf):
                 tp="be_ladder@v1", params=p, cfg=cfg)
     back = Preset.from_dict(json.loads(json.dumps(ps.to_dict())))
     assert back.params["tl_close_n"] == {"1m": 2, "5m": 4, "*": 3}
+
+
+# ---------------------------------------------------------------------------
+# Candle COLOUR as an entry condition — a different question from "closed beyond the line"
+# ---------------------------------------------------------------------------
+def test_candle_runs_count_consecutive_colours_and_a_doji_ends_both():
+    from quant.indicators.candles import add_candle_runs
+
+    d = pd.DataFrame({"open": [1, 1, 1, 2, 1, 1, 1], "close": [2, 2, 0, 2, 2, 2, 0]})
+    r = add_candle_runs(d)                       # G G R - G G R
+    assert list(r["up_run"]) == [1, 2, 0, 0, 1, 2, 0]
+    assert list(r["dn_run"]) == [0, 0, 1, 0, 0, 0, 1]
+
+
+def test_each_timeframes_runs_are_counted_on_its_own_candles(mtf):
+    """Counted on the 15m frame and merged — on a 5m grid a run of 15m reds would otherwise be
+    measured in 5m bars, which is a different and much easier condition."""
+    from quant.indicators.candles import add_candle_runs
+
+    base, frames, D = mtf
+    for pref, f in (("", base), ("5min__", frames["5min"]), ("15min__", frames["15min"])):
+        assert f"{pref}up_run" in D.columns and f"{pref}dn_run" in D.columns
+    # the 15m run can only be as long as the 15m frame's own run ever gets
+    own = add_candle_runs(frames["15min"])
+    assert D["15min__dn_run"].max() <= own["dn_run"].max()
+    # ...and it is strictly coarser than the base frame's, because it changes once per 15m bar
+    assert D["15min__dn_run"].diff().ne(0).sum() < D["dn_run"].diff().ne(0).sum()
+
+
+def test_a_higher_timeframes_run_is_invisible_until_that_bar_closed(mtf):
+    """Same anti-lookahead rule the levels obey: the run you can act on is the last CLOSED one."""
+    from quant.data import resample_ohlcv
+    from quant.indicators.candles import add_candle_runs
+    from quant.indicators.trendlines import mtf_trendlines
+
+    base, frames, _ = mtf
+    k = 1800
+    part = mtf_trendlines(base.iloc[:k].reset_index(drop=True),
+                          {tf: f[pd.to_datetime(f["t"]) < base["t"].iloc[k]].reset_index(drop=True)
+                           for tf, f in frames.items()},
+                          min_span_bars=20, max_age_bars=400)
+    full = mtf_trendlines(base, frames, min_span_bars=20, max_age_bars=400)
+    for c in ("5min__up_run", "15min__dn_run"):
+        assert (full[c].to_numpy()[:k] == part[c].to_numpy()).all(), \
+            f"{c} changed when the future was removed"
+
+
+def test_asking_for_n_candles_of_the_right_colour_only_removes_entries(mtf):
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    base = dict(tl_prefixes=tuple(names), tl_tf_names=names, tl_close_n=2, tl_full_m=0,
+                tl_touch_k=0, tl_combine="all")
+    counts = [_tl_entry(dict(base, tl_dir_n=n), "short")(D).sum() for n in (0, 1, 2, 3)]
+    assert counts[0] > 0
+    assert counts == sorted(counts, reverse=True), "more candles demanded cannot mean more entries"
+    assert counts[-1] < counts[0], "the colour test did nothing at all"
+
+
+def test_the_colour_can_be_read_off_the_line_s_timeframe_or_the_chart_s(mtf):
+    """`src='line'` asks for three red 15m candles; `src='chart'` for three red execution bars."""
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    base = dict(tl_prefixes=("5min__", "15min__"), tl_tf_names=names, tl_close_n=2,
+                tl_full_m=0, tl_touch_k=0, tl_combine="all", tl_dir_n=3)
+    chart = _tl_entry(dict(base, tl_dir_src="chart"), "short")(D).sum()
+    line = _tl_entry(dict(base, tl_dir_src="line"), "short")(D).sum()
+    assert chart != line, "the two sources cannot be the same condition"
+    # a run of the LINE's own candles is a slower clock, so it is the looser of the two
+    assert line >= chart
+
+
+def test_the_colour_count_can_differ_per_timeframe(mtf):
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    names = {"": "1m", "5min__": "5m", "15min__": "15m"}
+    base = dict(tl_prefixes=("", "5min__"), tl_tf_names=names, tl_close_n=1, tl_full_m=0,
+                tl_touch_k=0, tl_combine="all")
+    loose = _tl_entry(dict(base, tl_dir_n={"1m": 1, "5m": 1}), "short")(D).sum()
+    tight = _tl_entry(dict(base, tl_dir_n={"1m": 1, "5m": 4}), "short")(D).sum()
+    assert 0 < tight < loose
+
+
+def test_a_green_close_below_support_passes_the_close_rule_and_fails_the_colour_rule():
+    """The whole reason the two conditions are separate."""
+    from quant.scenarios.entries import _tl_entry
+
+    n = 10
+    # every bar closes below the line, but they are GREEN (close above their own open)
+    d = pd.DataFrame({"t": pd.date_range("2026-01-01", periods=n, freq="1min", tz="UTC"),
+                      "open": 90.0, "close": 95.0, "high": 96.0, "low": 89.0, "volume": 1.0,
+                      "tl_sup": 100.0})
+    from quant.indicators.candles import add_candle_runs
+    d = add_candle_runs(d)
+    p = dict(tl_prefixes=("",), tl_close_n=2, tl_full_m=0, tl_touch_k=0, tl_combine="all")
+
+    assert _tl_entry(p, "short")(d).any(), "two closes below the line should fire"
+    assert not _tl_entry(dict(p, tl_dir_n=2), "short")(d).any(), \
+        "...but not once two RED candles are also required"

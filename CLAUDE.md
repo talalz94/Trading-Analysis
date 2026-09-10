@@ -81,7 +81,11 @@ quant/
 │   ├── oscillators.py   #   add_rsi (Wilder), add_macd, add_stochastic, add_rsi_divergence
 │   │                    #     (+ rsi_divergence_table; lag == `right` bars exactly, `left` is free)
 │   │                    #     and add_rsi_divergence_realtime (zero-lag but PROVISIONAL, ~53% ratified)
-│   ├── candles.py       #   add_heikin_ashi (recursive ha_open in numba)
+│   ├── candles.py       #   add_heikin_ashi (recursive ha_open in numba) + add_candle_runs ->
+│   │                    #     up_run/dn_run = consecutive green/red candles ending here (a doji
+│   │                    #     ends both). The COUNT, not a fixed-n predicate, so one column serves
+│   │                    #     every n AND a 15m run can be merged onto a 5m grid -- where
+│   │                    #     consecutive_green() would count 5m candles whoever's line it was
 │   ├── candle_patterns.py #  62 CANDLESTICK PATTERNS as bool cols `cdl_<name>`, flagged on the bar
 │   │                    #     the pattern COMPLETES. Scale-free (ratios + a rolling avg body), with
 │   │                    #     trend context so hammer/hanging-man and inv-hammer/shooting-star are
@@ -122,7 +126,9 @@ quant/
 │   │                    #     mtf_trendlines(df_1m, frames) fits lines on EVERY timeframe and
 │   │                    #     merges them onto the base grid (align_timeframes shift_bars=1, so a
 │   │                    #     1h line is invisible until its bar closed) -> tl_res/5m__tl_res/...;
-│   │                    #     trendline_level_cols() names them, base first then coarsest;
+│   │                    #     each frame's own up_run/dn_run ride along, so "three red 15m candles"
+│   │                    #     is answerable on a 5m grid; trendline_level_cols() names the levels,
+│   │                    #     base first then coarsest;
 │   │                    #     add_trendline_ids() -> tl_res_n/tl_sup_n = WHICH line is live per bar,
 │   │                    #     so a trade can name the exact line it broke, not just its timeframe.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
@@ -238,7 +244,11 @@ quant/
 │   │                    #     mtf_trendline = a FITTED trendline from ANY timeframe giving way
 │   │                    #     (long through resistance, short through support). Three combinable
 │   │                    #     conditions: tl_close_n closes beyond / tl_full_m whole candles beyond
-│   │                    #     / tl_touch_k prior touches, joined by tl_combine all|any. EACH takes
+│   │                    #     / tl_touch_k prior touches / tl_dir_n candles of the TRADE'S OWN
+│   │                    #     COLOUR (red for a short, green for a long -- NOT the same test, a
+│   │                    #     candle can close through a support and still be green; tl_dir_src =
+│   │                    #     "chart" the execution frame or "line" the line's own timeframe),
+│   │                    #     joined by tl_combine all|any. EACH takes
 │   │                    #     a DICT keyed by timeframe ({"5m":4,"15m":5,"*":2}) via tl_per_tf(),
 │   │                    #     because two 15m closes is half an hour and two 1m closes is two
 │   │                    #     minutes; experiments/trendline_wait_search.py sweeps it. The level
