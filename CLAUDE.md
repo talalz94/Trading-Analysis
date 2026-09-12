@@ -310,7 +310,13 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 18_trendline_trading_sim = TRADES multi-timeframe trendline breaks on
+notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the user. The
+                         #   notebook is regenerated from a script; the script used to hardcode
+                         #   every value, so adding one setting silently re-imposed the others
+                         #   (8a8b8de changed TF/LINE_TFS/WARMUP_START unasked). The notebook now
+                         #   READS settings and states none — tests/test_notebook_config.py fails
+                         #   if any assignment creeps back into a cell. NEVER regenerate that file.
+                         # 18_trendline_trading_sim = TRADES multi-timeframe trendline breaks on
                          #   1m (entry rule, previous-high/low stop, BE@1R + 3R target), with the
                          #   trades on the chart and the cost floor measured on them
                          # 17_multi_timeframe_patterns = ONE chart, patterns from SEVERAL
@@ -525,3 +531,8 @@ stop-out; (if needed) per-strategy fused-numba signal generation for extreme swe
 - Put experiment-specific logic in `experiments/`, never in `quant/` core.
 - Update this file + README + docs when architecture changes. Commit in logical units; push only
   when asked (remote `origin` → GitHub `main`).
+- **Never change a setting the user did not ask you to change.** Notebooks here are regenerated from
+  build scripts, and a build script that states values will re-impose them on every rebuild — which
+  is how `TF`, `LINE_TFS` and `WARMUP_START` were silently altered in 8a8b8de. Settings belong in a
+  file the generator cannot write (`notebooks/nb18_config.py`); when adding a new one, APPEND it
+  there and leave every existing line alone.
