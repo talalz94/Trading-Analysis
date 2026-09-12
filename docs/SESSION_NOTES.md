@@ -1230,6 +1230,44 @@ Already true: `_isolate_trade` never touched traces whose legendgroup starts `em
 test now pins it across every trade row. The reason none showed was that notebook 18 passed
 `emas=()`. It now sets `EMAS` and `MTF_EMAS`.
 
+### A one-line rule language for the notebook config
+
+`quant/strategies/rulespec.py`. `ENTRY_RULES` in notebook 18 is now a list of sentences:
+
+```
+"long:  2 candles EMA_5m_200 close above"
+"short: 3 candles EMA_15m_50 formed fully below red"
+"1 candle SUP_15m touched"
+```
+
+The `Cond` algebra could already express every one of these — `(full_above(ema(200), n=3) & red(3))`
+— but only as code, and a config is not the place for code: that expression is three ideas spelled
+as one, and changing a timeframe means editing it rather than a token.
+
+Grammar: `<n> <reference> <close|formed fully|touched> [above|below] [red|green|NA]`, order-free
+with filler words ignored, so `"red 3 the EMA_5m_200 is formed fully below"` parses identically. A
+`long:` / `short:` prefix scopes a rule to one side. References are `EMA_<tf>_<period>`,
+`RES_/SUP_<tf>`, or any column already on the frame; `resolve_ref` maps them, with the chart's own
+timeframe unprefixed (`EMA_5m_200` is `ema_200` on a 5m chart and `5m__ema_200` on a 1m one).
+
+Three decisions worth keeping:
+
+* **`touch` refuses a side.** A touch is the candle straddling the level; "touched above" would be a
+  different test, and silently picking one reading is worse than refusing.
+* **`build_rules` returns None when no rule applies**, rather than an empty `all` (vacuously true) or
+  an empty `any` (never true). Guessing either would turn "I wrote no short rules" into "no short may
+  ever trade".
+* **A bad sentence raises, naming the problem.** A rule that quietly matches nothing filters every
+  entry away and looks like a strategy that found no setups.
+
+`required_emas()` says which EMA columns a rule set needs, and `add_mtf_emas()` (new, in
+`indicators/overlays.py`) adds them from the LOADED frames rather than by resampling like
+`build_mtf` — an EMA200 wants 200 bars of its own timeframe, and a short base frame silently yields
+NaN. Causal by the same `shift_bars=1` rule as everything else, with a truncation test.
+
+Watch one thing when reading results: with `max_open_trades=1`, filtering ONE side can **increase**
+the total trade count, because a slot the filtered trade would have taken is now free for the other.
+
 ### Where the breakeven stop came from
 
 Nobody asked for it explicitly. "Use the best known setting" was read against `WHAT_WORKS.md`'s

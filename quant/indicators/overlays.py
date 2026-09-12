@@ -43,3 +43,36 @@ def add_smas(df: pd.DataFrame, periods: Iterable[int], *, source: str = "close",
     for p in periods:
         out[f"{prefix}_{int(p)}"] = sma(src, p)
     return out
+
+
+def add_mtf_emas(base_df, frames=None, pairs=None, *, time_col: str = "t", source: str = "close"):
+    """`{tf}__ema_{period}` columns on the base grid, one timeframe at a time.
+
+    `build_mtf` can do this by RESAMPLING the base frame, which is fine until the period is long:
+    an EMA200 wants 200 bars of ITS OWN timeframe, and a base frame that does not reach back that
+    far silently yields NaN. Passing the frames from `quant.data.tf_frames` uses the history they
+    were loaded with instead.
+
+    `pairs` is `{tf: [periods]}`. The key `""` means the base frame itself, whose EMAs are added
+    unprefixed (`ema_200`). Higher timeframes go through `align_timeframes(shift_bars=1)`, so a 15m
+    EMA is invisible to base bars until that 15m candle closed.
+    """
+    from ..data.timeframe import align_timeframes
+
+    out = base_df
+    own = list((pairs or {}).get("", []))
+    if own:
+        out = add_emas(out, own, source=source)
+    others = {}
+    for tf, periods in (pairs or {}).items():
+        if tf == "" or not periods:
+            continue
+        f = (frames or {}).get(tf)
+        if f is None:
+            raise KeyError(f"add_mtf_emas: no frame for {tf!r}. Load it with quant.data.tf_frames, "
+                           f"or the EMA would have to be resampled from a base frame that may not "
+                           f"reach back {max(periods)} of its bars")
+        others[tf] = add_emas(f.reset_index(drop=True), sorted(set(periods)), source=source)
+    if not others:
+        return out
+    return align_timeframes(out, others, time_col=time_col, shift_bars=1)
