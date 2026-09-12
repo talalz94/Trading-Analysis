@@ -77,7 +77,11 @@ quant/
 │                        #     the 4h FRAME, because its slopes are per-4h-bar), tf_minutes(),
 │                        #     bar_interval() = a bar's duration read off the frame, not a label
 ├── indicators/          # vectorized compute ONLY (no plotting); recursive parts in numba
-│   ├── overlays.py      #   ema, sma, add_emas, add_smas
+│   ├── overlays.py      #   ema, sma, add_emas, add_smas + add_mtf_emas(base, frames, {tf:[periods]})
+│   │                    #     -> {tf}__ema_{p} on the base grid, shift_bars=1 so a 15m EMA is
+│   │                    #     invisible until its bar closed. Takes the LOADED frames rather than
+│   │                    #     resampling like build_mtf: an EMA200 wants 200 bars of its own
+│   │                    #     timeframe, and a short base frame silently yields NaN
 │   ├── oscillators.py   #   add_rsi (Wilder), add_macd, add_stochastic, add_rsi_divergence
 │   │                    #     (+ rsi_divergence_table; lag == `right` bars exactly, `left` is free)
 │   │                    #     and add_rsi_divergence_realtime (zero-lag but PROVISIONAL, ~53% ratified)
@@ -165,6 +169,18 @@ quant/
 │   │                    #     vol_shock(within=N) = ANNOUNCEMENT PROXY · range_position · CONDITIONERS dict.
 │   │                    #     Thresholds are ROLLING QUANTILES of the instrument's own history (shifted
 │   │                    #     one bar), never absolute numbers — an absolute cut becomes a date filter.
+│   ├── rulespec.py      #   A ONE-LINE RULE LANGUAGE for notebook configs:
+│   │                    #     "2 candles EMA_5m_200 close above" · "long: 3 EMA_15m_50 formed
+│   │                    #     fully below red" · "1 SUP_15m touched". The Cond algebra can express
+│   │                    #     all of these, but only as code, and a config is not the place for it.
+│   │                    #     <n> <ref> <close|full|touch> [above|below] [red|green|NA], order-free,
+│   │                    #     filler words ignored; `long:`/`short:` scopes a rule to one side.
+│   │                    #     refs: EMA_<tf>_<period> · RES_/SUP_<tf> · any column on the frame.
+│   │                    #     resolve_ref() maps a ref to its column (the chart's own tf is
+│   │                    #     unprefixed), required_emas() says which columns to add first,
+│   │                    #     describe_rules() shows what each sentence became, build_rules(side)
+│   │                    #     returns None when no rule applies -- NOT an empty all/any, because
+│   │                    #     guessing would turn "no short rules" into "no short may trade".
 │   ├── builder.py       #   RuleStrategy + Rule: declarative entry->exit(->stop) rules with `once`
 │   │                    #     (one per episode), `rearm`, `after` sequencing, per-rule exits+stops
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)

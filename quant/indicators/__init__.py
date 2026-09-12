@@ -1,7 +1,7 @@
 """Vectorized indicator library (compute only; rendering lives in quant.viz)."""
 from __future__ import annotations
 
-from .overlays import add_emas, add_smas, ema, sma
+from .overlays import add_mtf_emas, add_emas, add_smas, ema, sma
 from .oscillators import (add_macd, add_rsi, add_rsi_divergence, add_rsi_divergence_realtime,
                           add_stochastic, rsi,
                           rsi_divergence_table)
@@ -23,7 +23,7 @@ from .momentum import add_squeeze_momentum, add_wavetrend, add_ema_gradient
 from .trendlines import add_trendlines, trendline_table
 
 __all__ = [
-    "ema", "sma", "add_emas", "add_smas",
+    "ema", "sma", "add_emas", "add_mtf_emas", "add_smas",
     "rsi", "add_rsi", "add_rsi_divergence", "add_rsi_divergence_realtime", "rsi_divergence_table", "add_macd", "add_stochastic",
     "add_heikin_ashi",
     "add_candle_patterns", "candle_pattern_table", "CANDLE_PATTERNS",
