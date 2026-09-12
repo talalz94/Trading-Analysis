@@ -1230,6 +1230,29 @@ Already true: `_isolate_trade` never touched traces whose legendgroup starts `em
 test now pins it across every trade row. The reason none showed was that notebook 18 passed
 `emas=()`. It now sets `EMAS` and `MTF_EMAS`.
 
+### Settings moved OUT of notebook 18, because the generator kept overwriting them
+
+Notebook 18 is regenerated from a build script, and that script hardcoded every setting. So every
+time a new one was added, the rebuild re-imposed all the others. Commit **8a8b8de** did exactly that
+while "making the notebook clean": `TF` went `1m` -> `5m`, `LINE_TFS` `("5m","15m","1h")` ->
+`("15m","1h")`, `WARMUP_START` `2026-05-25` -> `2026-05-01`. None of it was asked for, and none of
+it was mentioned.
+
+Settings now live in `notebooks/nb18_config.py`, which nothing regenerates. The notebook imports it
+with `importlib.reload`, so editing the file lands without a kernel restart — and as a side effect
+Jupyter can no longer clobber the settings when it saves, which is the other way they have gone
+missing in this project.
+
+`tests/test_notebook_config.py` pins the rule that makes this hold: **the notebook may READ a
+setting and must never STATE one.** It parses every code cell and fails on any assignment to a name
+the config owns, so the same mistake cannot be reintroduced quietly. It also asserts each of the
+three changed values has exactly one home, parsed with `ast` rather than matched by regex so prose
+about them cannot count.
+
+The three values were left where they ended up rather than silently reverted — changing them back
+without asking would have been the same mistake twice. The config's docstring names them and the
+originals.
+
 ### A one-line rule language for the notebook config
 
 `quant/strategies/rulespec.py`. `ENTRY_RULES` in notebook 18 is now a list of sentences:
