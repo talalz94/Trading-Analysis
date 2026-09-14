@@ -42,7 +42,8 @@ def test_the_notebook_states_no_setting_of_its_own():
              "STOP_N", "STOP_BUFFER_PCT", "BE_AT_RR", "TP_RR", "USE_RETEST_BAIL", "SEC_TOUCH_N",
              "SEC_WRONG_M", "SEC_OPP_N", "SEC_MIN_PCT", "SEC_REPLACE_TP", "ENTRY_RULES",
              "RULES_COMBINE", "EMAS", "MTF_EMAS", "COSTS", "TRENDLINE", "HEIGHT", "MAX_PICKER",
-             "MAX_SHAPES_TF", "MAX_TRADE_PICKER", "SHOW_SR_ZONES", "ZONE_LOOKBACK"}
+             "MAX_SHAPES_TF", "MAX_TRADE_PICKER", "SHOW_SR_ZONES", "ZONE_LOOKBACK",
+             "EMAS_ON"}
     offenders = []
     for c in _cells():
         if c["cell_type"] != "code":
@@ -79,3 +80,32 @@ def test_the_three_values_that_were_changed_are_settable_in_one_place(name):
                 for sub in ast.walk(t):
                     n += isinstance(sub, ast.Name) and sub.id == name
     assert n == 1, f"{name} is assigned {n} times in {CFG.name}; it must have one home"
+
+
+def test_a_setting_added_later_does_not_break_an_older_config_file():
+    """EMAS_ON was APPENDED to the config; an editor tab holding the older file then saved over
+    it and the notebook died on a NameError two cells later. Appending is still the right way to
+    add a setting -- it cannot touch a line the user edited -- but the notebook must then treat a
+    setting the config predates as missing, not as fatal.
+    """
+    import ast
+
+    src = chr(10).join(''.join(c['source']) for c in _cells() if c['cell_type'] == 'code')
+    assert 'SETTING_DEFAULTS' in src, 'the notebook has no fallback for a setting the config lacks'
+
+    names = None
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Assign) and any(getattr(x, 'id', '') == 'SETTING_DEFAULTS'
+                                                for x in node.targets):
+            names = [k.value for k in node.value.keys]
+            break
+    assert names, 'SETTING_DEFAULTS is not assigned a literal dict'
+
+    ns = {}
+    exec(compile(CFG.read_text(encoding='utf-8'), str(CFG), 'exec'), ns)
+    body = src.replace('SETTING_DEFAULTS', '')
+    for k in names:
+        # a default for something the notebook never reads is dead weight, and one for a setting
+        # the config states is a second home for a value that must have exactly one
+        assert k in body, f'{k} has a default but the notebook never uses it'
+        assert k in ns, f'{k} has a default but no line in the config file to edit'

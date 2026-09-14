@@ -81,8 +81,8 @@ SEC_REPLACE_TP  = True    # drop the 3R target once armed; False races it instea
 #
 # Cell 3 prints what each sentence parsed to — read it before trusting a rule.
 ENTRY_RULES = [
-    #"long:  1 candles EMA_5m_200 close above",
-    #"short: 1 candles EMA_5m_200 close below",
+    "long:  1 candles EMA_15m_100 close above",
+    "short: 1 candles EMA_15m_100 close below",
     # "3 candles EMA_15m_50 formed fully below red",
 ]
 RULES_COMBINE = "all"     # "all" = every rule for that side, "any" = one of them
