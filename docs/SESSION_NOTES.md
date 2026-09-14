@@ -1370,3 +1370,17 @@ The buttons menu is appended **last** so the existing absolute `updatemenus[4]` 
 trade cascade do not shift. Four tests were locating that menu as `updatemenus[-2]`; they now find
 it by content, and a button's layout patch is read through a helper because a `restyle` button puts
 trace indices in `args[1]` where an `update` button puts the layout dict.
+
+## Appending a setting is safe against a rebuild, not against an open editor tab
+
+`EMAS_ON` was appended to `nb18_config.py` and committed. It was gone from the working file an hour
+later, and the notebook died on `NameError: name 'EMAS_ON' is not defined` — while the user's own
+edit to `ENTRY_RULES`, made in the same file, was present. An editor tab holding the pre-append
+version had saved its buffer back over the file, taking the tail with it.
+
+Appending is still right: it cannot touch a line the user has edited, which was the 8a8b8de failure.
+But it is not enough on its own, because the file the user is looking at may predate the append. So
+cell 2 now carries `SETTING_DEFAULTS`: any setting `nb18_config` does not define falls back and the
+notebook prints the line to paste in. `tests/test_notebook_config.py` checks each default names a
+setting the notebook actually reads AND that the config file has a line for it — a default with no
+home in the config would be a second place a value is stated, which is the original bug again.

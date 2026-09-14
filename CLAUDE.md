@@ -42,7 +42,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **453 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **454 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -325,6 +325,11 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   (8a8b8de changed TF/LINE_TFS/WARMUP_START unasked). The notebook now
                          #   READS settings and states none — tests/test_notebook_config.py fails
                          #   if any assignment creeps back into a cell. NEVER regenerate that file.
+                         #   A setting APPENDED there is invisible to an editor tab the user
+                         #   already had open — saving that stale buffer writes the old tail
+                         #   back, which is how EMAS_ON vanished and the notebook died on a
+                         #   NameError. So cell 2 carries SETTING_DEFAULTS: a setting the
+                         #   config predates falls back and prints the line to paste in.
                          # 18_trendline_trading_sim = TRADES multi-timeframe trendline breaks on
                          #   1m (entry rule, previous-high/low stop, BE@1R + 3R target), with the
                          #   trades on the chart and the cost floor measured on them
@@ -508,7 +513,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **453 total.**
+close reason), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **454 total.**
 
 ## 12. Known limitations / honest caveats
 
