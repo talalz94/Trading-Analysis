@@ -1328,3 +1328,45 @@ value of the rung over 8 trades is about +0.08R, far smaller than one trade's sw
 * Multi-timeframe patterns are a DRAWING feature only. Nothing about whether a 4h shape confirmed
   under a 1h trend is worth trading has been measured, and the phase-12 screen has not been run on
   any cross-timeframe combination. Expect nothing until it has been.
+
+---
+
+## An EMA of a timeframe finer than the chart was the chart's own EMA
+
+`MTF_EMAS = [("1m", ...)]` on a 5m chart drew a "1m EMA 200" that was the **5m** EMA 200. Measured
+on BTC, 2026-05-01 → 2026-06-10:
+
+```
+the 5m chart frame has 11,521 bars
+resample_ohlcv(5m frame, '1min') -> 11,521 bars     # upsampling cannot invent bars never loaded
+'1m EMA200' vs the 5m EMA200: identical on 100.0% of bars, max difference 0.000000
+a REAL 1m EMA200 is computed on 57,601 bars
+  at the last 5m bar:  fake 62,096.11   real 61,786.14   5m 62,096.11
+```
+
+310 points out, with nothing on the chart to say so. `pattern_figure` fell back to
+`resample_ohlcv(chart_frame, ...)` whenever `tf_frames` had no frame for a timeframe — sound going
+*up* (5m → 15m), meaningless going *down*. It now **refuses** the downward case by name and takes
+`ema_frames={"1m": df_1m}` for it; `mtf_ema_timeframes(spec, chart_tf=)` says which frames a spec
+needs, and notebook 18 loads exactly those. Those frames are kept **out of `FRAMES`** on purpose:
+`FRAMES` is what trendlines are fitted on, so adding 1m there would have started trading 1m lines.
+
+**The general shape of this bug:** a fallback that is correct in one direction and silent in the
+other. The fix is not a better fallback, it is refusing the direction that cannot work.
+
+## Two plotly defaults that fight the trade picker
+
+- `legend.itemdoubleclick` defaults to `"toggleothers"` — a double-click **isolates** that entry.
+  With one trade isolated, double-clicking an EMA hid the trade and the trendline that caused it.
+  Set to `"toggle"`, so a double-click does what a single click does.
+- That default was also the only way to turn every EMA off at once, so replacing it needed a
+  control: an `EMAs on / off` button pair (`method="restyle"` over just the EMA trace indices, so it
+  costs nothing and cannot disturb anything else) plus `emas_on=` / `EMAS_ON` for the starting
+  state. `emas_on=False` draws every EMA `legendonly` — still listed, still individually clickable,
+  which was the point. Every picker button inherits it, because their `visible` vectors are built
+  from each trace's initial `visible`.
+
+The buttons menu is appended **last** so the existing absolute `updatemenus[4]` references in the
+trade cascade do not shift. Four tests were locating that menu as `updatemenus[-2]`; they now find
+it by content, and a button's layout patch is read through a helper because a `restyle` button puts
+trace indices in `args[1]` where an `update` button puts the layout dict.

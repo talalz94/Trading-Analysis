@@ -88,8 +88,8 @@ ENTRY_RULES = [
 RULES_COMBINE = "all"     # "all" = every rule for that side, "any" = one of them
 
 # EMAs — these stay visible when you isolate a single trade, which is the point of having them
-EMAS     = (20, 50, 200)                  # of TF
-MTF_EMAS = [("15m", 50), ("1h", 200)]     # of other timeframes, stepped at their own bar close
+EMAS     = (20, 50, 100, 200)                  # of TF
+MTF_EMAS = [("1m", 20, 50, 100, 200), ("15m", 20, 50, 100, 200), ("1h", 20, 50, 100, 200)]     # of other timeframes, stepped at their own bar close
 
 COSTS = dict(initial_cash=10_000, fee_bps=8, slippage_bps=1.5,
              sizing_mode="risk_pct_equity", sizing_value=1.0,
@@ -100,3 +100,11 @@ TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0
 
 HEIGHT, MAX_PICKER, MAX_SHAPES_TF, MAX_TRADE_PICKER = 900, 24, 12, 40
 SHOW_SR_ZONES, ZONE_LOOKBACK = True, 2000
+
+# ALL THE EMAs AT ONCE. False draws every EMA but starts it OFF the chart — each one is still in the
+# legend, so you click on the two you want instead of clicking off the six you don't. The chart also
+# gets an "EMAs on / off" button pair for doing this without re-running.
+# (Plotly's own way to do it was double-clicking a legend entry, which ISOLATES that entry — so
+# double-clicking an EMA while you had a trade picked took the trade and its trendline away with it.
+# A double-click now does the same as a single click, and this is the control that replaces it.)
+EMAS_ON = True
