@@ -11,6 +11,17 @@ import pandas as pd
 import pytest
 
 
+
+def _layout_patch(button):
+    """A button's LAYOUT patch, or {}.
+
+    `method="update"` puts it in args[1]; `method="restyle"` puts TRACE INDICES there instead (the
+    EMAs on/off control does), so this cannot just index and call .get.
+    """
+    args = list(getattr(button, "args", None) or ())
+    return args[1] if len(args) > 1 and isinstance(args[1], dict) else {}
+
+
 def _frame(n=3600, seed=7, freq="1min"):
     """A trend that swings, then reverses hard — geometry a trendline fitter can actually find.
 
@@ -305,8 +316,8 @@ def test_the_chart_can_isolate_one_trade_together_with_its_line(mtf):
                          tf_frames=frames, chart_tf="1m", trades=tr, trade_tp_rr=3.0,
                          max_picker_instances=6, max_shapes_per_tf=4)
 
-    rows = [c for b in fig.layout.updatemenus[-2].buttons
-            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+    rows = [c for m in fig.layout.updatemenus for b in (m.buttons or ())
+            for c in _layout_patch(b).get("updatemenus[4].buttons", [])
             if c["label"].startswith("#")]
     assert rows, "no trade rows in the picker"
     for c in rows:                                  # the label carries id, side, line, R, outcome
@@ -416,8 +427,8 @@ def test_the_three_trade_levels_are_drawn_in_three_colours(mtf):
                          tf_frames=frames, chart_tf="1m", trades=tr, trade_tp_rr=3.0,
                          max_picker_instances=6, max_shapes_per_tf=4)
 
-    rows = [c for b in fig.layout.updatemenus[-2].buttons
-            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+    rows = [c for m in fig.layout.updatemenus for b in (m.buttons or ())
+            for c in _layout_patch(b).get("updatemenus[4].buttons", [])
             if c["label"].startswith("#")]
     assert rows
     for c in rows:
@@ -448,8 +459,8 @@ def test_a_stop_that_walked_to_breakeven_says_so(mtf):
                             close_reason="stop_loss", R=-0.02, cause="1m·S0")])
     fig = pattern_figure(D, patterns=[], sr_zones=False, emas=(), trendlines=False,
                          chart_tf="1m", trades=tr, trade_tp_rr=3.0)
-    rows = [c for b in fig.layout.updatemenus[-2].buttons
-            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+    rows = [c for m in fig.layout.updatemenus for b in (m.buttons or ())
+            for c in _layout_patch(b).get("updatemenus[4].buttons", [])
             if c["label"].startswith("#")]
     assert rows and all("sl@be" in c["label"] for c in rows)
     txt = " ".join(str(t_.text) for t_ in fig.data if getattr(t_, "text", None) is not None)
@@ -855,10 +866,101 @@ def test_the_enabled_emas_stay_visible_while_one_trade_is_isolated(mtf):
            if (t_.legendgroup or "").startswith(("ema", "mtfema"))]
     assert len(ema) == 3, [fig.data[i].name for i in ema]
 
-    rows = [c for b in fig.layout.updatemenus[-2].buttons
-            for c in (b.args[1] or {}).get("updatemenus[4].buttons", [])
+    rows = [c for m in fig.layout.updatemenus for b in (m.buttons or ())
+            for c in _layout_patch(b).get("updatemenus[4].buttons", [])
             if c["label"].startswith("#")]
     assert rows
     for c in rows:
         vis = c["args"][0]["visible"]
         assert all(vis[i] is True for i in ema), f"{c['label']} hid an EMA"
+
+
+# ---------------------------------------------------------------------------
+# EMAs on the chart: whose bars they are computed from, and turning them off
+# ---------------------------------------------------------------------------
+def test_an_ema_finer_than_the_chart_is_refused_rather_than_resampled(mtf):
+    """The bug this replaces: a 1m EMA asked for on a 5m chart came back as the 5m EMA.
+
+    `resample_ohlcv` only works DOWNWARD. Upsampling a 5m frame to 1m returns the same 11,521 rows,
+    so the "1m" EMA200 was identical to the 5m one on 100% of bars — 310 points from the truth on
+    BTC, with nothing on the chart to say so. Silence is the whole problem, so this refuses.
+    """
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base, _, _ = mtf
+    d5 = resample_ohlcv(base, "5min")
+    with pytest.raises(ValueError, match="FINER"):
+        pattern_figure(d5, patterns=[], sr_zones=False, chart_tf="5m", mtf_emas=[("1m", 50)])
+
+    # given the real bars, it is a different line
+    fig = pattern_figure(d5, patterns=[], sr_zones=False, chart_tf="5m", emas=(50,),
+                         mtf_emas=[("1m", 50)], ema_frames={"1m": base})
+    y = {t.name: pd.Series(np.asarray(t.y, float), index=pd.to_datetime(t.x))
+         for t in fig.data if t.name and "EMA" in t.name}
+    # each EMA rides its OWN frame's timestamps, so line them up on time rather than on position
+    j = y["EMA 50"].reindex(y["1m EMA 50"].index).ffill().to_numpy()
+    k = y["1m EMA 50"].to_numpy()
+    ok = np.isfinite(j) & np.isfinite(k)
+    assert ok.any() and not np.allclose(j[ok], k[ok]), "the 1m EMA is still the chart's own"
+
+
+def test_a_coarser_ema_still_resamples_because_that_direction_is_sound(mtf):
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base, _, _ = mtf
+    d5 = resample_ohlcv(base, "5min")
+    fig = pattern_figure(d5, patterns=[], sr_zones=False, chart_tf="5m", mtf_emas=[("15m", 50)])
+    assert any(t.name == "15m EMA 50" for t in fig.data)
+
+
+def test_mtf_ema_timeframes_names_the_frames_a_spec_needs():
+    from quant.viz import mtf_ema_timeframes
+
+    spec = [("1m", 20, 200), ("5m", 50), ("15m", 200)]
+    assert mtf_ema_timeframes(spec, chart_tf="5m") == ["1m", "15m"]
+    assert mtf_ema_timeframes(spec) == ["1m", "5m", "15m"]
+
+
+def test_emas_on_false_hides_every_ema_without_removing_any_of_them(mtf):
+    """The ask was one switch for all of them that still leaves you picking individuals — so they
+    are drawn and listed as usual, just `legendonly`. One click each brings back the two you want."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base, _, _ = mtf
+    d5 = resample_ohlcv(base, "5min")
+    kw = dict(patterns=[], sr_zones=False, chart_tf="5m", emas=(20, 50), mtf_emas=[("15m", 50)])
+    on = pattern_figure(d5, **kw)
+    off = pattern_figure(d5, emas_on=False, **kw)
+    names = lambda f: [t.name for t in f.data if t.name and "EMA" in t.name]
+    assert names(on) == names(off) and len(names(on)) == 3
+    assert all(t.visible is True for t in on.data if t.name and "EMA" in t.name)
+    assert all(t.visible == "legendonly" for t in off.data if t.name and "EMA" in t.name)
+
+
+def test_the_chart_carries_an_emas_on_off_control(mtf):
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base, _, _ = mtf
+    d5 = resample_ohlcv(base, "5min")
+    fig = pattern_figure(d5, patterns=[], sr_zones=False, chart_tf="5m", emas=(20, 50))
+    btn = [m for m in (fig.layout.updatemenus or ()) if m.type == "buttons"]
+    assert len(btn) == 1, "no EMA on/off control on a chart that has EMAs"
+    assert [b.label for b in btn[0].buttons] == ["EMAs on (2)", "off"]
+    # it must restyle ONLY the EMA traces, or it would disturb the trade you are looking at
+    ema_ix = [i for i, t in enumerate(fig.data) if (t.legendgroup or "").startswith("ema")]
+    assert list(btn[0].buttons[0].args[1]) == ema_ix
+
+
+def test_a_legend_double_click_cannot_wipe_an_isolated_trade(mtf):
+    """Plotly's default is `toggleothers`: a double-click ISOLATES that entry and hides the rest —
+    so double-clicking an EMA while a trade was picked took the trade and its trendline with it."""
+    from quant.viz.studies import pattern_figure
+
+    _, frames, D = mtf
+    fig = pattern_figure(D, patterns=[], sr_zones=False, trendlines=True, tf_frames=frames,
+                         chart_tf="1m", emas=(20,))
+    assert fig.layout.legend.itemdoubleclick == "toggle"

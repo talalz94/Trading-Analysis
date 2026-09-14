@@ -42,7 +42,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **265 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **453 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -221,7 +221,16 @@ quant/
 │   │                    #     draws OTHER TIMEFRAMES' EMAs as STEPS that change only at their own
 │   │                    #     bar close (an interpolated 1h EMA shows a number nobody could read);
 │   │                    #     reuses a tf_frames frame for the history, warns when it cannot warm
-│   │                    #     up rather than drawing an all-NaN line, hue=timeframe weight=period;
+│   │                    #     up rather than drawing an all-NaN line, hue=timeframe weight=period.
+│   │                    #     A timeframe FINER than the chart is REFUSED unless you hand it a real
+│   │                    #     frame (`ema_frames={"1m": df_1m}`): resample_ohlcv only works DOWNWARD,
+│   │                    #     so a 1m EMA taken off a 5m chart was the 5m EMA under another name --
+│   │                    #     identical on 100% of bars and 310 points out, with nothing saying so.
+│   │                    #     mtf_ema_timeframes() names the frames a spec needs; emas_on=False starts
+│   │                    #     them all `legendonly` (still listed, still individually clickable) and an
+│   │                    #     "EMAs on/off" button pair does it live. legend.itemdoubleclick="toggle",
+│   │                    #     because plotly's default ISOLATES the entry -- double-clicking an EMA
+│   │                    #     used to take the isolated trade and its trendline off the chart with it;
 │   │                    #     EVERYTHING IS NAMED: a line is `5m·S7` (trendline_table's `id`, one
 │   │                    #     source so hover/legend/menu/trade all agree), a pattern `1h·wedge#2`,
 │   │                    #     a trade `#12`; the id leads every hover, so a stop line says which
@@ -499,7 +508,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason). **265 total.**
+close reason), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **453 total.**
 
 ## 12. Known limitations / honest caveats
 

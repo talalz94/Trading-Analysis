@@ -237,6 +237,22 @@ def _norm_mtf_ema(spec):
     return out
 
 
+def mtf_ema_timeframes(spec, *, chart_tf=None):
+    """The timeframes an `mtf_emas` spec refers to, minus the chart's own.
+
+    Each of these needs a REAL frame. Resampling the chart frame only works downward: asking for a
+    1m EMA on a 5m chart resamples 11,521 bars into 11,521 bars and hands back the 5m EMA under a 1m
+    name — which is exactly what happened, identical on 100% of bars and 310 points from the truth.
+    """
+    out = []
+    for tf, _ in _norm_mtf_ema(spec):
+        if chart_tf and str(tf).lower() == str(chart_tf).lower():
+            continue
+        if tf not in out:
+            out.append(tf)
+    return out
+
+
 def _add_mtf_emas(fig, d, x, spec, row, atr_period=14):
     """Draw one or more HIGHER-timeframe EMAs on the base chart (line only unless `row` is given).
 
@@ -417,7 +433,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    zone_lookback_bars: int = 2000, tf_frames=None, tf_patterns=None,
                    tf_trendlines=None, max_picker_instances: int = 60,
                    max_shapes_per_tf: int = 40, y_from_price: bool = True,
-                   mtf_emas=None, legend_instances=None, trades=None, trade_tp_rr=None,
+                   mtf_emas=None, ema_frames=None, emas_on: bool = True,
+                   legend_instances=None, trades=None, trade_tp_rr=None,
                    chart_tf=None, max_trade_picker: int = 40):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
@@ -505,7 +522,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     `tf_frames` is reused (it has the deeper history); otherwise the chart frame is resampled. Each
     line is a STEP that changes only at its own bar's close, because that is the only moment the
     value is final — an interpolated 1h EMA shows a number nobody could have read at the time. They
-    are ON by default; `"-1h_ema200"` in `start_visible` turns one off. Hue is the TIMEFRAME and
+    are ON by default; `"-1h_ema200"` in `start_visible` turns one off, and `emas_on=False` starts
+    them all in the legend but off the chart. `ema_frames={"1m": df_1m}` supplies the history for a
+    timeframe that is not among `tf_frames` — needed for any timeframe FINER than the chart, which
+    is refused rather than resampled, because upsampling returns the chart's own EMA under another
+    name. Hue is the TIMEFRAME and
     weight is the PERIOD within it: `[("5m", 50, 100, 200), ("15m", 50, 100, 200)]` is six lines, and
     six unrelated colours would hide which three belong together.
 
@@ -573,8 +594,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         fig.add_trace(go.Scattergl(
             x=tv, y=_ema(d["close"], int(p)).to_numpy()[v0:], mode="lines", name=f"EMA {p}",
             legendgroup=f"ema{p}", line=dict(width=1.4),
-            visible=False if f"-ema{p}" in start_visible else True,   # ON by default
+            visible=(False if f"-ema{p}" in start_visible
+                     else (True if emas_on else "legendonly")),
             hovertemplate=f"EMA {p}: %{{y:.2f}}<extra></extra>"))
+
+    base_min = max(1.0, bar_interval(d, time_col=time_col) / pd.Timedelta(minutes=1))
 
     if mtf_emas:
         # HIGHER-TIMEFRAME EMAs. Drawn as a STEP that changes only at each HTF bar's close, because
@@ -585,10 +609,22 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         _tf_order = list(dict.fromkeys(tf for tf, _ in _pairs))
         _by_tf = {tf: sorted({p for t, p in _pairs if t == tf}) for tf in _tf_order}
         for etf, per in _pairs:
-            src = (tf_frames or {}).get(etf)
+            src = (ema_frames or {}).get(etf)
             if src is None:
-                # no frame was loaded for it, so resample the chart's own — cheap, but its history
-                # is capped by the chart frame's start, which a long period may not have enough of
+                src = (tf_frames or {}).get(etf)   # `or` on a DataFrame is ambiguous
+            if src is None:
+                if tf_minutes(etf) < base_min:
+                    # RESAMPLING ONLY WORKS DOWNWARD. Upsampling a 5m frame to 1m cannot invent the
+                    # bars that were never loaded: it returns the same rows and the "1m" EMA comes
+                    # out byte-identical to the 5m one -- 310 points from the real answer, with
+                    # nothing on the chart to say so. Refuse instead.
+                    raise ValueError(
+                        f"mtf_emas asks for a {etf} EMA on a {base_tf} chart, but {etf} is FINER "
+                        f"than the chart and no {etf} frame was given. Resampling would silently "
+                        f"return the {base_tf} EMA. Load it — add {etf!r} to the frames you pass as "
+                        f"`ema_frames` (or to `tf_frames`).")
+                # coarser: resampling the chart frame is legitimate, though its history is capped by
+                # the chart frame's start, which a long period may not have enough of
                 from ..data.timeframe import resample_ohlcv
                 src = resample_ohlcv(d, f"{tf_minutes(etf)}min", time_col=time_col)
             src = src.reset_index(drop=True)
@@ -618,7 +654,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 line=dict(width=round(1.3 + 1.2 * _r, 2),
                           color=_MTF_EMA_SHADES[_tf_order.index(etf) % len(_MTF_EMA_SHADES)]),
                 opacity=None if _r >= 1.0 else round(0.65 + 0.35 * _r, 2),
-                visible=False if f"-{etf}_ema{int(per)}" in start_visible else True,
+                visible=(False if f"-{etf}_ema{int(per)}" in start_visible
+                         else (True if emas_on else "legendonly")),
                 hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"))
 
     if sr_zones:
@@ -1020,7 +1057,6 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 width=2.6, dotsz=7, alpha=1.0, picker_budget=None)
 
     if tf_frames:
-        base_min = max(1.0, bar_interval(d, time_col=time_col) / pd.Timedelta(minutes=1))
         # coarsest first: a 4h line is the structure a 5m shape sits inside
         order = sorted(tf_frames, key=tf_minutes, reverse=True)
         # Split the picker budget between the extra timeframes and hand back what the quiet ones do
@@ -1189,6 +1225,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     # MULTI-SELECT lives in the LEGEND, not here: a plotly dropdown is single-choice by nature.
     # Picking a family promotes its instances to individual legend entries, so you can then tick
     # exactly the two channel-ups you want and leave everything else off, EMAs included.
+    menus = []
+
     if picker or trade_picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
         owned = ({i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
@@ -1327,9 +1365,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
                     font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
-        menus = [dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
-                 dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
-                 dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)]
+        menus += [dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
+                  dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
+                  dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)]
 
         if trade_picker:
             # A TRADE and everything it owns, in one click -- its entry, stop, target and exit, plus
@@ -1409,6 +1447,25 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             menus.append(dict(buttons=grp_buttons, x=0.60, xanchor="left", **menu))
             menus.append(dict(buttons=opening, x=0.74, xanchor="left", **menu))
 
+    # ALL THE EMAs AT ONCE. Plotly's own way to do this is double-clicking a legend entry,
+    # which ISOLATES it -- and isolating an EMA hides the trade and the line you were looking
+    # at. `itemdoubleclick` below defuses that; this is the control that does what the
+    # double-click was being used for. Two buttons, each restyling only the EMA traces, so they
+    # cost nothing and cannot disturb anything else on the chart.
+    _ema_ix = [j for j, tr in enumerate(fig.data)
+               if (getattr(tr, "legendgroup", "") or "").startswith(("ema", "mtfema"))]
+    if _ema_ix:
+        menus.append(dict(
+            type="buttons", direction="right", showactive=False,
+            x=1.0, xanchor="right", y=1.045, yanchor="top",
+            bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
+            font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2),
+            buttons=[dict(label=f"EMAs on ({len(_ema_ix)})", method="restyle",
+                          args=[{"visible": True}, _ema_ix]),
+                     dict(label="off", method="restyle",
+                          args=[{"visible": "legendonly"}, _ema_ix])]))
+
+    if menus:
         fig.update_layout(updatemenus=menus)
 
     if view_start is not None:
@@ -1426,8 +1483,12 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     fig.update_layout(
         title=title or "Chart patterns — click the legend to show/hide each one",
         height=height, template="plotly_dark", xaxis_rangeslider_visible=False,
-        hovermode="x unified", legend=dict(orientation="v", x=1.01, y=1,
-                                           bgcolor="rgba(0,0,0,0.35)"),
+        hovermode="x unified",
+        # A double-click on a legend entry normally ISOLATES it, hiding everything else -- which
+        # silently undoes the trade picker: pick a trade, double-click an EMA, and the trade and the
+        # line that caused it vanish. "toggle" makes a double-click do what a single click does.
+        legend=dict(orientation="v", x=1.01, y=1, bgcolor="rgba(0,0,0,0.35)",
+                    itemdoubleclick="toggle"),
         margin=dict(l=50, r=210, t=104, b=40),
         title_x=0.5, title_xanchor="center", title_y=0.985, title_yanchor="top")
     fig.update_yaxes(side="right")
