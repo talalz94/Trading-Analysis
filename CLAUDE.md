@@ -4,7 +4,9 @@
 > conversation needed. Keep it current when the architecture changes.
 > **Companion docs:** [`README.md`](README.md) (user guide) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 > (design + roadmap) · [`docs/INDICATOR_GUIDE.md`](docs/INDICATOR_GUIDE.md) · [`docs/EXPERIMENT_GUIDE.md`](docs/EXPERIMENT_GUIDE.md)
-> · [`experiments/README.md`](experiments/README.md) · **[`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md)
+> · [`experiments/README.md`](experiments/README.md) · **[`docs/NOTEBOOK_GUIDE.md`](docs/NOTEBOOK_GUIDE.md)
+> (where notebook / config / helper code belongs — read before touching a notebook)** ·
+> **[`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md)
 > (research findings, gotchas, next steps — read this for running context).**
 >
 > **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
@@ -42,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **487 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **489 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -296,7 +298,14 @@ quant/
 │   │                    #     kept out of tf_frames on purpose, since that is what gets fitted
 │   │                    #     and traded. max_fvg_picker= isolatable gaps PER TIMEFRAME PER
 │   │                    #     DIRECTION (one shared pool was drained by the coarsest layer),
-│   │                    #     biggest-first, capped before drawing so legend and menu agree;
+│   │                    #     biggest-first, capped before drawing so legend and menu agree.
+│   │                    #     An `FVGs: all | 4h | 1h | 15m | 5m | 1m | none` BUTTON ROW
+│   │                    #     isolates one timeframe's gaps in a single press -- `restyle`
+│   │                    #     takes a LIST of visibilities beside a list of trace indices, so
+│   │                    #     one button shows one layer and hides the rest, which a single
+│   │                    #     style value cannot express. Gap timeframes may be FINER than the
+│   │                    #     chart (1m gaps on a 5m chart): each layer is detected on its own
+│   │                    #     real bars, so nothing is resampled and the EMA trap cannot recur;
 │   │                    #     zoom_to_trade, CROSSHAIR_JS (full-height cross-pane cursor)
 │   └── heatmaps.py      #   monthly-returns, hour×weekday, parameter-sweep heatmaps
 ├── scenarios/           # VERSIONED, COMPOSABLE setups: Scenario × Stop × TP × Secondary × params
@@ -349,6 +358,21 @@ quant/
 │                        #     them per trade -- o_touch/o_wrong beside o_armed. sec_min_pct is the
 │                        #     move the exit must clear: the engine's gate is "any favourable move",
 │                        #     which on 5m exited BELOW COST on 3 of 10 bail-outs.
+├── research/            # NOTEBOOK-FACING ORCHESTRATION — the wiring a notebook would
+│                        #   otherwise spell out in a cell. A notebook here reads as
+│                        #   SETTINGS -> ONE CALL -> A CHART, so the loading, the column
+│                        #   assembly and the scenario plumbing live here where they are
+│                        #   imported, tested and versioned. It CALLS indicators, scenarios
+│                        #   and viz; it holds no strategy logic, no indicator maths, no
+│                        #   drawing, and NO DEFAULT for any setting a config owns — a value
+│                        #   stated in two places is the 8a8b8de bug. Settings arrive as the
+│                        #   config MODULE, read through _get(cfg, name, default) so a config
+│                        #   predating a setting degrades instead of raising.
+│   └── fvg_lab.py       #   fvg_lab(CFG) -> FvgLab: loads, detects gaps on every timeframe,
+│                        #     and runs the sim TWICE (with the veto and without, same frame
+│                        #     and params) because a veto-only run cannot distinguish a filter
+│                        #     that removed losers from one that removed trades at random.
+│                        #     .trades/.all/.blocked/.gaps/.census()/.summary()/.figure()
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
 │   └── search.py        #   optuna_search (optional; Bayesian)
@@ -380,8 +404,11 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   config predates falls back and prints the line to paste in.
                          # 19_fvg_viewer + nb19_config.py = FAIR VALUE GAPS from several
                          #   timeframes on one chart, plus a COPY of notebook 18's sim with the
-                         #   FVG veto added and a with/without comparison. A copy rather than a
-                         #   change to 18, so nothing already working can regress; the trading
+                         #   FVG veto added and a with/without comparison. SEVEN code cells and
+                         #   36 lines -- all wiring is quant/research/fvg_lab.py, and the tests
+                         #   cap it there (no cell may define a function; 9 cells / 60 lines).
+                         #   A copy rather than a change to 18, so nothing already works can
+                         #   regress; the trading
                          #   settings are identical, which makes the veto the only difference.
                          #   FVG_VETO_TFS excludes the chart's own timeframe by DEFAULT: 5m
                          #   produces ~2,000 gaps with ~96 live at once, so including it makes
@@ -569,7 +596,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **487 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **489 total.**
 
 ## 12. Known limitations / honest caveats
 
@@ -601,6 +628,11 @@ stop-out; (if needed) per-strategy fused-numba signal generation for extreme swe
 - Put experiment-specific logic in `experiments/`, never in `quant/` core.
 - Update this file + README + docs when architecture changes. Commit in logical units; push only
   when asked (remote `origin` → GitHub `main`).
+- **Read [`docs/NOTEBOOK_GUIDE.md`](docs/NOTEBOOK_GUIDE.md) before touching a notebook or a
+  config.** Two rules it enforces with tests: a cell may never ASSIGN a setting, and a cell may
+  never DEFINE a function — orchestration belongs in `quant/research/`. It carries the table of
+  where each kind of code goes, how to lay out a config file, and the value-preservation check
+  to run after re-arranging one.
 - **Never change a setting the user did not ask you to change.** Notebooks here are regenerated from
   build scripts, and a build script that states values will re-impose them on every rebuild — which
   is how `TF`, `LINE_TFS` and `WARMUP_START` were silently altered in 8a8b8de. Settings belong in a

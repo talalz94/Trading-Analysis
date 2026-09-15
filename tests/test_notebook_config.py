@@ -142,7 +142,13 @@ def test_notebook_19_states_no_setting_of_its_own():
              'FVG_EXTEND', 'FVG_SHOW', 'MAX_FVG_PICKER', 'USE_FVG_VETO', 'FVG_VETO_MODE',
              'FVG_VETO_TFS', 'FVG_VETO_MAX_AGE', 'FVG_VETO_MIN_SIZE', 'FVG_VETO_MAX_DIST',
              'ENTRY_RULES', 'RULES_COMBINE', 'EMAS', 'MTF_EMAS', 'EMAS_ON', 'COSTS',
-             'TRENDLINE', 'HEIGHT', 'SHOW_SR_ZONES', 'SHOW_TRENDLINES'}
+             'TRENDLINE', 'HEIGHT', 'SHOW_SR_ZONES', 'SHOW_TRENDLINES', 'START_VISIBLE',
+             'MAX_PICKER', 'MAX_SHAPES_TF', 'MAX_TRADE_PICKER', 'ZONE_LOOKBACK',
+             'TL_CLOSE_N', 'TL_FULL_M', 'TL_TOUCH_K', 'TL_DIR_N', 'TL_DIR_SRC',
+             'TL_DIR_FULL_N', 'TL_EXTEND', 'TL_COMBINE', 'TL_TOL_ATR', 'TRADE_LONG',
+             'TRADE_SHORT', 'STOP_N', 'STOP_BUFFER_PCT', 'BE_AT_RR', 'TP_RR',
+             'USE_RETEST_BAIL', 'SEC_TOUCH_N', 'SEC_WRONG_M', 'SEC_OPP_N', 'SEC_MIN_PCT',
+             'SEC_REPLACE_TP'}
     offenders = []
     for c in _cells19():
         if c['cell_type'] != 'code':
@@ -158,11 +164,53 @@ def test_notebook_19_states_no_setting_of_its_own():
                           + '\n  '.join(offenders))
 
 
-def test_notebook_19_never_fits_trendlines_on_a_gap_only_timeframe():
-    """FVG_TFS is for DRAWING and vetoing; LINE_TFS is what gets fitted and traded. Passing the
-    gap frames as tf_frames would quietly start trading 4h trendlines -- a change to the strategy
-    made by a setting whose name says it is about gaps."""
-    src = '\n'.join(''.join(c['source']) for c in _cells19() if c['cell_type'] == 'code')
-    assert 'tf_frames=LINE_FRAMES' in src, 'the chart must fit lines on LINE_FRAMES only'
-    assert 'fvg_frames=GAP_FRAMES' in src, 'gap-only frames must go to fvg_frames'
-    assert 'mtf_trendlines(df, LINE_FRAMES' in src
+def test_a_gap_only_timeframe_is_never_fitted_or_traded():
+    """FVG_TFS is for DRAWING and vetoing; LINE_TFS is what gets fitted and TRADED. If the lab ever
+    passed the gap frames where the line frames go, adding "4h" just to see its gaps would quietly
+    start trading 4h trendlines -- a change to the strategy made by a setting whose name says
+    drawing. A source check on the library, because the alternative needs a live data fetch."""
+    import inspect
+
+    # `quant.research` re-exports the FUNCTION `fvg_lab`, which shadows the submodule of the same
+    # name -- so import the names, not the module path
+    from quant.research import FvgLab, fvg_lab as build
+
+    src = inspect.getsource(build)
+    assert "mtf_trendlines(df, line_frames" in src, "lines must be fitted on LINE frames only"
+    assert "mtf_fvgs(df, gap_frames" in src, "gaps come from the GAP frames"
+    fig = inspect.getsource(FvgLab.figure)
+    assert "tf_frames=self.line_frames" in fig and "fvg_frames=self.gap_frames" in fig
+
+    ns = {}
+    exec(compile(CFG19.read_text(encoding="utf-8"), str(CFG19), "exec"), ns)
+    assert set(ns["FVG_TFS"]) - set(ns["LINE_TFS"]),         "the config no longer has a gap-only timeframe, so this guards nothing"
+
+
+def test_no_notebook_19_cell_defines_a_function():
+    """A helper defined in a cell is code you scroll past, re-read to check it still matches the
+    library, and eventually edit by accident. The wiring lives in quant/research/fvg_lab.py."""
+    import ast
+
+    offenders = []
+    for c in _cells19():
+        if c["cell_type"] != "code":
+            continue
+        src = "".join(c["source"])
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                offenders.append(node.name)
+    assert not offenders, ("notebook 19 defines these in cells; they belong in quant/research/: "
+                           + ", ".join(offenders))
+
+
+def test_notebook_19_stays_short_enough_to_read():
+    """The complaint this encodes: "too much stuff I breeze past". A viewer notebook is settings,
+    one call and a chart -- if it grows past this, machinery has leaked back into it."""
+    code = [c for c in _cells19() if c["cell_type"] == "code"]
+    lines = sum(len([x for x in c["source"] if x.strip()]) for c in code)
+    assert len(code) <= 9, f"{len(code)} code cells"
+    assert lines <= 60, f"{lines} lines of code in the notebook; move wiring into quant/research/"
