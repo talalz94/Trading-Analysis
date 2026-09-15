@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **489 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **495 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -226,7 +226,17 @@ quant/
 │   ├── responsive.py    #   ResearchChart / price_chart / equity_chart (plotly-resampler; millions of pts)
 │   ├── charts.py        #   static price+trades, equity+drawdown (HTML-export safe)
 │   ├── studies.py       #   pattern_figure (candles + chart-pattern SHAPES: pivots, both trendlines,
-│   │                    #     neckline and measured-move target, one legend toggle each, + S/R zones),
+│   │                    #     neckline and measured-move target, one legend toggle each).
+│   │                    #     S/R ZONES ARE PER TIMEFRAME: sr_frames={"1h": df_1h} clusters
+│   │                    #     levels on each frame IN ITS OWN BAR SPACE -- a level fitted on
+│   │                    #     1h pivots is not the same level as one fitted on 5m pivots --
+│   │                    #     and each layer gets a legend row, a cascade entry and a zone id
+│   │                    #     (`4h·Z8`). WEIGHT and brightness carry the timeframe, coarsest
+│   │                    #     heaviest, the same convention the trendlines use; the shade is
+│   │                    #     ANCHORED on the chart's own layer so that layer looks identical
+│   │                    #     whatever else is loaded (indexing by position made the same
+│   │                    #     levels change colour when a 4h frame was added). An `S/R:`
+│   │                    #     BUTTON ROW isolates one timeframe, like the gaps have,
 │   │                    #     pattern_figure(trendlines=True) adds the standalone trendlines with an
 │   │                    #     X at each break, on their own legend toggles; emas=, view_start=
 │   │                    #     (warm-up is COMPUTED but not DRAWN), line_picker= (CASCADING dropdowns:
@@ -278,8 +288,9 @@ quant/
 │   │                    #     close reason, trigger), entry level, stop and target running to the
 │   │                    #     exit, and an exit marker coloured by outcome; y_from_price= scales the
 │   │                    #     y-axis to the CANDLES, not to geometry that may be far taller,
-│   │                    #     zone_lookback_bars= (S/R zones from BOUNDED history -- warm-up makes
-│   │                    #     them stale in a trend: 1 of 40 near price vs 38 at a 2000-bar lookback),
+│   │                    #     zone_lookback_bars= (S/R zones from BOUNDED history, IN EACH
+│   │                    #     LAYER'S OWN BARS -- warm-up makes them stale in a trend: 1 of 40
+│   │                    #     near price vs 38 at a 2000-bar lookback), max_sr_picker=,
 │   │                    #     and a STAR at each pattern's confirmation bar),
 │   │                    #     add_pattern_overlays (candlestick + chart-pattern markers and their
 │   │                    #     entry/stop/target levels; one legend group per pattern, default OFF),
@@ -372,6 +383,10 @@ quant/
 │                        #     and runs the sim TWICE (with the veto and without, same frame
 │                        #     and params) because a veto-only run cannot distinguish a filter
 │                        #     that removed losers from one that removed trades at random.
+│                        #     Three frame sets, kept apart on purpose: LINE frames are fitted
+│                        #     and TRADED, GAP frames are drawn and may veto, S/R frames are
+│                        #     clustered and drawn. One setting per job, so adding 4h to see its
+│                        #     levels cannot start trading its trendlines.
 │                        #     .trades/.all/.blocked/.gaps/.census()/.summary()/.figure()
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
@@ -583,7 +598,7 @@ print(res.stats)
 `tests/`: `test_engine_golden.py` (numeric regression vs legacy-validated engine),
 `test_leverage.py` (margin/stop-out/lots), `test_costs.py` (spread/commission — incl the EUR/USD
 $12 example), `test_signals.py` (primitive correctness), `test_strategies.py` (all 7 run),
-`test_analytics.py` (attribution + reporting), `test_viz.py` (responsive chart resamples),
+`test_analytics.py` (attribution + reporting), `test_viz.py` (responsive chart resamples; PER-TIMEFRAME S/R ZONES — each timeframe gets its own layer, weight strictly increases with it, the chart's own layer is byte-identical whether or not other layers are loaded, the timeframe button row isolates with a PER-TRACE visibility list, and every zone is named `5m·Z3` and hoverable off a midpoint marker),
 `test_dukascopy.py` (provider mapping + incremental cache, mocked fetch), `test_builder.py`
 (RuleStrategy conditions, `after`-sequencing, per-rule leg exits + stops with single-leg golden
 parity, causal S/R zones, MTF bias, big-move, configurable MA, tagged indicator handles),
@@ -596,7 +611,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **489 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **495 total.**
 
 ## 12. Known limitations / honest caveats
 

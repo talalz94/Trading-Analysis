@@ -1482,3 +1482,35 @@ the rest — which a single style value cannot express.
 Gap layers may be FINER than the chart (1m gaps on a 5m chart draw fine, 2,930 of them). No
 resampling is involved: each layer is detected on its own real frame, so the trap that made a "1m
 EMA" come back as the 5m EMA cannot recur here.
+
+---
+
+## S/R zones, one layer per timeframe
+
+Same treatment the gaps got, because the underlying fact is the same: **a level clustered from 1h
+pivots is not the level clustered from 5m pivots**. Each frame is clustered in its own bar space and
+only becomes a chart coordinate when a bar index turns into a timestamp — no index remapping, the
+same reasoning the pattern and trendline layers already used. `zone_lookback_bars` is therefore in
+each layer's OWN bars, so 2000 is about a week on 5m and about eleven months on 4h.
+
+Zones are named (`4h·Z8`) like everything else here, and hover lives on a **midpoint marker** as
+well as the line, because a horizontal line is a one-pixel target for a cursor.
+
+**Two bugs this turned up, both worth remembering:**
+
+**A bare `except Exception` returning a plausible number.** I added a small helper to recompute the
+chart's bar length in minutes, wrapped in `try/except: return 1.0`. `bar_interval` is imported
+*inside* `pattern_figure`, so the module-level helper hit a `NameError` every time — and the fallback
+turned that into a silent 1.0, which made every layer's weight saturate at the cap and look merely
+"a bit wrong" rather than broken. The block now runs after `base_min` is computed, so the helper is
+gone entirely. A fallback that produces a believable value is worse than a crash.
+
+**Shade indexed by position, not by rank.** `_SR_SHADES[position_in_the_ordered_list]` meant the
+chart's own layer was the brightest grey when drawn alone and a different grey the moment a 4h frame
+was added — the same levels changing appearance because of an unrelated setting. Anchored on the
+chart's own layer instead (`3 - (anchor - n)`), which also restores its original `#8e9aa6` exactly.
+`test_adding_sr_layers_leaves_the_chart_own_layer_alone` locks it.
+
+**The isolate button, again.** `restyle` takes a LIST of visibilities beside a list of trace
+indices, so one button shows one layer and hides the rest. Three rows now sit on the chart —
+`FVGs:`, `S/R:`, `EMAs on/off` — stacked at y=1.105/1.165/1.045.
