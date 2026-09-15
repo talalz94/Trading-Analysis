@@ -207,3 +207,120 @@ def test_no_sr_frames_means_exactly_the_old_behaviour():
               and (on.data[i + 1].legendgroup or "") == (on.data[i].legendgroup or "")}
     rest = [t.name for i, t in enumerate(on.data) if i not in sr_ix]
     assert rest == [t.name for t in off.data]
+
+
+# ---------------------------------------------------------------------------
+# CHART CONTROLS: what autoscale may do, what a picker button may touch, and
+# how wide a menu label may be. Each of these was a visible bug first.
+# ---------------------------------------------------------------------------
+def test_autoscale_cannot_escape_the_window():
+    """`range` only sets the OPENING view; the autoscale button rescales to the DATA. A trendline
+    fitted through pivots before the window, or a gap born in the warm-up and still open, dragged
+    the chart back months. `minallowed` bounds the axis itself, so no layer can pull the view off
+    the period that was asked for -- and no geometry has to be clipped to achieve it, so a line
+    that genuinely starts earlier keeps its real slope."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc(n=6000)
+    view = str(base["t"].iloc[4000])
+    fig = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=(),
+                         fvgs=True, view_start=view,
+                         sr_frames={"1h": resample_ohlcv(base, "60min")})
+    floor = fig.layout.xaxis.autorangeoptions.minallowed
+    assert floor is not None, "autoscale is unbounded on the left"
+    assert pd.Timestamp(floor) == pd.Timestamp(view)
+
+
+def test_a_gap_box_starts_at_the_window_not_at_its_birth():
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc(n=6000)
+    view = pd.Timestamp(str(base["t"].iloc[4000]))
+    fig = pattern_figure(base, patterns=[], sr_zones=False, chart_tf="5m", emas=(),
+                         fvgs=True, view_start=str(view))
+    boxes = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+    assert boxes
+    for t in boxes:
+        xs = pd.to_datetime(pd.Series([v for v in t.x if v is not None]), utc=True).dropna()
+        assert xs.min() >= view, f"{t.name} is drawn from before the window"
+
+
+def test_no_picker_button_touches_a_background_layer():
+    """Choosing a trade used to re-show every gap and level you had just switched off, because each
+    button carried a visibility vector as long as the whole figure. The gaps, levels and EMAs have
+    their own controls; the pickers address only the traces they own."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc(n=6000)
+    fig = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=(20, 50),
+                         fvgs=True, sr_frames={"1h": resample_ohlcv(base, "60min")},
+                         view_start=str(base["t"].iloc[3000]))
+    bg = {i for i, t in enumerate(fig.data)
+          if not (t.legendgroup or "").startswith("i#")
+          and ((t.legendgroup or "").startswith(("ema", "mtfema"))
+               or getattr(t, "meta", None) == "fvg"
+               or (t.legendgroup or "").endswith("S/R zones"))}
+    assert bg, "the fixture drew no background layers — it is not testing anything"
+    checked = 0
+    for m in fig.layout.updatemenus:
+        for b in (m.buttons or ()):
+            if b.method != "update":
+                continue
+            checked += 1
+            args = list(b.args or ())
+            assert len(args) > 2, f"{b.label!r} carries a whole-figure vector"
+            assert not (set(args[2]) & bg), f"{b.label!r} reaches a background trace"
+    assert checked, "no update buttons found"
+
+
+def test_menu_labels_cannot_grow_wide_enough_to_overlap_the_next_menu():
+    """A plotly dropdown is as wide as its widest row and the menus sit at fixed x positions, so one
+    60-character occurrence label pushed its menu straight over the one beside it."""
+    from quant.viz.studies import _short, pattern_figure
+
+    assert _short("x" * 80).endswith("…") and len(_short("x" * 80)) <= 34
+    assert _short("short one") == "short one"
+
+    base = _ohlc(n=6000)
+    fig = pattern_figure(base, patterns=None, sr_zones=True, chart_tf="5m", emas=(),
+                         view_start=str(base["t"].iloc[3000]))
+    rows = []
+    for m in fig.layout.updatemenus:
+        for b in (m.buttons or ()):
+            rows.append(str(b.label))
+            args = list(b.args or ())
+            lay = args[1] if len(args) > 1 and isinstance(args[1], dict) else {}
+            for k in ("updatemenus[1].buttons", "updatemenus[2].buttons"):
+                rows += [str(c["label"]) for c in lay.get(k, [])]
+    assert rows
+    longest = max(rows, key=len)
+    assert len(longest) <= 42, f"{longest!r} is {len(longest)} chars"
+
+
+def test_an_empty_pattern_list_means_none_not_all():
+    """`patterns=None` is every pattern; `patterns=[]` used to mean the same, so every notebook
+    asking for trendlines only was detecting and drawing the whole 22-pattern library -- most of the
+    trace count, most of the dropdown rows, and the slowest call in the figure."""
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc(n=6000)
+    kw = dict(sr_zones=False, trendlines=True, chart_tf="5m", emas=())
+    none = pattern_figure(base, patterns=[], **kw)
+    every = pattern_figure(base, patterns=None, **kw)
+
+    # tested against the actual pattern names, not a guess at what a pattern trace looks like --
+    # the trendline instances are also named (`5m·S0`) and a loose filter catches those instead
+    from quant.indicators import CHART_PATTERNS
+    # FULL pattern names, not their words -- "support trendline" shares a word with a pattern and
+    # a word-level filter flagged the trendline layer as a pattern
+    names = {str(n).replace("_", " ") for n in CHART_PATTERNS}
+
+    def _pats(fig):
+        return [str(t.name) for t in fig.data
+                if t.name and any(n in str(t.name) for n in names)]
+
+    assert _pats(none) == [], _pats(none)[:5]
+    assert _pats(every), "the fixture produced no patterns — it is not testing anything"
+    assert len(none.data) < len(every.data)

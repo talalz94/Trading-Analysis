@@ -567,7 +567,14 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
 ## 9. Environment
 
 - Python **3.13**, Windows (PowerShell primary; Bash available). Run from repo root with
-  `PYTHONPATH=.` or `pip install -e .`. Jupyter kernel must be Python ≥3.11 / pandas ≥2.2.
+  `PYTHONPATH=.` or `pip install -e .`.
+- **THE JUPYTER KERNEL IS NOT THE REPO INTERPRETER.** The registered `python3` kernel here
+  is **Python 3.9 / plotly 5.14.1**, while the repo runs 3.13 / plotly 6.3.1 — so a notebook
+  can fail on an API the library was written against. `xaxis.autorangeoptions` (plotly 5.19+)
+  is the live example: it is wrapped in try/except and the drawing clips geometry to the
+  window itself so the behaviour holds on 5.14. ALWAYS execute a notebook with
+  `jupyter nbconvert --execute` before believing a viz change works. Kernel should be
+  Python ≥3.11 / pandas ≥2.2.
 - Installed & used: pandas, numpy, pyarrow, polars, **numba**, plotly, **plotly-resampler**,
   tsdownsample, joblib, scipy, tqdm, requests, dukascopy-python. Optional: optuna.
 - Data cached: BTC/PAXG 1m ≈ 742k rows (2025-01 → 2026-05), 5m/15m/1h derived. Fits in RAM; the

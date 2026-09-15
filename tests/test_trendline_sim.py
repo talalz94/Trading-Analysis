@@ -871,8 +871,13 @@ def test_the_enabled_emas_stay_visible_while_one_trade_is_isolated(mtf):
             if c["label"].startswith("#")]
     assert rows
     for c in rows:
-        vis = c["args"][0]["visible"]
-        assert all(vis[i] is True for i in ema), f"{c['label']} hid an EMA"
+        # The button must not ADDRESS an EMA trace at all. Forcing them to True kept them on the
+        # chart but also turned them back on after you had switched them off -- and the same vector
+        # did it to the gap and level layers. A button that does not address a trace leaves it
+        # exactly as you set it, which is the only version of "stays visible" worth having.
+        args = c["args"]
+        assert len(args) > 2, "the trade button still carries a whole-figure visibility vector"
+        assert not (set(args[2]) & set(ema)), f"{c['label']} reaches an EMA trace"
 
 
 # ---------------------------------------------------------------------------
@@ -964,3 +969,38 @@ def test_a_legend_double_click_cannot_wipe_an_isolated_trade(mtf):
     fig = pattern_figure(D, patterns=[], sr_zones=False, trendlines=True, tf_frames=frames,
                          chart_tf="1m", emas=(20,))
     assert fig.layout.legend.itemdoubleclick == "toggle"
+
+
+def test_one_line_can_be_traded_twice_and_tl_once_per_line_stops_it(mtf):
+    """A steeply falling resistance keeps dropping, so a chart-timeframe close can clear it again
+    hours later at a much lower level while the line itself is still live -- its own timeframe never
+    closed through it. Two real breaks, but both carry the same name on the chart, which reads as a
+    duplicate. Off by default because they ARE separate; on when a line should be spent once."""
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+
+    _, _, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_tf_names={"": "1m", "5min__": "5m"},
+             tl_close_n=1, tl_full_m=0, tl_touch_k=0, tl_combine="all",
+             stop_n=20, be_at_rr=0, tp_rr=3.0)
+    cfg = dict(initial_cash=10_000, exit_enabled=False, max_open_trades=1)
+
+    def _causes(once):
+        out = []
+        for side in ("long", "short"):
+            r = run_pieces(D, f"mtf_trendline_{side}@v1", "high_of_n@v1", "be_ladder@v1",
+                           params=dict(p, tl_once_per_line=once), cfg=cfg)
+            t = trendline_trigger(r.df, r.trades, p, prefix_names=p["tl_tf_names"])
+            out += list(t["cause"])
+        return out
+
+    many, once = _causes(False), _causes(True)
+    assert len(many) >= len(once)
+    assert len(set(once)) == len(once), "a line still fired twice with tl_once_per_line on"
+    assert set(once) <= set(many), "the option invented a trade rather than removing one"
+
+
+def test_tl_once_per_line_is_off_by_default(mtf):
+    from quant.scenarios.entries import _MTF_TL_DEFAULTS
+
+    assert _MTF_TL_DEFAULTS["tl_once_per_line"] is False

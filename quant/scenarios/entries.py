@@ -533,6 +533,7 @@ _MTF_TL_DEFAULTS = {
     "tl_close_n": 2, "tl_full_m": 0, "tl_touch_k": 0, "tl_dir_n": 0, "tl_dir_full_n": 0,
     "tl_dir_src": "chart",         # "chart" = the frame you execute on; "line" = the line's own
     "tl_extend": True,             # carry a held line along its OWN SLOPE, not flat
+    "tl_once_per_line": False,     # True: a given line may trigger only its FIRST entry
     "tl_combine": "all", "tl_tol_atr": 0.0, "tl_atr_period": 14,
 }
 
@@ -658,7 +659,25 @@ def _tl_entry(p: dict, side: str) -> Cond:
             ok = parts[0].copy()
             for q in parts[1:]:
                 ok = (ok & q) if combine_all else (ok | q)
-            fired |= ok & live
+            hit = ok & live
+            if p.get("tl_once_per_line", False):
+                # ONE TRADE PER LINE. A steeply falling resistance keeps dropping, so a chart-
+                # timeframe close can clear it again hours later at a much lower level while the
+                # line itself is still live -- its own timeframe never closed through it. Two
+                # trades, same line, same name on the chart, which reads as a duplicate. Off by
+                # default because it IS two separate breaks; on when you want a line spent once.
+                idc = f"{pref}tl_{which}_n"
+                if idc in df.columns:
+                    ids = df[idc].to_numpy(np.int64)
+                    seen, keep = set(), np.zeros(len(hit), bool)
+                    for i in np.flatnonzero(hit):
+                        k = int(ids[i])
+                        if k >= 0 and k in seen:
+                            continue          # -1 means no identifiable line: never suppressed
+                        seen.add(k)
+                        keep[i] = True
+                    hit = keep
+            fired |= hit
         return fired
 
     return raw(fn, f"mtf_trendline_{side}")
