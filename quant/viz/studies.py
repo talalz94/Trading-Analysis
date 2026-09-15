@@ -423,6 +423,9 @@ _SENTINEL = object()
 
 _MTF_EMA_SHADES = ["#42a5f5", "#ab47bc", "#26c6da", "#ffa726", "#7e57c2", "#ec407a"]
 _FVG_COL = {"bull": "#26a69a", "bear": "#ef5350"}
+# S/R reads as STRUCTURE, so it stays neutral and lets WEIGHT carry the timeframe -- the same
+# convention the trendlines use. Coarsest is brightest, because that is the level that matters.
+_SR_SHADES = ["#e3e8ee", "#c2cad3", "#a3acb6", "#8e9aa6", "#77818b", "#636c75"]
 
 
 def _rgba(hexc, alpha):
@@ -445,7 +448,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    chart_tf=None, max_trade_picker: int = 40,
                    fvgs: bool = False, fvg_kwargs=None, fvg_frames=None, tf_fvgs=None,
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
-                   fvg_show=("bull", "bear")):
+                   fvg_show=("bull", "bear"),
+                   sr_frames=None, tf_sr=None, max_sr_picker: int = 6):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -667,39 +671,6 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 visible=(False if f"-{etf}_ema{int(per)}" in start_visible
                          else (True if emas_on else "legendonly")),
                 hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"))
-
-    if sr_zones:
-        # built from a BOUNDED history ending at the view, not the whole warm-up — see the docstring
-        z0 = max(0, v0 - int(zone_lookback_bars)) if zone_lookback_bars else 0
-        zt = sr_zone_table(d.iloc[z0:].reset_index(drop=True), left=zones_left, right=zones_right,
-                           cluster_pct=cluster_pct, max_zones=max_zones, time_col=time_col)
-        if len(zt):
-            zt = zt.copy()
-            zt[["start_i", "end_i"]] += z0
-        zt = zt[zt["touches"] >= min_touches]
-        # A zone is a level price is respecting NOW. Two filters, both about relevance rather than
-        # correctness: the segment has to reach the visible window at all, and its price has to be
-        # near the prices on screen. Without the second, a long warm-up in a trending market fills
-        # the chart with levels from 20% below — 767 segments, none of them next to price.
-        if len(zt):
-            # ONE line per zone at its CURRENT level. A zone emits a row per price revision, so
-            # drawing every row stacks a zone's whole history of slightly-different levels on the
-            # chart — 1,366 segments for 40 zones. The last revision is the level in force.
-            zt = zt.sort_values("end_i").groupby("zone", as_index=False).tail(1)
-            zt = zt[zt["price"].between(_lo - _pad, _hi + _pad)]
-        xs, ys, widths = [], [], []
-        for r in zt.itertuples():
-            # drawn across the whole visible window: a level established earlier is still the level
-            x_from = tv[0] if r.start_i < v0 else r.start_t
-            xs += [x_from, tv[-1], None]
-            ys += [r.price, r.price, None]
-            widths.append(r.touches)
-        if xs:
-            fig.add_trace(go.Scattergl(
-                x=xs, y=ys, mode="lines", name=f"S/R zones ({len(zt)})",
-                legendgroup="sr", line=dict(color="#8e9aa6", width=2),
-                opacity=0.55, hoverinfo="skip",
-                visible=True if "sr_zones" in start_visible else "legendonly"))
 
     def _detect(frame, want):
         """One detection pass for a frame, honouring tuned / per-pattern / shared settings."""
@@ -1224,6 +1195,135 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             _draw_fvgs(_fvg_layers[_k], tf=_k, width=_w,
                        alpha=1.0 if _rank >= 0 else 0.55, budget=_fvg_budget)
 
+    sr_layer_ix = {}    # timeframe name -> its trace indices, for the toggle row
+
+    def _draw_sr(dl, *, tf, width, alpha, shade, budget):
+        """One timeframe's S/R zones. Returns the picker budget used.
+
+        A level fitted on 1h bars is a different level from one fitted on 5m bars, so each frame is
+        clustered in ITS OWN bar space and only becomes a chart coordinate when a bar index turns
+        into a timestamp -- the same reasoning the pattern and trendline layers use.
+        """
+        own = tf is None
+        lv = _view_index(dl, time_col)
+        tl_ = dl[time_col].to_numpy() if time_col in dl.columns else np.arange(len(dl))
+        # a zone read off bar i of a HIGHER timeframe is only knowable when that bar CLOSES
+        step = np.timedelta64(0, "ns")
+        if not own and time_col in dl.columns and len(dl) > 1:
+            step = np.timedelta64(bar_interval(dl, time_col=time_col))
+
+        # built from a BOUNDED history ending at the view, not the whole warm-up — see the
+        # docstring. The lookback is in THIS frame's bars, so a 4h layer gets 4h of depth per bar.
+        z0 = max(0, lv - int(zone_lookback_bars)) if zone_lookback_bars else 0
+        zt = sr_zone_table(dl.iloc[z0:].reset_index(drop=True), left=zones_left,
+                           right=zones_right, cluster_pct=cluster_pct, max_zones=max_zones,
+                           time_col=time_col)
+        if len(zt):
+            zt = zt.copy()
+            zt[["start_i", "end_i"]] += z0
+        zt = zt[zt["touches"] >= min_touches]
+        # A zone is a level price is respecting NOW. Two filters, both about relevance rather than
+        # correctness: the segment has to reach the visible window at all, and its price has to be
+        # near the prices on screen. Without the second, a long warm-up in a trending market fills
+        # the chart with levels from 20% below — 767 segments, none of them next to price.
+        if len(zt):
+            # ONE line per zone at its CURRENT level. A zone emits a row per price revision, so
+            # drawing every row stacks a zone's whole history of slightly-different levels on the
+            # chart — 1,366 segments for 40 zones. The last revision is the level in force.
+            zt = zt.sort_values("end_i").groupby("zone", as_index=False).tail(1)
+            zt = zt[zt["price"].between(_lo - _pad, _hi + _pad)]
+        if not len(zt):
+            return 0
+
+        tf_nm = tf or base_tf
+        pref = "" if own else "%s \u00b7 " % tf
+        lgp = "" if own else "%s::" % tf
+        base_label = "S/R zones"
+        label = pref + base_label
+        key = "sr_zones" if own else "%s::%s" % (tf, base_label)
+        vis = True if key in start_visible else "legendonly"
+        alpha_l = 0.55 if (alpha is None or alpha >= 1.0) else round(0.55 * alpha, 2)
+        fam_lg[label] = lgp + base_label
+        if label not in tf_fams.setdefault(tf, []):
+            tf_fams[tf].append(label)
+
+        room = max(0, int(budget))
+        pick = set(zt.sort_values("touches", ascending=False).head(room)["zone"]) if room else set()
+
+        xs, ys, cd, hx, hy, hc = [], [], [], [], [], []
+        per_zone = []
+        for r in zt.itertuples():
+            # drawn across the whole visible window: a level established earlier is still the level
+            x_from = tv[0] if r.start_i < lv else (tl_[int(r.start_i)] + step)
+            tag = "\u00b7".join((tf_nm, "Z%d" % int(r.zone)))
+            txt = ("<b>%s</b>  S/R<br>%s<br>%d touches" % (tag, format(r.price, ",.2f"),
+                                                           int(r.touches)))
+            xs += [x_from, tv[-1], None]
+            ys += [r.price, r.price, None]
+            cd += [txt, txt, txt]
+            hx.append(tv[len(tv) // 2] if len(tv) else x_from)
+            hy.append(r.price)
+            hc.append(txt)
+            if r.zone in pick:
+                per_zone.append((tag, label, [x_from, tv[-1]], [r.price, r.price], txt,
+                                 pd.Timestamp(str(x_from)).value, int(r.touches)))
+
+        _mine = sr_layer_ix.setdefault(tf_nm, [])
+        _mine += [len(fig.data), len(fig.data) + 1]
+        fig.add_trace(go.Scattergl(
+            x=xs, y=ys, mode="lines", name="%s (%d)" % (label, len(zt)),
+            legendgroup=lgp + base_label, line=dict(color=shade, width=width),
+            opacity=alpha_l, customdata=cd, visible=vis,
+            hovertemplate="%{customdata}<extra></extra>"))
+        # A horizontal line only reports a hit when the cursor is ON it. The midpoint marker gives
+        # each zone somewhere to hover that is not a one-pixel target.
+        fig.add_trace(go.Scattergl(
+            x=hx, y=hy, mode="markers", legendgroup=lgp + base_label, visible=vis,
+            showlegend=False, marker=dict(size=10, color=shade, opacity=0.001),
+            customdata=hc, hovertemplate="%{customdata}<extra></extra>"))
+
+        used = 0
+        for tag, fam, bx, by, txt, sort_key, _t in per_zone:
+            line_ref[tag] = len(fig.data)
+            picker.append((fam, "%s  %s" % (tag, txt.split("<br>")[1]), len(fig.data), sort_key))
+            used += 1
+            grp = "i#%d" % len(fig.data)
+            fig.add_trace(go.Scattergl(
+                x=bx, y=by, mode="lines", name=tag, legendgroup=grp, visible=False,
+                showlegend=True, line=dict(color=shade, width=max(2.0, width + 0.8)),
+                customdata=[txt, txt], hovertemplate="%{customdata}<extra></extra>"))
+            fig.add_trace(go.Scattergl(
+                x=[bx[0] + (bx[1] - bx[0]) / 2], y=[by[0]], mode="markers", legendgroup=grp,
+                visible=False, showlegend=False,
+                marker=dict(size=12, color=shade, opacity=0.001),
+                customdata=[txt], hovertemplate="%{customdata}<extra></extra>"))
+        return used
+
+    if sr_zones:
+        # EVERY zone layer. `sr_frames` is for timeframes you want LEVELS from but not patterns or
+        # trendlines from -- kept out of tf_frames on purpose, since that is what gets fitted and,
+        # in the trading notebooks, traded.
+        _sr_layers = {None: d}
+        for _k, _f in (sr_frames or {}).items():
+            if _k not in _sr_layers and (tf_sr is None or tf_sr.get(_k, True)):
+                _sr_layers[_k] = _f.reset_index(drop=True)
+        _order = sorted(_sr_layers, key=lambda k: -tf_minutes(k) if k else -base_min)
+        # THE CHART'S OWN LAYER ALWAYS GETS THE SAME SHADE, whatever else is loaded. Indexing by
+        # position meant it was the brightest when drawn alone and a different grey the moment a 4h
+        # layer was added -- the same levels changing appearance because of an unrelated setting.
+        # Anchored on the chart instead: coarser layers step brighter from it, finer ones darker.
+        _anchor = _order.index(None)
+        for _n, _k in enumerate(_order):
+            _rank = 0.0 if _k is None else float(
+                np.log2(max(tf_minutes(_k), 1) / base_min))
+            # the cap has to clear the coarsest layer or the top two timeframes come out the
+            # same weight, which is the whole point of weighting them
+            _w = min(4.4, 2.0 + 0.42 * _rank) if _rank >= 0 else max(1.0, 2.0 + 0.4 * _rank)
+            _draw_sr(_sr_layers[_k], tf=_k, width=round(_w, 2),
+                     alpha=1.0 if _rank >= 0 else 0.7,
+                     shade=_SR_SHADES[min(max(3 - (_anchor - _n), 0), len(_SR_SHADES) - 1)],
+                     budget=max_sr_picker)
+
     # ---- the chart's own timeframe, then any extra ones ----------------------------------
     _draw_layer(d, tf=None, want=patterns, draw_lines=trendlines,
                 width=2.6, dotsz=7, alpha=1.0, picker_budget=None)
@@ -1642,6 +1742,26 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
             font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2),
             buttons=_fvg_btn))
+
+    # ONE TIMEFRAME'S LEVELS AT A TIME, the same control the gaps get and for the same reason:
+    # the legend lists them as "4h . S/R zones", one row per timeframe, and hunting through rows is
+    # what the row of buttons replaces.
+    if sr_layer_ix and len(sr_layer_ix) > 1:
+        _all_sr = [i for v in sr_layer_ix.values() for i in v]
+        _sr_btn = [dict(label="S/R: all", method="restyle",
+                        args=[{"visible": [True] * len(_all_sr)}, _all_sr])]
+        for _tf in sorted(sr_layer_ix, key=lambda k: -tf_minutes(k)):
+            _sr_btn.append(dict(
+                label=_tf, method="restyle",
+                args=[{"visible": [i in set(sr_layer_ix[_tf]) for i in _all_sr]}, _all_sr]))
+        _sr_btn.append(dict(label="none", method="restyle",
+                            args=[{"visible": ["legendonly"] * len(_all_sr)}, _all_sr]))
+        menus.append(dict(
+            type="buttons", direction="right", showactive=True, active=0,
+            x=0.0, xanchor="left", y=1.165, yanchor="top",
+            bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
+            font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2),
+            buttons=_sr_btn))
 
     # ALL THE EMAs AT ONCE. Plotly's own way to do this is double-clicking a legend entry,
     # which ISOLATES it -- and isolating an EMA hides the trade and the line you were looking

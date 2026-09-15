@@ -41,6 +41,7 @@ class FvgLab:
     D: pd.DataFrame                       # + trendlines, EMAs and the gap columns
     line_frames: Dict[str, pd.DataFrame]  # fitted and TRADED
     gap_frames: Dict[str, pd.DataFrame]   # drawn, and allowed to veto — never fitted
+    sr_frames: Dict[str, pd.DataFrame]    # levels are clustered on these — never fitted or traded
     fvg_kwargs: Dict[str, Any]
     params: Dict[str, Any]
     trades: pd.DataFrame                  # with the veto, if it is on
@@ -120,8 +121,12 @@ class FvgLab:
             view_start=c.VIEW_START, emas=c.EMAS, mtf_emas=c.MTF_EMAS,
             emas_on=_get(c, "EMAS_ON", True), chart_tf=c.TF,
             ema_frames={**self.line_frames, **self.gap_frames},
-            sr_zones=_get(c, "SHOW_SR_ZONES", False),
+            sr_zones=_get(c, "SHOW_SR_ZONES", False), sr_frames=self.sr_frames,
+            max_sr_picker=_get(c, "MAX_SR_PICKER", 6),
             zone_lookback_bars=_get(c, "ZONE_LOOKBACK", 2000),
+            zones_left=_get(c, "ZONES_LEFT", 10), zones_right=_get(c, "ZONES_RIGHT", 10),
+            cluster_pct=_get(c, "SR_CLUSTER_PCT", 0.15),
+            min_touches=_get(c, "SR_MIN_TOUCHES", 2), max_zones=_get(c, "SR_MAX_ZONES", 40),
             max_picker_instances=_get(c, "MAX_PICKER", 24),
             max_shapes_per_tf=_get(c, "MAX_SHAPES_TF", 12),
             max_trade_picker=_get(c, "MAX_TRADE_PICKER", 40),
@@ -165,6 +170,16 @@ def fvg_lab(cfg) -> FvgLab:
                              warmup_bars=warm, source=src) if line_tfs else {})
     gap_frames = (tf_frames(c.SYMBOL, gap_tfs, view_start=c.VIEW_START, end=c.END,
                             warmup_bars=warm, source=src) if gap_tfs else {})
+    # S/R layers: clustered, drawn, and nothing else. A level fitted on 1h pivots is a different
+    # level from one fitted on 5m pivots, so each timeframe needs its own frame -- but none of them
+    # is ever fitted for trendlines or traded.
+    sr_tfs = tuple(_get(c, "SR_TFS", ()) or ()) if _get(c, "SHOW_SR_ZONES", False) else ()
+    sr_frames = {k: (gap_frames[k] if k in gap_frames else line_frames[k])
+                 for k in sr_tfs if k in gap_frames or k in line_frames}
+    _need = [k for k in sr_tfs if k not in sr_frames]
+    if _need:
+        sr_frames.update(tf_frames(c.SYMBOL, tuple(_need), view_start=c.VIEW_START, end=c.END,
+                                   warmup_bars=warm, source=src))
 
     fvg_kwargs = dict(mitigation=c.FVG_MITIGATION, min_size_atr=c.FVG_MIN_SIZE_ATR,
                       min_disp_atr=_get(c, "FVG_MIN_DISP_ATR", 0.0),
@@ -233,5 +248,6 @@ def fvg_lab(cfg) -> FvgLab:
         gaps[tf] = fvg_table(f.reset_index(drop=True), **fvg_kwargs)
 
     return FvgLab(cfg=c, df=df, D=D, line_frames=line_frames, gap_frames=gap_frames,
+                  sr_frames=sr_frames,
                   fvg_kwargs=fvg_kwargs, params=params, trades=filtered, all=everything,
                   gaps=gaps)

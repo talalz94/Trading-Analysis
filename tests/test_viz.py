@@ -86,3 +86,124 @@ def test_mtf_ema_missing_column_raises_instead_of_silently_skipping():
     fig = go.Figure()
     with _pytest.raises(Exception):
         _add_mtf_emas(fig, df.drop(columns=["open_time"]), df["t"], ("5min", 20), None)
+
+
+# ---------------------------------------------------------------------------
+# S/R ZONES, PER TIMEFRAME
+#
+# A level clustered from 1h pivots is a different level from one clustered from 5m pivots, so each
+# frame is clustered in its OWN bar space and only becomes a chart coordinate when a bar index
+# turns into a timestamp. These check that the layers stay separate, that the chart's own layer is
+# untouched by the addition, and that the controls exist.
+# ---------------------------------------------------------------------------
+def _ohlc(n=9000, seed=4, freq="5min"):
+    rng = np.random.default_rng(seed)
+    i = np.arange(n)
+    close = 30000 + 900 * np.sin(2 * np.pi * i / 400) + np.cumsum(rng.normal(0, 6, n))
+    open_ = np.r_[close[0], close[:-1]]
+    wick = np.abs(rng.normal(0, 14, n))
+    t = pd.date_range("2026-01-01", periods=n, freq=freq, tz="UTC")
+    return pd.DataFrame({"open_time": t, "t": t, "open": open_,
+                         "high": np.maximum(open_, close) + wick,
+                         "low": np.minimum(open_, close) - wick, "close": close, "volume": 1.0})
+
+
+def _sr_traces(fig):
+    return [t for t in fig.data if "S/R" in (t.name or "")]
+
+
+def test_each_timeframe_gets_its_own_sr_layer():
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    frames = {"15m": resample_ohlcv(base, "15min"), "1h": resample_ohlcv(base, "60min")}
+    fig = pattern_figure(base, patterns=[], sr_zones=True, sr_frames=frames, chart_tf="5m",
+                         emas=())
+    names = [t.name for t in _sr_traces(fig)]
+    assert any(n.startswith("15m") for n in names), names
+    assert any(n.startswith("1h") for n in names), names
+    assert any(n == n.lstrip("0123456789hm ") and "·" not in n for n in names), \
+        "the chart's own layer is missing"
+
+
+def test_weight_encodes_the_timeframe():
+    """Colour is already spent on direction elsewhere on this chart, so S/R uses WEIGHT — the same
+    convention the trendlines use. The coarsest layer must be the thickest, and no two may tie."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    frames = {"15m": resample_ohlcv(base, "15min"), "1h": resample_ohlcv(base, "60min"),
+              "4h": resample_ohlcv(base, "240min")}
+    fig = pattern_figure(base, patterns=[], sr_zones=True, sr_frames=frames, chart_tf="5m",
+                         emas=())
+    w = {t.name.split(" ·")[0]: t.line.width for t in _sr_traces(fig) if t.line.width}
+    assert len(set(w.values())) == len(w), f"two layers share a width: {w}"
+    assert w["4h"] > w["1h"] > w["15m"], w
+
+
+def test_adding_sr_layers_leaves_the_chart_own_layer_alone():
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    one = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=())
+    many = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=(),
+                          sr_frames={"1h": resample_ohlcv(base, "60min")})
+    own_one = [t for t in _sr_traces(one) if "·" not in t.name]
+    own_many = [t for t in _sr_traces(many) if "·" not in t.name]
+    assert own_one and own_many
+    assert own_one[0].name == own_many[0].name, "the chart's own zone count changed"
+    assert own_one[0].line.color == own_many[0].line.color
+    assert list(own_one[0].y) == list(own_many[0].y), "the chart's own levels moved"
+
+
+def test_the_chart_carries_an_sr_timeframe_button_row():
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    fig = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=(),
+                         sr_frames={"1h": resample_ohlcv(base, "60min")})
+    rows = [m for m in (fig.layout.updatemenus or ()) if m.type == "buttons"
+            and any("S/R" in str(b.label) for b in m.buttons)]
+    assert len(rows) == 1, "no S/R timeframe row"
+    labels = [b.label for b in rows[0].buttons]
+    assert labels[0] == "S/R: all" and labels[-1] == "none" and "1h" in labels, labels
+    # isolating a layer needs a PER-TRACE visibility list; one style value could not express it
+    iso = rows[0].buttons[1]
+    assert isinstance(iso.args[0]["visible"], list)
+    assert len(iso.args[0]["visible"]) == len(iso.args[1])
+    assert any(v is True for v in iso.args[0]["visible"])
+    assert any(v != True for v in iso.args[0]["visible"]), "the button hid nothing"
+
+
+def test_a_zone_is_named_and_hoverable():
+    """`5m·Z3`, the same shape as `5m·S7` for a trendline — one name the hover, the legend and the
+    dropdown all share. And hover lives on a midpoint marker too, because a horizontal line is a
+    one-pixel target."""
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    fig = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=())
+    hov = [t for t in fig.data if t.customdata is not None
+           and any("S/R" in str(c) for c in t.customdata)]
+    assert hov, "no S/R hover anywhere"
+    assert any("·Z" in str(c) for t in hov for c in t.customdata)
+    assert any(t.mode == "markers" for t in hov), "no midpoint marker to hover"
+
+
+def test_no_sr_frames_means_exactly_the_old_behaviour():
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    off = pattern_figure(base, patterns=[], sr_zones=False, chart_tf="5m", emas=())
+    on = pattern_figure(base, patterns=[], sr_zones=True, chart_tf="5m", emas=())
+    sr_ix = {i for i, t in enumerate(on.data)
+             if "S/R" in (t.name or "") or "S/R" in (t.legendgroup or "")
+             or "·Z" in (t.name or "")}
+    sr_ix |= {i + 1 for i in sr_ix if i + 1 < len(on.data)
+              and (on.data[i + 1].legendgroup or "") == (on.data[i].legendgroup or "")}
+    rest = [t.name for i, t in enumerate(on.data) if i not in sr_ix]
+    assert rest == [t.name for t in off.data]

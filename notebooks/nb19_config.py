@@ -4,6 +4,7 @@ NOTEBOOK 19 — FAIR VALUE GAPS.  THIS FILE IS YOURS.  Edit anything below.
     §1  WHAT AND WHEN      symbol, timeframe, date range
     §2  GAP DETECTION      what counts as a gap and when it dies
     §3  GAP DRAWING        what the chart shows
+    §3b SUPPORT/RESISTANCE zones, per timeframe
     §4  THE VETO           an unfilled gap stopping a trade
     §5  THE TRADING SIM    a copy of notebook 18's, so the veto is the only difference
     §6  CHART FURNITURE    EMAs, size, dropdown caps
@@ -69,6 +70,30 @@ FVG_SHOW       = ("bull", "bear")   # ("bull",) to draw only bullish gaps
 MAX_FVG_PICKER = 6        # isolatable gaps in the dropdown, PER TIMEFRAME PER DIRECTION. Every box
                           #   is drawn regardless — this only caps how many get their own entry
 START_VISIBLE  = ("trades", "fvg_bull", "fvg_bear")   # what is ON when the chart opens
+
+# =============================================================================================
+# §3b  SUPPORT / RESISTANCE ZONES — per timeframe, same controls as the gaps
+# =============================================================================================
+# A level clustered from 1h pivots is a DIFFERENT level from one clustered from 5m pivots, so each
+# timeframe is fitted in its own bar space. On the chart they get their own legend row, their own
+# `S/R:` button, and an entry in the timeframe -> family -> occurrence cascade — and WEIGHT carries
+# the timeframe, exactly as it does for trendlines: the 4h levels are the thickest and brightest,
+# because those are the ones that matter.
+SHOW_SR_ZONES = True      # the master switch; False draws none of them. The layers start
+                          #   LEGENDONLY -- drawn and one button press away, but not on screen
+                          #   until you ask, so they cannot clutter the chart by default. Put
+                          #   "sr_zones" in START_VISIBLE to have the chart's own layer on.
+SR_TFS        = ("15m", "1h", "4h")   # extra timeframes to cluster levels on, beside TF itself
+
+ZONE_LOOKBACK = 2000      # bars of history each layer clusters over, IN ITS OWN BARS — so 2000 is
+                          #   ~7 days on 5m and ~11 months on 4h. Bounded on purpose: a long
+                          #   warm-up in a trend fills the chart with levels 20% below price
+ZONES_LEFT, ZONES_RIGHT = 10, 10   # bars either side a pivot needs to be confirmed
+SR_CLUSTER_PCT = 0.15     # two pivots within this % of each other are the same zone
+SR_MIN_TOUCHES = 2        # a zone needs this many pivots before it is drawn
+SR_MAX_ZONES   = 40       # per layer
+MAX_SR_PICKER  = 6        # isolatable zones in the dropdown, PER TIMEFRAME. Every zone is drawn
+                          #   regardless — this only caps how many get their own entry
 
 # =============================================================================================
 # §4  THE VETO — an unfilled gap stops a trade being taken
@@ -156,8 +181,7 @@ EMAS     = (20, 50, 100, 200)                   # of TF
 MTF_EMAS = [("15m", 50, 200), ("1h", 50, 200)]  # of other timeframes, stepped at their own close
 EMAS_ON  = False          # drawn but starting OFF the chart — the gaps are the subject here
 
-SHOW_TRENDLINES = True
-SHOW_SR_ZONES, ZONE_LOOKBACK = False, 2000
+SHOW_TRENDLINES = True          # S/R zones are in §3b
 
 HEIGHT      = 900
 MAX_PICKER  = 24          # isolatable pattern/trendline instances in the dropdown, all timeframes
