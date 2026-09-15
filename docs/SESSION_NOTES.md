@@ -1435,3 +1435,50 @@ the chance baseline, 0 of 24 settings clear all six and 4 clear >=4 where chance
 
 R per trade, not total R, is the score for anything that only REMOVES trades: random removal from a
 positive-expectancy strategy lowers total R while leaving the per-trade number alone.
+
+---
+
+## Notebook 19, second pass: settings → one call → a chart
+
+The complaint was "functions are out there in the open... it only makes me confused about what to
+do and where". The Run cell defined `_filter` and `_run` and assembled `PARAMS` inline — about
+forty lines of machinery in front of the person using it. All of it moved to
+**`quant/research/fvg_lab.py`**, a new package for notebook-facing orchestration. The notebook is
+now **7 code cells, 36 lines**, and two tests keep it there: no cell may define a function or
+class, and the notebook is capped at 9 cells / 60 lines.
+
+`quant/research/` is the only package boundary here that is easy to get wrong, so its `__init__`
+docstring states it: it CALLS indicators, scenarios and viz; it holds no strategy logic, no
+indicator maths, no drawing, no sweeps — and **no default for any setting a config owns**, because
+a value stated in two places is precisely the 8a8b8de bug. Settings arrive as the config MODULE and
+are read through `_get(cfg, name, default)`, so a config predating a setting degrades rather than
+raising. `docs/NOTEBOOK_GUIDE.md` is the full version, for whoever touches a notebook next.
+
+One naming wrinkle worth knowing: `quant/research/__init__.py` re-exports the function `fvg_lab`,
+which **shadows the submodule of the same name** — `import quant.research.fvg_lab as fl` gives you
+the function, not the module. Import the names, not the path.
+
+### Re-arranging a config without changing it
+
+Both config files were reorganised into numbered sections. The check that makes that safe, and
+which now lives in the notebook guide:
+
+```python
+exec(compile(old_text, "old", "exec"), a); exec(compile(new_text, "new", "exec"), b)
+assert not [k for k in a if k.isupper() and k in b and repr(a[k]) != repr(b[k])]
+```
+
+nb18: 42 settings before and after, zero values changed. nb19: 59 → 60, zero changed, the one
+addition being `START_VISIBLE` which had been hardcoded in a cell (so rule 1 now covers it).
+
+## Isolating one timeframe's gaps
+
+The legend already toggled each layer, but as `4h · FVG bullish` / `4h · FVG bearish` — two clicks
+per timeframe and six rows to hunt through. A button row (`FVGs: all | 4h | 1h | 15m | 5m | 1m |
+none`) does it in one press. The mechanism worth remembering: **`restyle` accepts a LIST of
+visibilities alongside a list of trace indices**, so a single button can show one layer and hide
+the rest — which a single style value cannot express.
+
+Gap layers may be FINER than the chart (1m gaps on a 5m chart draw fine, 2,930 of them). No
+resampling is involved: each layer is detected on its own real frame, so the trap that made a "1m
+EMA" come back as the 5m EMA cannot recur here.

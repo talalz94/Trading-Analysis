@@ -1167,6 +1167,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                                     [r.bot, r.bot, r.top, r.top, r.bot], hx[-1], r.mid, txt,
                                     pd.Timestamp(str(x0)).value))
 
+            _mine = fvg_layer_ix.setdefault(tf_nm, [])
+            _mine.append(len(fig.data))
+            _mine.append(len(fig.data) + 1)
             fig.add_trace(go.Scattergl(
                 x=xs, y=ys, fill="toself", mode="lines",
                 name="%s (%d, %d open)" % (label, len(sub), int((sub["dead_i"] < 0).sum())),
@@ -1197,6 +1200,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     marker=dict(size=14, color=colr, opacity=0.001),
                     customdata=[txt], hovertemplate="%{customdata}<extra></extra>"))
         return used
+
+    fvg_layer_ix = {}   # timeframe name -> the trace indices of its boxes, for the toggle row
 
     if fvgs:
         # EVERY gap layer, before a single line is drawn. Two reasons it is one block here rather
@@ -1613,6 +1618,30 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                                   args=[{"visible": _all_trades()}, {}])])
             menus.append(dict(buttons=grp_buttons, x=0.60, xanchor="left", **menu))
             menus.append(dict(buttons=opening, x=0.74, xanchor="left", **menu))
+
+    # ONE TIMEFRAME'S GAPS AT A TIME. The legend already toggles each layer, but it lists them as
+    # "4h . FVG bullish" / "4h . FVG bearish" -- two clicks per timeframe and six rows to hunt
+    # through. These buttons isolate a whole timeframe in one press, both directions together.
+    #
+    # `restyle` takes a LIST of visibilities alongside a list of trace indices, so one button can
+    # show one layer and hide the rest -- which a single style value could not express. Cost is
+    # buttons x gap traces, and there are two gap traces per layer, so it is negligible.
+    if fvg_layer_ix and len(fvg_layer_ix) > 1:
+        _all_ix = [i for v in fvg_layer_ix.values() for i in v]
+        _fvg_btn = [dict(label="FVGs: all", method="restyle",
+                         args=[{"visible": [True] * len(_all_ix)}, _all_ix])]
+        for _tf in sorted(fvg_layer_ix, key=lambda k: -tf_minutes(k)):
+            _fvg_btn.append(dict(
+                label=_tf, method="restyle",
+                args=[{"visible": [i in set(fvg_layer_ix[_tf]) for i in _all_ix]}, _all_ix]))
+        _fvg_btn.append(dict(label="none", method="restyle",
+                             args=[{"visible": ["legendonly"] * len(_all_ix)}, _all_ix]))
+        menus.append(dict(
+            type="buttons", direction="right", showactive=True, active=0,
+            x=0.0, xanchor="left", y=1.105, yanchor="top",
+            bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
+            font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2),
+            buttons=_fvg_btn))
 
     # ALL THE EMAs AT ONCE. Plotly's own way to do this is double-clicking a legend entry,
     # which ISOLATES it -- and isolating an EMA hides the trade and the line you were looking
