@@ -109,3 +109,60 @@ def test_a_setting_added_later_does_not_break_an_older_config_file():
         # the config states is a second home for a value that must have exactly one
         assert k in body, f'{k} has a default but the notebook never uses it'
         assert k in ns, f'{k} has a default but no line in the config file to edit'
+
+
+# ---------------------------------------------------------------------------
+# notebook 19 lives under the same rule, for the same reason
+# ---------------------------------------------------------------------------
+NB19 = NB.parent / '19_fvg_viewer.ipynb'
+CFG19 = NB.parent / 'nb19_config.py'
+
+
+def _cells19():
+    return json.loads(NB19.read_text(encoding='utf-8'))['cells']
+
+
+def test_notebook_19_keeps_its_settings_in_a_file_too():
+    assert CFG19.is_file(), 'nb19_config.py is the file the user edits; it must be in the repo'
+    ns = {}
+    exec(compile(CFG19.read_text(encoding='utf-8'), str(CFG19), 'exec'), ns)
+    for k in ('SYMBOL', 'TF', 'FVG_TFS', 'FVG_MITIGATION', 'FVG_MIN_SIZE_ATR',
+              'USE_FVG_VETO', 'FVG_VETO_MODE', 'FVG_VETO_TFS', 'ENTRY_RULES'):
+        assert k in ns, f'{k} is missing from {CFG19.name}'
+    from quant.indicators import MITIGATION_MODES
+    from quant.strategies import VETO_MODES
+    assert ns['FVG_MITIGATION'] in MITIGATION_MODES
+    assert ns['FVG_VETO_MODE'] in VETO_MODES
+
+
+def test_notebook_19_states_no_setting_of_its_own():
+    owned = {'SYMBOL', 'SOURCE', 'TF', 'LINE_TFS', 'VIEW_START', 'END', 'WARMUP_START',
+             'TF_WARMUP_BARS', 'FVG_TFS', 'FVG_MITIGATION', 'FVG_MIN_SIZE_ATR',
+             'FVG_MIN_DISP_ATR', 'FVG_MAX_AGE_BARS', 'FVG_ATR_PERIOD', 'FVG_DRAW',
+             'FVG_EXTEND', 'FVG_SHOW', 'MAX_FVG_PICKER', 'USE_FVG_VETO', 'FVG_VETO_MODE',
+             'FVG_VETO_TFS', 'FVG_VETO_MAX_AGE', 'FVG_VETO_MIN_SIZE', 'FVG_VETO_MAX_DIST',
+             'ENTRY_RULES', 'RULES_COMBINE', 'EMAS', 'MTF_EMAS', 'EMAS_ON', 'COSTS',
+             'TRENDLINE', 'HEIGHT', 'SHOW_SR_ZONES', 'SHOW_TRENDLINES'}
+    offenders = []
+    for c in _cells19():
+        if c['cell_type'] != 'code':
+            continue
+        for line in ''.join(c['source']).splitlines():
+            m = re.match(r'\s*([A-Z][A-Z0-9_]*)\s*(?:,\s*[A-Z][A-Z0-9_]*\s*)*=[^=]', line)
+            if not m:
+                continue
+            names = set(re.findall(r'[A-Z][A-Z0-9_]*', line.split('=')[0]))
+            if names & owned:
+                offenders.append(line.strip())
+    assert not offenders, ('notebook 19 assigns settings it does not own:\n  '
+                          + '\n  '.join(offenders))
+
+
+def test_notebook_19_never_fits_trendlines_on_a_gap_only_timeframe():
+    """FVG_TFS is for DRAWING and vetoing; LINE_TFS is what gets fitted and traded. Passing the
+    gap frames as tf_frames would quietly start trading 4h trendlines -- a change to the strategy
+    made by a setting whose name says it is about gaps."""
+    src = '\n'.join(''.join(c['source']) for c in _cells19() if c['cell_type'] == 'code')
+    assert 'tf_frames=LINE_FRAMES' in src, 'the chart must fit lines on LINE_FRAMES only'
+    assert 'fvg_frames=GAP_FRAMES' in src, 'gap-only frames must go to fvg_frames'
+    assert 'mtf_trendlines(df, LINE_FRAMES' in src

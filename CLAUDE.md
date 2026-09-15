@@ -42,7 +42,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **454 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **487 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -122,6 +122,24 @@ quant/
 │   │                    #     slope_sym_max stops a near-flat line paired with a steep one being
 │   │                    #     called SYMMETRICAL (measured ratios reached 17:1). Flags/pennants are
 │   │                    #     renamed from channels/rectangles/symmetrical triangles after a pole.
+│   ├── fvg.py           #   FAIR VALUE GAPS -- the three-candle imbalance. add_fvgs() flags
+│   │                    #     bullish `low[i] > high[i-2]` and bearish `high[i] < low[i-2]`,
+│   │                    #     PUBLISHED FROM BAR i (the third candle), never from the middle
+│   │                    #     one where it visually sits -- that would be a two-bar lookahead
+│   │                    #     drawn on the chart. `top` is always the HIGHER edge; writing the
+│   │                    #     bearish band in candle order instead inverted every one of them.
+│   │                    #     THREE mitigation thresholds, all recorded for every gap and
+│   │                    #     `mitigation=` picking which retires it: touch / ce (the midpoint,
+│   │                    #     default) / full. Gates are ATR-relative (min_size_atr,
+│   │                    #     min_disp_atr on the MIDDLE candle's body). COLUMNS are counts and
+│   │                    #     distances -- fvg_bull_n/_bear_n live now, plus the nearest one's
+│   │                    #     top/bot/age/size_atr/dist_atr -- not a level, for the reason
+│   │                    #     add_candle_runs gives: one column then serves every threshold and
+│   │                    #     a 1h count can ride onto a 5m grid. mtf_fvgs() merges layers with
+│   │                    #     the usual shift_bars=1; fvg_table() is one row per gap for drawing.
+│   │                    #     Cost: 230k 1m bars -> 58,776 gaps in 270 ms (mitigation is a numba
+│   │                    #     scan bounded by max_age_bars). NO EDGE as a trade filter -- see
+│   │                    #     docs/WHAT_WORKS.md
 │   ├── trendlines.py    #   STANDALONE TRENDLINES — add_trendlines() fits the live support and
 │   │                    #     resistance line bar by bar (same RANSAC + envelope, same causality:
 │   │                    #     published only from the bar its last pivot CONFIRMED) and flags
@@ -181,6 +199,18 @@ quant/
 │   │                    #     describe_rules() shows what each sentence became, build_rules(side)
 │   │                    #     returns None when no rule applies -- NOT an empty all/any, because
 │   │                    #     guessing would turn "no short rules" into "no short may trade".
+│   ├── fvg_veto.py      #   "there is an unfilled gap behind this move" as a Cond, for
+│   │                    #     entry_filter=. fvg_blocks(side) is TRUE where a trade should be
+│   │                    #     skipped, fvg_clear(side) its negation -- entry_filter is a MAY-ENTER
+│   │                    #     condition, so handing it the veto itself would trade exactly the
+│   │                    #     setups it was built to avoid and nothing would look wrong. TWO
+│   │                    #     MODES, both built because they are exact mirrors and only
+│   │                    #     measurement separates them: "retrace" (a bullish gap BELOW blocks a
+│   │                    #     long -- price returns to sweep it) and "barrier" (a bearish gap
+│   │                    #     ABOVE blocks a long -- buying into a seller's zone). Gates:
+│   │                    #     max_age_bars (in the gap's OWN timeframe's bars), min_size_atr,
+│   │                    #     max_dist_atr, timeframes. They describe the NEAREST live gap, so
+│   │                    #     filter the population at DETECTION instead
 │   ├── builder.py       #   RuleStrategy + Rule: declarative entry->exit(->stop) rules with `once`
 │   │                    #     (one per episode), `rearm`, `after` sequencing, per-rule exits+stops
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)
@@ -254,6 +284,19 @@ quant/
 │   │                    #     studies_figure (SQZMOM+WaveTrend), scenario_figure (fully-annotated setup
 │   │                    #     chart: candles+EMA line+S/R zones+entries/stops/exits+gradient pane,
 │   │                    #     ATR bands, HH/HL structure, RSI+divergence, HIGHER-TF EMA line+pane),
+│   │                    #     fvgs=True draws FAIR VALUE GAPS as filled boxes, ONE TRACE PAIR
+│   │                    #     PER LAYER however many boxes (a fill="toself" Scattergl takes any
+│   │                    #     number of None-separated polygons) -- trace count is what decides
+│   │                    #     whether the chart opens, since every picker button carries a
+│   │                    #     visibility vector as long as the trace list. Drawn BEFORE every
+│   │                    #     other layer so the boxes sit behind the lines, and tagged
+│   │                    #     meta="fvg". Hover lives on an invisible centroid marker, because a
+│   │                    #     filled polygon only reports its outline. fvg_frames= is for
+│   │                    #     timeframes you want GAPS from but not patterns or trendlines --
+│   │                    #     kept out of tf_frames on purpose, since that is what gets fitted
+│   │                    #     and traded. max_fvg_picker= isolatable gaps PER TIMEFRAME PER
+│   │                    #     DIRECTION (one shared pool was drained by the coarsest layer),
+│   │                    #     biggest-first, capped before drawing so legend and menu agree;
 │   │                    #     zoom_to_trade, CROSSHAIR_JS (full-height cross-pane cursor)
 │   └── heatmaps.py      #   monthly-returns, hour×weekday, parameter-sweep heatmaps
 ├── scenarios/           # VERSIONED, COMPOSABLE setups: Scenario × Stop × TP × Secondary × params
@@ -313,6 +356,11 @@ quant/
 
 experiments/             # INFERENCE layer — find best settings for an idea (SEPARATE from core)
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
+├── fvg_veto_search.py    # does an unfilled FVG behind a break say skip it? 24 settings x 6
+│                        #   windows, scored by R PER TRADE (a veto only removes trades, so total
+│                        #   R falls even when it does nothing) with the top winner trimmed, and
+│                        #   the chance baseline printed. Answer: 0 clear all 6, 4 clear >=4 where
+│                        #   chance predicts 8.2. Below chance -- see docs/WHAT_WORKS.md
 ├── trendline_wait_search.py  # how many candles to wait before trading a break, PER TIMEFRAME:
 │                        #   6 windows over 5.5 months, scored by WINDOWS POSITIVE not total R,
 │                        #   with the chance baseline printed beside it
@@ -330,6 +378,14 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   back, which is how EMAS_ON vanished and the notebook died on a
                          #   NameError. So cell 2 carries SETTING_DEFAULTS: a setting the
                          #   config predates falls back and prints the line to paste in.
+                         # 19_fvg_viewer + nb19_config.py = FAIR VALUE GAPS from several
+                         #   timeframes on one chart, plus a COPY of notebook 18's sim with the
+                         #   FVG veto added and a with/without comparison. A copy rather than a
+                         #   change to 18, so nothing already working can regress; the trading
+                         #   settings are identical, which makes the veto the only difference.
+                         #   FVG_VETO_TFS excludes the chart's own timeframe by DEFAULT: 5m
+                         #   produces ~2,000 gaps with ~96 live at once, so including it makes
+                         #   the veto a constant (it blocked all 8 trades)
                          # 18_trendline_trading_sim = TRADES multi-timeframe trendline breaks on
                          #   1m (entry rule, previous-high/low stop, BE@1R + 3R target), with the
                          #   trades on the chart and the cost floor measured on them
@@ -513,7 +569,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **454 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **487 total.**
 
 ## 12. Known limitations / honest caveats
 

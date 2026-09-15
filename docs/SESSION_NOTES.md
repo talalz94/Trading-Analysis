@@ -1384,3 +1384,54 @@ cell 2 now carries `SETTING_DEFAULTS`: any setting `nb18_config` does not define
 notebook prints the line to paste in. `tests/test_notebook_config.py` checks each default names a
 setting the notebook actually reads AND that the config file has a line for it — a default with no
 home in the config would be a second place a value is stated, which is the original bug again.
+
+---
+
+## Fair value gaps: three bugs the fixtures caught, and two that cost 4x
+
+**`top` and `bot` written in candle order inverted every bearish gap.** A bullish band is
+`(high[i-2], low[i])` and a bearish one `(high[i], low[i-2])` — transcribing both in that order puts
+the LOWER number in `top` for bearish gaps. An inverted band inverts its own mitigation test, its
+midpoint and the box drawn for it, and none of it looks wrong on a chart. Caught by a hand-built
+three-candle fixture asserting `bot < top`, which is now a test.
+
+**Performance: two "optimisations" that made it 4x slower.** Vectorising the gap ids with
+`np.where(...) + cumcount().to_numpy().astype(str)` and the time columns with
+`tv[...].astype("datetime64[ns]")` took `add_fvgs` on 230k bars from 1.08 s to **2.70 s**. Cause: a
+tz-aware column comes back from `.to_numpy()` as an **object array of Timestamps**, so `.astype` was
+converting 58,776 Python objects one at a time — 2.6 s of a 3.4 s call, more than detection,
+mitigation and the per-bar pass combined. `pd.DatetimeIndex(...).take(idx)` stays in the C path.
+Final: **270 ms**. The lesson is narrow and worth keeping: on a tz-aware column, `.to_numpy()` is a
+Python-object trapdoor.
+
+**numba allocates on every `np.full` inside a loop.** `_live_state` used a two-element array per bar
+for "nearest gap per direction" — 460k heap allocations on a 1m year, and the single biggest cost in
+the function. Scalars instead.
+
+## Drawing hundreds of boxes without hundreds of traces
+
+`fill="toself"` on a Scattergl takes any number of `None`-separated polygons, so a whole layer of
+gaps costs **one trace** (plus one invisible centroid-marker trace for hover — a filled polygon only
+reports its outline, so hovering the middle of a box said nothing). That matters more here than
+anywhere else on this chart: every picker button carries a `visible` vector as long as the trace
+list, so cost is buttons x traces. Measured: 241 -> 353 traces and 0.72 -> 1.29 MB of JSON with four
+gap layers on, and no measurable change in build time — `_best_line` in `chart_patterns.py` is 4.3 s
+of the 4.9 s and dominates everything.
+
+Two ordering facts, both learned the hard way: gap boxes must be added **before** every other layer
+or plotly paints them on top of the trendlines they are background for; and the picker's family key
+must be the **prefixed** label, because "FVG bullish" is the name of four different families at once
+and keying by the bare name made every timeframe's menu show the 4h layer's counts.
+
+## The veto: measured, and it is nothing
+
+See `docs/WHAT_WORKS.md`. The part worth repeating here is the methodology trap it walked into
+first. On notebook 19's nine-day window the sim takes 8 trades, 4 winners and 4 losers; a 96-cell
+gate sweep showed `barrier` blocking losers and `retrace` blocking winners with striking
+consistency. That consistency is an artifact: **all 96 cells score the same eight trades**, so they
+are one observation, not 96 — and a three-trade block that is all losers arises by chance 7.1% of
+the time, meaning ~7 such cells come free. Run across six windows and scored by windows-won against
+the chance baseline, 0 of 24 settings clear all six and 4 clear >=4 where chance predicts 8.2.
+
+R per trade, not total R, is the score for anything that only REMOVES trades: random removal from a
+positive-expectancy strategy lowers total R while leaving the per-trade number alone.
