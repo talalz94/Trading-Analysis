@@ -1514,3 +1514,17 @@ chart's own layer instead (`3 - (anchor - n)`), which also restores its original
 **The isolate button, again.** `restyle` takes a LIST of visibilities beside a list of trace
 indices, so one button shows one layer and hides the rest. Three rows now sit on the chart —
 `FVGs:`, `S/R:`, `EMAs on/off` — stacked at y=1.105/1.165/1.045.
+
+---
+
+## A setting that only one place knew how to satisfy
+
+`MTF_EMAS = [("1m", ...)]` in nb19 raised *"1m is FINER than the chart and no 1m frame was given"*.
+The refusal was right — resampling a 5m frame to 1m returns the 5m EMA under another name — but the
+only way out looked like adding `"1m"` to `FVG_TFS` or `LINE_TFS`, settings that have nothing to do
+with EMAs and which would have started drawing 1m gaps or **trading 1m trendlines**.
+
+The lab now loads frames for EMA-only timeframes itself, which is what notebook 18 already did. Four
+frame sets, one per job: LINE (fitted and traded) · GAP (drawn, may veto) · S/R (clustered, drawn) ·
+EMA (feeds `mtf_emas`). The general shape worth remembering: **when a setting can only be satisfied
+by editing an unrelated setting, the wiring is wrong, not the user.**

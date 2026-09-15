@@ -42,6 +42,7 @@ class FvgLab:
     line_frames: Dict[str, pd.DataFrame]  # fitted and TRADED
     gap_frames: Dict[str, pd.DataFrame]   # drawn, and allowed to veto — never fitted
     sr_frames: Dict[str, pd.DataFrame]    # levels are clustered on these — never fitted or traded
+    ema_frames: Dict[str, pd.DataFrame]   # every frame an EMA needs, including EMA-only timeframes
     fvg_kwargs: Dict[str, Any]
     params: Dict[str, Any]
     trades: pd.DataFrame                  # with the veto, if it is on
@@ -120,7 +121,7 @@ class FvgLab:
             max_fvg_picker=_get(c, "MAX_FVG_PICKER", 6),
             view_start=c.VIEW_START, emas=c.EMAS, mtf_emas=c.MTF_EMAS,
             emas_on=_get(c, "EMAS_ON", True), chart_tf=c.TF,
-            ema_frames={**self.line_frames, **self.gap_frames},
+            ema_frames=self.ema_frames,
             sr_zones=_get(c, "SHOW_SR_ZONES", False), sr_frames=self.sr_frames,
             max_sr_picker=_get(c, "MAX_SR_PICKER", 6),
             zone_lookback_bars=_get(c, "ZONE_LOOKBACK", 2000),
@@ -154,6 +155,7 @@ def fvg_lab(cfg) -> FvgLab:
     from ..strategies import fvg_clear
     from ..strategies.conditions import raw
     from ..strategies.rulespec import build_rules, required_emas
+    from ..viz import mtf_ema_timeframes
 
     c = cfg
     src = _get(c, "SOURCE", "binance")
@@ -186,9 +188,18 @@ def fvg_lab(cfg) -> FvgLab:
                       max_age_bars=_get(c, "FVG_MAX_AGE_BARS", 500),
                       atr_period=_get(c, "FVG_ATR_PERIOD", 14))
 
+    # EVERY FRAME AN EMA NEEDS. MTF_EMAS is its own setting, so it may name a timeframe that is
+    # neither a line, a gap nor an S/R layer -- and one FINER than the chart cannot be resampled
+    # into existence, so pattern_figure refuses it rather than returning the chart's own EMA under
+    # another name. Load it here instead of making the user add "1m" to an unrelated setting.
+    ema_frames = {**line_frames, **gap_frames, **sr_frames}
+    _ema_only = [k for k in mtf_ema_timeframes(c.MTF_EMAS, chart_tf=c.TF) if k not in ema_frames]
+    if _ema_only:
+        ema_frames.update(tf_frames(c.SYMBOL, tuple(_ema_only), view_start=c.VIEW_START,
+                                    end=c.END, warmup_bars=warm, source=src))
+
     D = mtf_trendlines(df, line_frames, **c.TRENDLINE)
-    D = add_mtf_emas(D, {**line_frames, **gap_frames},
-                     required_emas(c.ENTRY_RULES, chart_tf=c.TF))
+    D = add_mtf_emas(D, ema_frames, required_emas(c.ENTRY_RULES, chart_tf=c.TF))
     fv = mtf_fvgs(df, gap_frames, **fvg_kwargs)      # gap columns, with the usual +1 HTF shift
     for col in [x for x in fv.columns if "fvg_" in x]:
         D[col] = fv[col].to_numpy()
@@ -248,6 +259,6 @@ def fvg_lab(cfg) -> FvgLab:
         gaps[tf] = fvg_table(f.reset_index(drop=True), **fvg_kwargs)
 
     return FvgLab(cfg=c, df=df, D=D, line_frames=line_frames, gap_frames=gap_frames,
-                  sr_frames=sr_frames,
+                  sr_frames=sr_frames, ema_frames=ema_frames,
                   fvg_kwargs=fvg_kwargs, params=params, trades=filtered, all=everything,
                   gaps=gaps)

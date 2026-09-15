@@ -214,3 +214,27 @@ def test_notebook_19_stays_short_enough_to_read():
     lines = sum(len([x for x in c["source"] if x.strip()]) for c in code)
     assert len(code) <= 9, f"{len(code)} code cells"
     assert lines <= 60, f"{lines} lines of code in the notebook; move wiring into quant/research/"
+
+
+def test_the_lab_loads_a_frame_for_every_timeframe_an_ema_names():
+    """MTF_EMAS is its own setting, so it may name a timeframe that is neither a line, a gap nor an
+    S/R layer. One FINER than the chart cannot be resampled into existence -- pattern_figure refuses
+    it by name rather than handing back the chart's own EMA under another label -- so the lab has to
+    load it. Without this the config raised `1m is FINER than the chart and no 1m frame was given`
+    and the only fix looked like adding "1m" to a setting that has nothing to do with EMAs."""
+    import inspect
+
+    from quant.research import FvgLab, fvg_lab as build
+
+    src = inspect.getsource(build)
+    assert "mtf_ema_timeframes(c.MTF_EMAS" in src, "the lab does not ask what the EMAs need"
+    assert "ema_frames.update(tf_frames(" in src, "it asks, but never loads them"
+    assert "ema_frames=self.ema_frames" in inspect.getsource(FvgLab.figure)
+
+    ns = {}
+    exec(compile(CFG19.read_text(encoding="utf-8"), str(CFG19), "exec"), ns)
+    from quant.viz import mtf_ema_timeframes
+    named = set(mtf_ema_timeframes(ns["MTF_EMAS"], chart_tf=ns["TF"]))
+    elsewhere = set(ns["LINE_TFS"]) | set(ns["FVG_TFS"]) | set(ns.get("SR_TFS", ()))
+    assert named - elsewhere, ("nb19's MTF_EMAS no longer names a timeframe outside the other "
+                               "settings, so this guards nothing")
