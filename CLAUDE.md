@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **495 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **496 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -383,10 +383,14 @@ quant/
 │                        #     and runs the sim TWICE (with the veto and without, same frame
 │                        #     and params) because a veto-only run cannot distinguish a filter
 │                        #     that removed losers from one that removed trades at random.
-│                        #     Three frame sets, kept apart on purpose: LINE frames are fitted
+│                        #     FOUR frame sets, kept apart on purpose: LINE frames are fitted
 │                        #     and TRADED, GAP frames are drawn and may veto, S/R frames are
-│                        #     clustered and drawn. One setting per job, so adding 4h to see its
-│                        #     levels cannot start trading its trendlines.
+│                        #     clustered and drawn, EMA frames feed mtf_emas. One setting per
+│                        #     job, so adding 4h to see its levels cannot start trading its
+│                        #     trendlines -- and MTF_EMAS naming a timeframe none of the others
+│                        #     mention makes the lab LOAD it, rather than the user having to add
+│                        #     "1m" to an unrelated setting to satisfy the finer-than-chart
+│                        #     refusal.
 │                        #     .trades/.all/.blocked/.gaps/.census()/.summary()/.figure()
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
@@ -611,7 +615,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **495 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **496 total.**
 
 ## 12. Known limitations / honest caveats
 
