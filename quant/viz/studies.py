@@ -422,6 +422,13 @@ def _add_structure(fig, d, x, left, right, *, method="fractal", atr_mult=2.5):
 _SENTINEL = object()
 
 _MTF_EMA_SHADES = ["#42a5f5", "#ab47bc", "#26c6da", "#ffa726", "#7e57c2", "#ec407a"]
+_FVG_COL = {"bull": "#26a69a", "bear": "#ef5350"}
+
+
+def _rgba(hexc, alpha):
+    """#rrggbb -> an rgba() string. A box needs a fill far more transparent than its border."""
+    h = hexc.lstrip("#")
+    return "rgba(%d,%d,%d,%s)" % (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
 
 def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height: int = 820,
@@ -435,7 +442,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    max_shapes_per_tf: int = 40, y_from_price: bool = True,
                    mtf_emas=None, ema_frames=None, emas_on: bool = True,
                    legend_instances=None, trades=None, trade_tp_rr=None,
-                   chart_tf=None, max_trade_picker: int = 40):
+                   chart_tf=None, max_trade_picker: int = 40,
+                   fvgs: bool = False, fvg_kwargs=None, fvg_frames=None, tf_fvgs=None,
+                   max_fvg_picker: int = 6, fvg_extend: bool = True,
+                   fvg_show=("bull", "bear")):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -1051,6 +1061,163 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                                         line=dict(width=1.6, color="#fff")),
                             text=txt, hovertemplate="%{text}<extra></extra>"))
         return used
+
+
+    # ---- FAIR VALUE GAPS -----------------------------------------------------------------
+    def _draw_fvgs(dl, *, tf, alpha, width, budget):
+        """One timeframe's gaps as filled boxes. Returns the picker budget used.
+
+        ONE TRACE PAIR FOR THE WHOLE LAYER, not one per gap: a `fill="toself"` Scattergl takes any
+        number of `None`-separated polygons, so four hundred boxes cost the same two traces as one.
+        That matters more here than anywhere else on this chart -- a 1m layer over a week produces
+        thousands of gaps, and every picker button carries a visibility vector as long as the trace
+        list, so the trace count is what decides whether the chart opens at all.
+
+        Isolatable entries come out of the same budget the shapes and trendlines use, capped again
+        by `max_fvg_picker`, and the cap is applied BEFORE drawing so the legend count and the
+        dropdown can never disagree -- the bug that left a legend reading (11) beside a menu of 9.
+        """
+        from ..indicators.fvg import fvg_table
+
+        used = 0
+        tl_ = dl[time_col].to_numpy() if time_col in dl.columns else np.arange(len(dl))
+        vl = _view_index(dl, time_col)
+        n = len(dl)
+        own = tf is None
+        # An event read off bar i of a HIGHER timeframe is only knowable when that bar CLOSES, so a
+        # gap is drawn from its third candle's close -- never from the middle candle where it
+        # visually sits, which would be a two-bar lookahead drawn on the chart.
+        step = np.timedelta64(0, "ns")
+        bar = np.timedelta64(0, "ns")
+        if time_col in dl.columns and n > 1:
+            bar = np.timedelta64(bar_interval(dl, time_col=time_col))
+            if not own:
+                step = bar
+
+        try:
+            gt = fvg_table(dl, **(fvg_kwargs or {}))
+        except Exception as exc:          # a layer with too few bars must not take the chart down
+            import warnings as _w
+            _w.warn("fvg: %s layer skipped -- %s" % (tf or base_tf, exc), stacklevel=2)
+            return 0
+        if not len(gt):
+            return 0
+        # a gap that both formed AND died inside the warm-up is history: it taught the detector
+        # something, but it is not on the window you asked to look at. One that formed there and is
+        # still open is very much live, so it stays.
+        dead_i = gt["dead_i"].to_numpy(np.int64)
+        gt = gt[(gt["born_i"].to_numpy(np.int64) >= vl) | (dead_i < 0) | (dead_i >= vl)]
+        if not len(gt):
+            return 0
+        alpha_l = None if (alpha is None or alpha >= 1.0) else alpha
+        pref = "" if own else "%s · " % tf      # the same separator every other layer uses
+        lgp = "" if own else "%s::" % tf
+        tf_nm = tf or base_tf
+        right = tv[-1] if len(tv) else None
+
+        for side in fvg_show:
+            sub = gt[gt["kind"] > 0] if side == "bull" else gt[gt["kind"] < 0]
+            if not len(sub):
+                continue
+            base_label = "FVG %sish" % side
+            label = pref + base_label
+            key = ("fvg_%s" % side) if own else "%s::%s" % (tf, base_label)
+            vis = True if key in start_visible else "legendonly"
+            colr = _FVG_COL[side]
+            # The same registration `_draw_layer` does for a shape family. The key is the
+            # PREFIXED label: "FVG bullish" is the name on four different timeframes at once, so
+            # keying by it made every layer's menu show the 4h layer's counts.
+            fam_lg[label] = lgp + base_label
+            if label not in tf_fams.setdefault(tf, []):
+                tf_fams[tf].append(label)
+
+            # THE CAP, decided before a single box is drawn, and applied PER TIMEFRAME PER
+            # DIRECTION rather than from one shared pool -- a single pool was drained entirely by
+            # the coarsest layer, leaving the 5m gaps you were actually looking at un-isolatable.
+            # Biggest first: if only six of four hundred gaps get an entry, they should be the six
+            # a strategy might care about, not the six that happened to form earliest.
+            room = max(0, int(budget))
+            pick = sub.sort_values("size_atr", ascending=False).head(room) if room else sub.iloc[:0]
+            pick_ids = set(pick["id"])
+
+            xs, ys, hx, hy, hc = [], [], [], [], []
+            per_gap = []
+            for r in sub.itertuples():
+                x0 = tl_[int(r.born_i)] + step
+                if r.dead_i >= 0:
+                    x1 = tl_[int(r.dead_i)] + step
+                else:
+                    x1 = right if (fvg_extend and right is not None) else x0 + bar * 3
+                if x1 is None or x1 <= x0:
+                    x1 = x0 + bar
+                xs += [x0, x1, x1, x0, x0, None]
+                ys += [r.bot, r.bot, r.top, r.top, r.bot, None]
+                tag = "\u00b7".join((tf_nm, str(r.id)))   # `5m\u00b7FB12`, like `5m\u00b7S7`
+                if r.dead_i < 0:
+                    st = "still open"
+                else:
+                    st = "filled %s" % pd.to_datetime(str(tl_[int(r.dead_i)])).strftime("%b-%d %H:%M")
+                txt = (f"<b>{tag}</b>  {side}ish FVG<br>"
+                       f"{r.bot:,.2f} - {r.top:,.2f}  ({r.size_atr:.2f} ATR)<br>{st}")
+                hx.append(x0 + (x1 - x0) / 2)
+                hy.append(r.mid)
+                hc.append(txt)
+                if r.id in pick_ids:
+                    per_gap.append((tag, label, [x0, x1, x1, x0, x0],
+                                    [r.bot, r.bot, r.top, r.top, r.bot], hx[-1], r.mid, txt,
+                                    pd.Timestamp(str(x0)).value))
+
+            fig.add_trace(go.Scattergl(
+                x=xs, y=ys, fill="toself", mode="lines",
+                name="%s (%d, %d open)" % (label, len(sub), int((sub["dead_i"] < 0).sum())),
+                legendgroup=lgp + base_label, visible=vis, opacity=alpha_l, meta="fvg",
+                line=dict(color=colr, width=max(0.5, round(width - 1.8, 2))),
+                fillcolor=_rgba(colr, 0.13), hoverinfo="skip"))
+            # hover lives on an INVISIBLE centroid marker: a filled polygon reports its outline, so
+            # hovering the middle of a box -- where the cursor actually goes -- said nothing.
+            fig.add_trace(go.Scattergl(
+                x=hx, y=hy, mode="markers", legendgroup=lgp + base_label, visible=vis,
+                showlegend=False, opacity=alpha_l, meta="fvg",
+                marker=dict(size=max(6, int(width * 3)), color=colr, opacity=0.001),
+                customdata=hc, hovertemplate="%{customdata}<extra></extra>"))
+
+            for tag, fam, bx, by, cx, cy, txt, sort_key in per_gap:
+                line_ref[tag] = len(fig.data)
+                picker.append((fam, "%s  %s" % (tag, txt.split("<br>")[1]), len(fig.data), sort_key))
+                used += 1
+                grp = "i#%d" % len(fig.data)
+                fig.add_trace(go.Scattergl(
+                    x=bx, y=by, fill="toself", mode="lines", name=tag,
+                    legendgroup=grp, visible=False, showlegend=True, meta="fvg",
+                    line=dict(color=colr, width=2.0), fillcolor=_rgba(colr, 0.22),
+                    hoverinfo="skip"))
+                fig.add_trace(go.Scattergl(
+                    x=[cx], y=[cy], mode="markers", legendgroup=grp, visible=False,
+                    showlegend=False, meta="fvg",
+                    marker=dict(size=14, color=colr, opacity=0.001),
+                    customdata=[txt], hovertemplate="%{customdata}<extra></extra>"))
+        return used
+
+    if fvgs:
+        # EVERY gap layer, before a single line is drawn. Two reasons it is one block here rather
+        # than a call inside each layer: plotly paints in trace order, so a box added later would
+        # sit ON TOP of the trendline it is supposed to be background for; and the picker budget is
+        # easier to reason about spent in one place.
+        #
+        # `fvg_frames` is for timeframes you want GAPS from but not patterns or trendlines from. It
+        # is kept separate from `tf_frames` deliberately: tf_frames is what gets FITTED and, in the
+        # trading notebook, what gets TRADED -- adding a frame there just to see its gaps would
+        # quietly start trading its lines.
+        _fvg_layers = {None: d}
+        for _k, _f in list((tf_frames or {}).items()) + list((fvg_frames or {}).items()):
+            if _k not in _fvg_layers and (tf_fvgs is None or tf_fvgs.get(_k, True)):
+                _fvg_layers[_k] = _f.reset_index(drop=True)
+        _fvg_budget = int(max_fvg_picker)      # per layer, per direction
+        for _k in sorted(_fvg_layers, key=lambda k: -tf_minutes(k) if k else -base_min):
+            _rank = 0.0 if _k is None else float(np.log2(max(tf_minutes(_k), 1) / base_min))
+            _w = min(4.4, 2.6 + 0.55 * _rank) if _rank >= 0 else max(1.2, 2.6 + 0.45 * _rank)
+            _draw_fvgs(_fvg_layers[_k], tf=_k, width=_w,
+                       alpha=1.0 if _rank >= 0 else 0.55, budget=_fvg_budget)
 
     # ---- the chart's own timeframe, then any extra ones ----------------------------------
     _draw_layer(d, tf=None, want=patterns, draw_lines=trendlines,

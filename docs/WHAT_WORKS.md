@@ -27,6 +27,42 @@
 
 ---
 
+## FAIR VALUE GAPS (2026-09-15) — no edge as a veto, at any setting tried
+
+An unmitigated fair value gap behind a trendline break does **not** tell you to skip the trade.
+`experiments/fvg_veto_search.py`, 24 gate settings x 6 windows over five months, BTCUSDT 5m, scored
+by **R per trade** with the top winner trimmed:
+
+| | observed | expected by chance |
+|---|---|---|
+| settings clearing all 6 windows | **0** | 0.38  (24 x 0.5^6) |
+| settings winning >= 4 of 6 | 4 | **8.2**  (24 x 34.4%) |
+
+Fewer survivors than chance, which is the same shape every other entry family in this document
+produced. R per trade is the right score because a veto can only REMOVE trades: removing them at
+random lowers total R while leaving the per-trade number alone, so only a per-trade improvement
+means the removed trades were worse than the kept ones.
+
+**Both directions were tested**, since they are exact mirrors and guessing would have been a coin
+flip: `retrace` (an unfilled bullish gap below blocks a long — price returns to sweep it) and
+`barrier` (an unfilled bearish gap above blocks a long — you are buying into a seller's zone).
+`barrier` sat at the top of the table at 4 of 6 windows and `retrace` at 3, but 4 of 6 is a 34%
+event and 24 settings should produce about eight of them.
+
+**What NOT to conclude from notebook 19.** On its default nine-day window the whole sim takes eight
+trades, 4 winners and 4 losers. A three-trade block that happens to be all losers arises by chance
+7.1% of the time (C(4,3)/C(8,3)), so the 96-cell grid first run there produced about seven such
+cells for free — and those 96 cells are not 96 observations, they all score the SAME eight trades.
+
+**What the gap census DOES say,** and it is structural rather than predictive: on 5m BTC over 40
+days there are 1,974 gaps at `min_size_atr=0.25` with ~96 unmitigated at any moment, and the median
+gap is filled within **4-6 bars**. A gap of either direction is therefore live on almost every bar,
+which is why including the chart's own timeframe turns any gap veto into a constant rather than a
+filter — it blocked all 8 trades. Any rule built on FVGs has to start by getting the population
+down: `min_size_atr >= 0.5` (above the median) and coarser timeframes only.
+
+---
+
 ## The one-paragraph answer
 
 **No entry rule tested in this project has a validated edge.** Nine entry families, both directions,
