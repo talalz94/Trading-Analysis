@@ -210,6 +210,7 @@ def fvg_lab(cfg) -> FvgLab:
         tl_close_n=c.TL_CLOSE_N, tl_full_m=c.TL_FULL_M, tl_touch_k=c.TL_TOUCH_K,
         tl_dir_n=c.TL_DIR_N, tl_dir_src=c.TL_DIR_SRC, tl_dir_full_n=c.TL_DIR_FULL_N,
         tl_extend=c.TL_EXTEND, tl_combine=c.TL_COMBINE, tl_tol_atr=c.TL_TOL_ATR,
+        tl_once_per_line=_get(c, "TL_ONCE_PER_LINE", False),
         stop_n=c.STOP_N, stop_buffer_pct=c.STOP_BUFFER_PCT,
         be_at_rr=c.BE_AT_RR, tp_rr=c.TP_RR,
         sec_touch_n=c.SEC_TOUCH_N, sec_wrong_m=c.SEC_WRONG_M, sec_opp_n=c.SEC_OPP_N,

@@ -1528,3 +1528,43 @@ The lab now loads frames for EMA-only timeframes itself, which is what notebook 
 frame sets, one per job: LINE (fitted and traded) · GAP (drawn, may veto) · S/R (clustered, drawn) ·
 EMA (feeds `mtf_emas`). The general shape worth remembering: **when a setting can only be satisfied
 by editing an unrelated setting, the wiring is wrong, not the user.**
+
+---
+
+## Five chart complaints, and the two bigger things underneath
+
+**`patterns=[]` meant "draw all 22 chart patterns".** `nm = list(want) if want else list(_PD)` —
+an empty list is falsy, so every notebook asking for trendlines only (`patterns=[]`, which is all of
+16, 18, 19 and the lab) was detecting and drawing the entire pattern library. That is most of the
+clutter, most of the dropdown, and the slowest call in the figure. `want=None` is now "everything"
+and `want=[]` is "none", with detection skipped rather than filtered. Notebook 19: **446 → 292
+traces, 5.0 s → 2.3 s.**
+
+**The Jupyter kernel is not the repo interpreter.** The registered `python3` kernel is **Python 3.9
+with plotly 5.14.1**; the repo runs 3.13 / plotly 6.3.1. Every notebook execution verified in this
+project has been on 5.14. `xaxis.autorangeoptions` (plotly 5.19+) imported fine in the repo and
+raised in the kernel, and because nbconvert then never writes the file, an "are there errors?" check
+read the *previous* successful outputs and said no. Two lessons: wrap version-dependent plotly
+properties, and check that nbconvert actually **wrote** before trusting a clean notebook.
+
+### The four smaller ones
+
+- **Autoscale escaped the window.** `range=` only sets the opening view; the button rescales to the
+  DATA, and a 4h gap born 131 days earlier or a trendline fitted through pivots ten days back
+  dragged the chart to all of it. Three layers of fix: gap boxes clamp their left edge to the
+  window; trendline segments clip with **y interpolated along the fitted line**, so the slope stays
+  honest where truncating x alone would have tilted it; and `autorangeoptions.minallowed` bounds the
+  axis where plotly supports it. Worst reach: 131 days → **1 hour**.
+- **Picking a trade re-showed layers you had switched off.** Every picker button carried a
+  visibility vector as long as the whole figure. They now pass an explicit trace-index list as the
+  third `update` argument, so the bulk EMA / gap / level layers are never addressed — a button that
+  does not address a trace leaves it exactly as you set it. The isolatable `i#` instances stay
+  picker-owned, or selecting one gap from the dropdown would stop working.
+- **Two dropdowns overlapped.** A plotly dropdown is as wide as its widest row and the menus sit at
+  fixed x. `_short()` caps every menu label at 34 characters, applied where the rows are built so it
+  holds for patterns, trendlines, gaps and levels alike.
+- **Two trades on the same trendline are not a duplicate.** A steeply falling 15m resistance dropped
+  ~940 points between the two: a 5m close cleared it at 61,960 and again nine hours later at 61,019,
+  while the 15m line was still live because its own timeframe never closed through it. Both are
+  labelled `15m·R8`, which is what reads as a duplicate. `tl_once_per_line` (default **off**) spends
+  a line on its first entry.

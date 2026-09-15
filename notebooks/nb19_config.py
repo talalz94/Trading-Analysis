@@ -69,7 +69,10 @@ FVG_EXTEND     = True     # an unmitigated box runs to the right edge; False sto
 FVG_SHOW       = ("bull", "bear")   # ("bull",) to draw only bullish gaps
 MAX_FVG_PICKER = 6        # isolatable gaps in the dropdown, PER TIMEFRAME PER DIRECTION. Every box
                           #   is drawn regardless — this only caps how many get their own entry
-START_VISIBLE  = ("trades", "fvg_bull", "fvg_bear")   # what is ON when the chart opens
+START_VISIBLE  = ("trades",)   # what is ON when the chart opens. Gaps and levels are DRAWN but
+                          #   start off it -- the chart opens on price and trades, and you switch
+                          #   layers on from the `FVGs:` / `S/R:` button rows. Add "fvg_bull",
+                          #   "fvg_bear" or "sr_zones" here to have those on from the start.
 
 # =============================================================================================
 # §3b  SUPPORT / RESISTANCE ZONES — per timeframe, same controls as the gaps
@@ -102,7 +105,7 @@ MAX_SR_PICKER  = 6        # isolatable zones in the dropdown, PER TIMEFRAME. Eve
 # R per trade with the top winner trimmed — 0 settings clear all six against a chance baseline of
 # 0.38, and 4 clear >=4 where chance predicts 8.2. Below chance. Left here to experiment with, not
 # because it earns its place. See docs/WHAT_WORKS.md.
-USE_FVG_VETO = True
+USE_FVG_VETO = False
 
 # TWO READINGS, both built, because they are exact mirrors and only measurement separates them:
 #   "retrace"  UNFINISHED BUSINESS BEHIND YOU. A bullish gap sits BELOW price and is filled by a
@@ -143,6 +146,12 @@ TL_DIR_N      = 0          # candles of the TRADE'S OWN COLOUR (red for a short,
 TL_DIR_SRC    = "chart"    # "chart" = candles of TF | "line" = the line's own timeframe
 TL_DIR_FULL_N = 0          # candles BOTH the right colour AND wholly clear of the line
 TL_EXTEND     = True       # a broken line keeps its slope; False holds it flat
+TL_ONCE_PER_LINE = False   # True: a given trendline may trigger only its FIRST entry.
+                           #   A steeply falling resistance keeps dropping, so a 5m close can clear
+                           #   it again hours later at a much lower level while the 15m line is
+                           #   still live -- its own timeframe never closed through it. That is two
+                           #   real breaks, but both are labelled `15m.R8` on the chart and read as
+                           #   a duplicate. Off by default because they ARE separate breaks.
 TL_COMBINE    = "all"      # "all" = every enabled condition, "any" = one of them
 TL_TOL_ATR    = 0.0        # how far past the line counts as past it, in ATR
 
@@ -177,8 +186,10 @@ TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0
 # =============================================================================================
 # §6  CHART FURNITURE
 # =============================================================================================
-EMAS     = (20, 50, 100, 200)                   # of TF
-MTF_EMAS = [("15m", 50, 200), ("1h", 50, 200)]  # of other timeframes, stepped at their own close
+EMAS     = (20, 50, 100, 200)            # of TF
+MTF_EMAS = [("1m", 20, 50, 100, 200),    # of other timeframes, stepped at their own bar close.
+            ("15m", 20, 50, 100, 200),   #   A timeframe FINER than the chart needs its own real
+            ("1h", 20, 50, 100, 200)]    #   frame — the notebook loads it automatically
 EMAS_ON  = False          # drawn but starting OFF the chart — the gaps are the subject here
 
 SHOW_TRENDLINES = True          # S/R zones are in §3b

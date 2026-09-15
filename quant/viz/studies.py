@@ -428,6 +428,15 @@ _FVG_COL = {"bull": "#26a69a", "bear": "#ef5350"}
 _SR_SHADES = ["#e3e8ee", "#c2cad3", "#a3acb6", "#8e9aa6", "#77818b", "#636c75"]
 
 
+def _short(label, n=34):
+    """Menu labels, capped. A plotly dropdown is as wide as its widest row and the menus sit at
+    fixed x positions, so one long occurrence label ("5m.triple_top#0 @ Jun-04 04:20 (confirms
+    Jun-05 06:15)") pushed its menu straight over the next one. The identity is at the FRONT of
+    every label here, so trimming the tail costs nothing."""
+    label = str(label)
+    return label if len(label) <= n else label[:n - 1].rstrip() + "\u2026"
+
+
 def _rgba(hexc, alpha):
     """#rrggbb -> an rgba() string. A box needs a fill far more transparent than its border."""
     h = hexc.lstrip("#")
@@ -673,7 +682,15 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"))
 
     def _detect(frame, want):
-        """One detection pass for a frame, honouring tuned / per-pattern / shared settings."""
+        """One detection pass for a frame, honouring tuned / per-pattern / shared settings.
+
+        AN EMPTY LIST MEANS NONE. `want=None` is "every pattern"; `want=[]` used to mean the same
+        thing, so every notebook asking for trendlines-only (`patterns=[]`) was quietly detecting
+        and drawing the whole 22-pattern library -- most of the trace count, most of the dropdown,
+        and the 4.3 s `_best_line` bill. Skipped on an empty frame so the columns still line up.
+        """
+        if want is not None and len(want) == 0:
+            return [], chart_pattern_shapes(frame.iloc[:0], **(detect_kwargs or {}))
         if tuned or per_pattern:
             spec = per_pattern or tuned_specs()
             nm = list(want) if want else list(spec)
@@ -943,19 +960,33 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     # from the FIRST TOUCH, not from born_i: the line is fitted through pivots that
                     # all sit before it became known, so drawing from born_i left every touch dot
                     # outside the segment. All 36 lines in the sample had this.
-                    lx += [tl_[int(r.start_i)], ev(r.end_i), None]
-                    ly += [r.y_start, r.y_end, None]
+                    si, sy = int(r.start_i), r.y_start
+                    if si < vl:
+                        # CLIPPED TO THE WINDOW, with y INTERPOLATED along the fitted line. A line
+                        # can legitimately start ten days before the period you asked to see, and
+                        # drawn from there it made autoscale rescale to all ten. Moving x without
+                        # recomputing y would have tilted the line, which is worse than the bug.
+                        si, sy = vl, float(r.slope) * vl + float(r.intercept)
+                    lx += [tl_[si], ev(r.end_i), None]
+                    ly += [sy, r.y_end, None]
                     lcd += [tag, tag, tag]
-                    dx += list(r.touch_t) + [None]
-                    dy += list(r.touch_price) + [None]
-                    dcd += [tag] * (len(r.touch_t) + 1)
+                    # touches outside the window are not drawn: they are the pivots that DEFINED
+                    # the line, off-screen by definition, and each one dragged the axis back too
+                    _left = tl_[vl] if vl > 0 else None
+                    _tt = [(a_, b_) for a_, b_ in zip(r.touch_t, r.touch_price)
+                           if _left is None or a_ >= _left]
+                    dx += [a_ for a_, _ in _tt] + [None]
+                    dy += [b_ for _, b_ in _tt] + [None]
+                    dcd += [tag] * (len(_tt) + 1)
                     if r.broke:
                         bx.append(ev(r.end_i)); by.append(r.y_end)
                     per_line.append((
-                        f"{label} @ {pd.to_datetime(str(tl_[int(r.start_i)])):%b-%d %H:%M}"
+                        f"{label} @ {pd.to_datetime(str(tl_[si])):%b-%d %H:%M}"
                         f"  ({int(r.touches)} touches, {'broke' if r.broke else 'faded'})",
-                        [tl_[int(r.start_i)], ev(r.end_i)], [r.y_start, r.y_end],
-                        list(r.touch_t), list(r.touch_price), int(r.start_i), label,
+                        # the ISOLATABLE copy is clipped identically -- otherwise picking the
+                        # line out of the dropdown put the off-screen geometry straight back
+                        [tl_[si], ev(r.end_i)], [sy, r.y_end],
+                        [a_ for a_, _ in _tt], [b_ for _, b_ in _tt], si, label,
                         int(r.born_i), int(r.end_i), bool(r.broke), tag, int(r.touches)))
                 fig.add_trace(go.Scattergl(
                     x=lx, y=ly, mode="lines",
@@ -982,7 +1013,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     for lbl, xs, ys, txs, tys, si, fam, bi, ei, broke, tag, ntouch in per_line:
                         if not line_picker and tag not in _wanted:
                             continue
-                        lbl = f"{tag}  {lbl.split(' @ ', 1)[-1]}"
+                        lbl = _short(f"{tag}  {lbl.split(' @ ', 1)[-1]}")
                         line_ref[tag] = len(fig.data)
                         picker.append((fam, lbl, len(fig.data), pd.Timestamp(str(tl_[si])).value))
                         used += 1
@@ -1113,8 +1144,14 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
             xs, ys, hx, hy, hc = [], [], [], [], []
             per_gap = []
+            left = tv[0] if len(tv) else None
             for r in sub.itertuples():
                 x0 = tl_[int(r.born_i)] + step
+                # A gap that formed in the WARM-UP and is still open is worth drawing -- but from
+                # the left edge of the window, not from its birth. Drawn from birth, a 4h gap
+                # reached 131 days back and autoscale rescaled the chart to all of it.
+                if left is not None and x0 < left:
+                    x0 = left
                 if r.dead_i >= 0:
                     x1 = tl_[int(r.dead_i)] + step
                 else:
@@ -1157,7 +1194,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
             for tag, fam, bx, by, cx, cy, txt, sort_key in per_gap:
                 line_ref[tag] = len(fig.data)
-                picker.append((fam, "%s  %s" % (tag, txt.split("<br>")[1]), len(fig.data), sort_key))
+                picker.append((fam, _short("%s  %s" % (tag, txt.split("<br>")[1])),
+                               len(fig.data), sort_key))
                 used += 1
                 grp = "i#%d" % len(fig.data)
                 fig.add_trace(go.Scattergl(
@@ -1501,6 +1539,22 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
     if picker or trade_picker:
         base = [tr.visible if tr.visible is not None else True for tr in fig.data]
+        # BACKGROUND = the bulk EMA, gap and level layers. Not their isolatable instances, which
+        # live in `i#` groups and ARE picker-owned -- otherwise selecting one gap from the dropdown
+        # would stop working. A button that does not address a trace leaves it exactly as the user
+        # set it, which is the whole point.
+        _bg = {i for i, tr in enumerate(fig.data)
+               if not (getattr(tr, "legendgroup", "") or "").startswith("i#")
+               and ((getattr(tr, "legendgroup", "") or "").startswith(("ema", "mtfema"))
+                    or getattr(tr, "meta", None) == "fvg"
+                    or (getattr(tr, "legendgroup", "") or "").endswith("S/R zones"))}
+        ctl = [i for i in range(len(fig.data)) if i not in _bg]
+
+        def _upd(data, layout=None):
+            """A button payload addressing ONLY the traces the pickers own."""
+            return [{k: ([v[i] for i in ctl] if isinstance(v, list) else v)
+                     for k, v in data.items()}, layout or {}, ctl]
+
         owned = ({i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
                  | {z[2] + k for z in trade_picker for k in range(TRADE_TRACES)})
         fam_groups = {}
@@ -1567,13 +1621,15 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         def _inst_buttons(fam=None):
             if fam is None:
                 return [dict(label="▸ pick a pattern to list its occurrences", method="update",
-                             args=[{"visible": _grouped(None)}, {}])]
+                             args=_upd({"visible": _grouped(None)}))]
             out = [dict(label=f"▸ all {len(fam_groups[fam])} — tick them in the legend",
                         method="update",
-                        args=[{"visible": _family(fam), "showlegend": _legend_for([fam])}, {}])]
+                        args=_upd({"visible": _family(fam), "showlegend": _legend_for([fam])}))]
             for lbl, idx in fam_groups[fam]:
-                out.append(dict(label=lbl, method="update",
-                                args=[{"visible": _isolate(idx)}, {}]))
+                # capped HERE rather than at each site that builds a label, so every occurrence row
+                # is bounded whatever produced it -- a pattern, a trendline, a gap or a level
+                out.append(dict(label=_short(lbl), method="update",
+                                args=_upd({"visible": _isolate(idx)})))
             return out
 
         # ---- menu 1: the families of one timeframe ------------------------------------
@@ -1591,48 +1647,42 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             head = ("▸ every pattern" if wide else f"▸ every {_tf_name(tf)} pattern")
             keep = {fam_lg[f] for f in fams_of.get(tf, ())} if not wide else None
             out = [dict(label=head, method="update",
-                        args=[{"visible": _grouped(keep), "showlegend": _legend_for(None)},
-                              {"updatemenus[2].buttons": _inst_buttons(None),
-                               "updatemenus[2].active": 0}])]
-            if sr_zones and wide:
-                out.append(dict(label="S/R zones", method="update",
-                                args=[{"visible": _grouped({"sr"}),
-                                       "showlegend": _legend_for(None)},
-                                      {"updatemenus[2].buttons": _inst_buttons(None),
-                                       "updatemenus[2].active": 0}]))
+                        args=_upd({"visible": _grouped(keep), "showlegend": _legend_for(None)},
+                                  {"updatemenus[2].buttons": _inst_buttons(None),
+                                   "updatemenus[2].active": 0}))]
             if wide and multi_tf:
                 out.append(dict(label="── pick a timeframe on the left ──", method="update",
-                                args=[{"visible": _grouped(None),
-                                       "showlegend": _legend_for(None)},
-                                      {"updatemenus[2].buttons": _inst_buttons(None),
-                                       "updatemenus[2].active": 0}]))
+                                args=_upd({"visible": _grouped(None),
+                                          "showlegend": _legend_for(None)},
+                                         {"updatemenus[2].buttons": _inst_buttons(None),
+                                          "updatemenus[2].active": 0})))
             for fam in fams:
                 # the label drops the timeframe prefix once a timeframe is selected — it is already
                 # named by the menu to the left, and repeating it just makes every row longer
                 short = fam.split(" · ", 1)[-1] if (not wide and tf is not None) else fam
-                out.append(dict(label=f"{short}  ({len(fam_groups[fam])})", method="update",
-                                args=[{"visible": _family(fam), "showlegend": _legend_for([fam])},
-                                      {"updatemenus[2].buttons": _inst_buttons(fam),
-                                       "updatemenus[2].active": 0}]))
+                out.append(dict(label=_short(f"{short}  ({len(fam_groups[fam])})"), method="update",
+                                args=_upd({"visible": _family(fam), "showlegend": _legend_for([fam])},
+                                          {"updatemenus[2].buttons": _inst_buttons(fam),
+                                           "updatemenus[2].active": 0})))
             return out
 
         # ---- menu 0: the timeframe ----------------------------------------------------
         tf_buttons = [dict(label="▸ all timeframes", method="update",
-                           args=[{"visible": _grouped(None), "showlegend": _legend_for(None)},
-                                 {"updatemenus[1].buttons": _fam_buttons(),
-                                  "updatemenus[1].active": 0,
-                                  "updatemenus[2].buttons": _inst_buttons(None),
-                                  "updatemenus[2].active": 0}])]
+                           args=_upd({"visible": _grouped(None), "showlegend": _legend_for(None)},
+                                     {"updatemenus[1].buttons": _fam_buttons(),
+                                      "updatemenus[1].active": 0,
+                                      "updatemenus[2].buttons": _inst_buttons(None),
+                                      "updatemenus[2].active": 0}))]
         for k in live_tfs:
             n_inst = sum(len(fam_groups[f]) for f in fams_of[k])
             tf_buttons.append(dict(
                 label=f"{_tf_name(k)}   ({len(fams_of[k])} patterns, {n_inst})", method="update",
-                args=[{"visible": _grouped({fam_lg[f] for f in fams_of[k]}),
-                       "showlegend": _legend_for(None)},
-                      {"updatemenus[1].buttons": _fam_buttons(k),
-                       "updatemenus[1].active": 0,
-                       "updatemenus[2].buttons": _inst_buttons(None),
-                       "updatemenus[2].active": 0}]))
+                args=_upd({"visible": _grouped({fam_lg[f] for f in fams_of[k]}),
+                           "showlegend": _legend_for(None)},
+                          {"updatemenus[1].buttons": _fam_buttons(k),
+                           "updatemenus[1].active": 0,
+                           "updatemenus[2].buttons": _inst_buttons(None),
+                           "updatemenus[2].active": 0})))
 
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
@@ -1676,7 +1726,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 if walked:
                     got = "sl@be"     # stopped, but on a stop that had walked to breakeven
                 return dict(label=f"{tid} {sd} {r.cause or '?'}  {r.R:+.2f}R {got}",
-                            method="update", args=[{"visible": _isolate_trade(idx, causes)}, {}])
+                            method="update", args=_upd({"visible": _isolate_trade(idx, causes)}))
 
             # No "all trades" group: every trade is in longs or shorts, and each group's first row
             # already restores all of them. Listing all forty again cost 0.5 MB for nothing, and the
@@ -1691,7 +1741,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             def _trade_buttons(which):
                 rows = [z for z in trade_picker if groups[which](z)]
                 out = [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
-                            args=[{"visible": _all_trades()}, {}])]
+                            args=_upd({"visible": _all_trades()}))]
                 out += [_row(*z) for z in rows]
                 return out
 
@@ -1700,22 +1750,22 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 n = sum(1 for z in trade_picker if groups[g](z))
                 grp_buttons.append(dict(
                     label=f"{g}  ({n})", method="update",
-                    args=[{"visible": _all_trades()},
-                          {"updatemenus[4].buttons": _trade_buttons(g),
-                           "updatemenus[4].active": 0}]))
+                    args=_upd({"visible": _all_trades()},
+                              {"updatemenus[4].buttons": _trade_buttons(g),
+                               "updatemenus[4].active": 0})))
             # 41 rows is 780px of dropdown in a plot area of about 760, and plotly menus clip
             # rather than scroll, so a long list opens on a prompt and the groups on the left are
             # what make every trade reachable.
             def _all_rows():
                 out = [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
-                            args=[{"visible": _all_trades()}, {}])]
+                            args=_upd({"visible": _all_trades()}))]
                 return out + [_row(*z) for z in trade_picker]
 
             opening = (_all_rows() if len(trade_picker) <= 30
                        else [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
-                                  args=[{"visible": _all_trades()}, {}]),
+                                  args=_upd({"visible": _all_trades()})),
                              dict(label="── pick a group on the left ──", method="update",
-                                  args=[{"visible": _all_trades()}, {}])])
+                                  args=_upd({"visible": _all_trades()}))])
             menus.append(dict(buttons=grp_buttons, x=0.60, xanchor="left", **menu))
             menus.append(dict(buttons=opening, x=0.74, xanchor="left", **menu))
 
@@ -1789,7 +1839,20 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         _vs = pd.to_datetime(view_start)
         if _vs.tzinfo is None:
             _vs = _vs.tz_localize("UTC")
+        # AUTOSCALE MUST NOT ESCAPE THE WINDOW. `range` only sets the opening view; the
+        # autoscale button rescales to the DATA, and a trendline fitted through pivots ten days
+        # before the window -- or a 4h gap born 131 days before it -- dragged the chart back to
+        # all of it. `minallowed` bounds the axis itself, so it holds for every layer without
+        # clipping any geometry: a line that genuinely starts before the window keeps its real
+        # slope, it just cannot pull the view off the period you asked for.
         fig.update_xaxes(range=[_vs, t[-1]])
+        try:
+            # Belt: bounds the AXIS, so no layer can pull the view left however it is drawn. Added
+            # in plotly 5.19 and this project's Jupyter kernel runs 5.14, so it must degrade
+            # quietly -- the geometry clipping above is what holds the line there.
+            fig.update_xaxes(autorangeoptions=dict(minallowed=_vs))
+        except (ValueError, TypeError):
+            pass
 
     if y_from_price:
         # scale to the candles, not to whatever geometry hangs off them — see the docstring
