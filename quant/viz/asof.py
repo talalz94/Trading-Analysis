@@ -69,8 +69,13 @@ AS_OF_JS = r"""
     ORIG = {};
     rewindable().forEach(function (i) {
       var t = (gd._fullData && gd._fullData[i]) || gd.data[i];
+      // FILL COMES FROM gd.data, NOT _fullData. plotly only computes full defaults for traces it
+      // has drawn, and every isolatable gap is built `visible:false` -- so _fullData[i].fill was
+      // UNDEFINED for all 41 of them, they were classed as lines, and picking one gap out of the
+      // dropdown and rewinding collapsed it to a degenerate sliver. The spec always has it.
+      var spec = gd.data[i] || t;
       ORIG[i] = { x: arr(t.x), y: arr(t.y), cd: t.customdata ? arr(t.customdata) : null,
-                  box: t.fill === 'toself' };
+                  box: spec.fill === 'toself' || t.fill === 'toself' };
     });
   }
 
@@ -143,6 +148,25 @@ AS_OF_JS = r"""
     return { x: ox, y: oy, cd: cd ? ocd : null };
   }
 
+  // How many trades exist at the cut. The trade picker and the rewind are two controls over the
+  // same traces, and when a trade has not happened yet its row draws nothing -- which reads as a
+  // broken dropdown rather than as "that trade is in your future". Counting them is the cheapest
+  // honest answer.
+  function tradeCount() {
+    var total = 0, live = 0;
+    rewindable().forEach(function (i) {
+      var t = gd.data[i];
+      // the ENTRY markers only. Counting every marker in the `trades` group counts exits too and
+      // reports "16 trades" for eight.
+      if (!t || !/^(long|short) entries/.test(String(t.name || ''))) { return; }
+      total += (ORIG && ORIG[i] ? ORIG[i].x : arr(t.x)).filter(function (v) {
+        return v !== null && v !== undefined; }).length;
+      live += arr((gd._fullData && gd._fullData[i] || t).x).filter(function (v) {
+        return v !== null && v !== undefined; }).length;
+    });
+    return { total: total, live: live };
+  }
+
   function apply(cut, rawX) {
     snapshot();
     var idx = rewindable(), X = [], Y = [], C = [], any = false;
@@ -206,9 +230,11 @@ AS_OF_JS = r"""
     var raw = (fd && fd.x && p.pointIndex !== undefined && p.pointIndex !== null)
       ? fd.x[p.pointIndex] : p.x;
     atX = ms(raw);
-    note.textContent = 'as of ' + new Date(atX).toISOString().slice(0, 16).replace('T', ' ')
-                     + ' UTC';
     apply(atX, raw);
+    var tc = tradeCount();
+    note.textContent = 'as of ' + new Date(atX).toISOString().slice(0, 16).replace('T', ' ')
+                     + ' UTC \u00b7 ' + tc.live + ' of ' + tc.total + ' trades so far'
+                     + (tc.live < tc.total ? ' (the rest are hidden \u2014 press live)' : '');
   });
 })();
 """

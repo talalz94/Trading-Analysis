@@ -1004,3 +1004,53 @@ def test_tl_once_per_line_is_off_by_default(mtf):
     from quant.scenarios.entries import _MTF_TL_DEFAULTS
 
     assert _MTF_TL_DEFAULTS["tl_once_per_line"] is False
+
+
+def test_tl_confirm_n_waits_for_a_candle_that_repeats_the_move(mtf):
+    """A break candle that is huge next to its neighbours and closes a whole new body beyond the
+    line looks decisive and is exactly the shape that gets swept -- entering on its close is
+    entering at the worst price. The confirmation asks the market to do it again: within n chart
+    candles, one of the TRADE'S OWN COLOUR must close beyond the WHOLE trigger candle."""
+    from quant.scenarios.entries import _tl_entry
+
+    _, _, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=1, tl_full_m=0, tl_touch_k=0,
+             tl_combine="all")
+    plain = _tl_entry(p, "short")(D)
+    waited = _tl_entry(dict(p, tl_confirm_n=3), "short")(D)
+    assert plain.any(), "the fixture produced no breaks at all"
+    assert waited.sum() <= plain.sum(), "confirmation can only remove or move entries"
+
+    o = D["open"].to_numpy(float); c = D["close"].to_numpy(float); lo = D["low"].to_numpy(float)
+    for j in np.flatnonzero(waited):
+        assert c[j] < o[j], "a short confirmation candle must be RED"
+        prior = np.flatnonzero(plain[max(0, j - 3):j]) + max(0, j - 3)
+        assert len(prior), f"bar {j} confirmed nothing within the window"
+        assert any(c[j] < lo[i] for i in prior), "it must close below the WHOLE trigger candle"
+
+
+def test_tl_confirm_n_is_off_by_default_and_changes_nothing_at_zero(mtf):
+    from quant.scenarios.entries import _MTF_TL_DEFAULTS, _tl_entry
+
+    assert _MTF_TL_DEFAULTS["tl_confirm_n"] == 0
+    _, _, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_close_n=1, tl_combine="all")
+    assert np.array_equal(_tl_entry(p, "short")(D), _tl_entry(dict(p, tl_confirm_n=0), "short")(D))
+
+
+def test_a_confirmed_trade_still_names_the_line_it_broke(mtf):
+    """The line is retired at the break, so a DELAYED entry lands on a bar where its id is already
+    gone -- every confirmed trade was labelled `15m.?` until the id was held for the trigger's own
+    window PLUS the confirmation wait."""
+    from quant.scenarios import run_pieces
+    from quant.scenarios.entries import trendline_trigger
+
+    _, _, D = mtf
+    p = dict(tl_prefixes=("", "5min__"), tl_tf_names={"": "1m", "5min__": "5m"},
+             tl_close_n=1, tl_full_m=0, tl_touch_k=0, tl_combine="all", tl_confirm_n=3,
+             stop_n=20, be_at_rr=0, tp_rr=3.0)
+    r = run_pieces(D, "mtf_trendline_short@v1", "high_of_n@v1", "be_ladder@v1",
+                   params=p, cfg=dict(initial_cash=10_000, exit_enabled=False))
+    t = trendline_trigger(r.df, r.trades, p, prefix_names=p["tl_tf_names"])
+    if len(t):
+        assert not any("?" in str(c) for c in t["cause"]), list(t["cause"])

@@ -150,6 +150,7 @@ def test_notebook_19_states_no_setting_of_its_own():
              'TL_CLOSE_N', 'TL_FULL_M', 'TL_TOUCH_K', 'TL_DIR_N', 'TL_DIR_SRC',
              'TL_DIR_FULL_N', 'TL_EXTEND', 'TL_COMBINE', 'TL_TOL_ATR', 'TRADE_LONG',
              'TRADE_SHORT', 'STOP_N', 'STOP_BUFFER_PCT', 'BE_AT_RR', 'TP_RR',
+             'TL_CONFIRM_N', 'FVG_RULES', 'REWIND', 'AS_OF', 'TL_ONCE_PER_LINE',
              'USE_RETEST_BAIL', 'SEC_TOUCH_N', 'SEC_WRONG_M', 'SEC_OPP_N', 'SEC_MIN_PCT',
              'SEC_REPLACE_TP'}
     offenders = []
@@ -284,7 +285,9 @@ def test_notebook_20_config_is_a_copy_of_19s_plus_the_rewind_settings():
     kb = {k: v for k, v in b.items() if k.isupper()}
     drifted = [k for k in ka if repr(ka[k]) != repr(kb.get(k))]
     assert not drifted, f"notebook 20 no longer matches 19 on: {drifted}"
-    assert set(kb) - set(ka) == {"REWIND", "AS_OF"}, sorted(set(kb) - set(ka))
+    # notebook 20 owns the point-in-time tool AND the two entry conditions built alongside it;
+    # everything else must still match 19 exactly
+    assert set(kb) - set(ka) == {"REWIND", "AS_OF", "TL_CONFIRM_N", "FVG_RULES"},         sorted(set(kb) - set(ka))
 
 
 def test_notebook_20_opens_the_chart_with_the_rewind_script():

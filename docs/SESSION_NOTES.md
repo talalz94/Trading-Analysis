@@ -1720,3 +1720,54 @@ The gap is `high[18:55] < low[18:45]` → a band of **19.61 points, 0.059 ATR** 
 rallied back and ate all but a sliver of the space the drop had opened. At `FVG_MIN_SIZE_ATR = 0.50`
 it is filtered at detection, correctly; it was also mitigated six bars later. Set the gate to 0 to
 see gaps like it, at the cost of ~2,000 gaps on 5m.
+
+---
+
+## Two rewind bugs, both in the same blind spot
+
+**Isolatable gaps rewound into a sliver.** The box/line dispatch read `gd._fullData[i].fill`, and
+plotly only computes full defaults for traces it has actually drawn — every isolatable gap is built
+`visible:false`, so `fill` was **undefined for all 41 of them** and they were clipped as polylines.
+Pick one gap out of the dropdown, rewind, and it collapsed. `gd.data[i]` (the spec) always has it.
+After: 26 polygons across the cut, **0 collapsed, 0 heights changed**.
+
+**The trade picker looked broken while rewound.** It was not — the trades had not happened yet, so
+every row drew nothing and nothing said so. Stress-tested across three rounds of rewind/pick/live:
+zero JS errors, picker recovering every time. The fix is legibility. The readout now reads
+`as of 2026-06-02 00:00 UTC · 2 of 8 trades so far (the rest are hidden — press live)`, counting
+ENTRY markers only — counting everything in the `trades` legendgroup counts exits too and reported
+"16 trades" for eight.
+
+No FVG box ever extended, on any layer or any cut: 0 of 153 grew, 73 shrank, 80 unchanged. An
+earlier scan that appeared to show 36 extended S/R segments was my own matching bug — several
+revisions share a start bar, so keying by start alone matched the wrong one.
+
+## How long after a break can a trade still fire?
+
+`hold = max(tl_close_n, tl_full_m, tl_dir_n, tl_dir_full_n)` bars **of the line's own timeframe**.
+At the current config (all 1) that is one bar: 5 minutes for a 5m line, 15 for a 15m, 60 for a 1h.
+Measured on the eight live trades, **every one fired while its line was still live** — the hold is
+never reached, because `TL_CLOSE_N = 1` puts the entry on the break bar itself.
+
+The entry rule (`EMA_15m_100`) does not widen this: it is ANDed on the same bar, so if it fails
+there the trade is simply not taken — it cannot wait. Raising `TL_CLOSE_N` does not give a waiting
+window either; it asks for **n consecutive closes** beyond the line, a different condition.
+`TL_CONFIRM_N` is the setting that actually means "within n bars".
+
+## TL_CONFIRM_N — wait for the move to repeat itself
+
+A break candle that is huge next to its neighbours and closes a whole new body beyond the line looks
+decisive, and is exactly the shape that gets swept back, so its close is the worst price of the
+move. `TL_CONFIRM_N = n` asks the market to do it again: within n chart candles one candle must be
+the **trade's own colour** AND close beyond the **whole** trigger candle (below its low for a
+short). The entry is on that close; no confirmation in the window means no trade.
+
+Beyond the trigger's low rather than its close, deliberately — the point is a fresh body clear of
+the entire bar, and closing back inside its range IS the sweep.
+
+One thing it breaks if you are not careful: the line is retired at the break, so a delayed entry
+lands on a bar where the line's id is already gone and every confirmed trade is labelled `15m·?`.
+The id is now held for the trigger's own window **plus** the wait. The LEVEL hold is deliberately
+not extended — that would let the break itself fire later, which is a different change.
+
+On this window (8 trades, so read nothing into it): `n=2` → 6 trades, `n=3` and `n=5` → 7.

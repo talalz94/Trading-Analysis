@@ -139,7 +139,7 @@ def test_the_script_reads_the_figure_and_bails_out_when_there_is_nothing_to_do()
 
 
 def test_the_script_is_small_enough_to_inline_everywhere():
-    assert len(AS_OF_JS) < 8000, f"{len(AS_OF_JS)} bytes of injected script"
+    assert len(AS_OF_JS) < 12000, f"{len(AS_OF_JS)} bytes of injected script"
 
 
 def test_the_cut_comes_from_the_points_own_data_value_not_the_formatted_click():
@@ -162,6 +162,10 @@ def test_a_gap_box_is_clamped_not_truncated():
     only shortens it, which is what the tool is for: the height never depends on where you click."""
     assert "function clipBox(" in AS_OF_JS
     assert "o.box ? clipBox(" in AS_OF_JS, "the two clips must be dispatched on the trace's fill"
-    assert "box: t.fill === 'toself'" in AS_OF_JS, "a filled polygon has to be recognised as one"
+    # read from gd.data, NOT _fullData: plotly only computes full defaults for traces it has
+    # drawn, and every isolatable gap is built visible:false -- so _fullData[i].fill was undefined
+    # for all of them and each one rewound into a degenerate sliver
+    assert "spec.fill === 'toself'" in AS_OF_JS, "a filled polygon has to be recognised as one"
+    assert "var spec = gd.data[i]" in AS_OF_JS, "fill must come from the trace spec"
     # the line path must still INTERPOLATE, or a clipped trendline would tilt
     assert "q.y + f * (p.y - q.y)" in AS_OF_JS

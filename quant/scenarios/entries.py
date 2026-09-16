@@ -534,6 +534,8 @@ _MTF_TL_DEFAULTS = {
     "tl_dir_src": "chart",         # "chart" = the frame you execute on; "line" = the line's own
     "tl_extend": True,             # carry a held line along its OWN SLOPE, not flat
     "tl_once_per_line": False,     # True: a given line may trigger only its FIRST entry
+    "tl_confirm_n": 0,             # wait up to n CHART candles for one of the trade's own
+                                   #   colour to close beyond the trigger candle. 0 = off
     "tl_combine": "all", "tl_tol_atr": 0.0, "tl_atr_period": 14,
 }
 
@@ -678,9 +680,46 @@ def _tl_entry(p: dict, side: str) -> Cond:
                         keep[i] = True
                     hit = keep
             fired |= hit
+        cn = int(p.get("tl_confirm_n", 0) or 0)
+        if cn > 0:
+            fired = _confirm_beyond(fired, df["open"].to_numpy(float),
+                                    df["high"].to_numpy(float), df["low"].to_numpy(float),
+                                    df["close"].to_numpy(float), side, cn)
         return fired
 
     return raw(fn, f"mtf_trendline_{side}")
+
+
+def _confirm_beyond(fired: np.ndarray, o: np.ndarray, h: np.ndarray, lo: np.ndarray,
+                    c: np.ndarray, side: str, n: int) -> np.ndarray:
+    """Move each trigger forward to the first candle that CONFIRMS it, or drop it.
+
+    The case this is for: a break candle that is huge relative to its neighbours and closes a whole
+    new body beyond the line. It looks decisive and is exactly the shape that gets swept back --
+    entering on its close is entering at the worst price of the move. So instead of taking that
+    close, wait for the market to do it again:
+
+        within the next `n` CHART candles, one candle must be the TRADE'S OWN COLOUR and close
+        beyond the whole trigger candle -- below its LOW for a short, above its HIGH for a long
+
+    The entry then happens on THAT candle's close, not the break's. No confirmation inside the
+    window means no trade: the move did not repeat itself, which was the whole question.
+
+    Beyond the trigger candle's LOW/HIGH rather than its close, because the point is a fresh body
+    clear of the whole bar -- closing back inside its range is the sweep, not the continuation.
+    """
+    out = np.zeros(len(fired), bool)
+    if n <= 0:
+        return fired.copy()
+    right_colour = (c < o) if side == "short" else (c > o)
+    last = len(fired) - 1
+    for i in np.flatnonzero(fired):
+        for j in range(i + 1, min(last, i + n) + 1):
+            beyond = (c[j] < lo[i]) if side == "short" else (c[j] > h[i])
+            if right_colour[j] and beyond:
+                out[j] = True
+                break
+    return out
 
 
 def _run_of(flags: np.ndarray, n: int) -> np.ndarray:
@@ -699,7 +738,10 @@ MTF_TRENDLINE = _both(
     description=("break of a FITTED trendline from any timeframe -- long through resistance, short "
                  "through support. Levels must already be on the frame "
                  "(quant.indicators.mtf_trendlines). tl_close_n / tl_full_m / tl_touch_k accept a "
-                 "dict keyed by timeframe, so each one can wait a different number of candles."),
+                 "dict keyed by timeframe, so each one can wait a different number of candles. "
+                 "tl_confirm_n moves the entry OFF the break candle: within n chart candles one of "
+                 "the trade's own colour must close beyond the whole trigger candle, or the trade "
+                 "is skipped."),
     defaults=_MTF_TL_DEFAULTS, prepare_keys=())
 
 
@@ -722,7 +764,7 @@ def trendline_trigger(df: pd.DataFrame, trades: pd.DataFrame, params: dict,
     held = {}
     for p_ in tuple(params.get("tl_prefixes") or ("",)):
         hold = max(tl_per_tf(params, "tl_close_n", p_), tl_per_tf(params, "tl_full_m", p_),
-                   tl_per_tf(params, "tl_dir_full_n", p_)) - 1
+                   tl_per_tf(params, "tl_dir_full_n", p_)) - 1             + int(params.get("tl_confirm_n", 0) or 0)
         for w in ("res", "sup"):
             col = f"{p_}tl_{w}_n"
             if col not in df.columns:
