@@ -13,11 +13,12 @@ from .charts import equity_and_drawdown, price_and_trades
 from .responsive import ResearchChart, equity_chart, price_chart, _HAVE_RESAMPLER
 from .heatmaps import hour_weekday_heatmap, monthly_returns_heatmap, sweep_heatmap
 from .export import heikin_ashi_candles, open_in_browser
+from .asof import AS_OF_JS
 from .studies import add_pattern_overlays, mtf_ema_timeframes, pattern_contact_sheet, pattern_figure, scenario_figure, squeeze_momentum_figure, studies_figure, zoom_to_trade, CROSSHAIR_JS
 
 __all__ = [
     "ResearchChart", "price_chart", "equity_chart",
     "price_and_trades", "equity_and_drawdown", "_HAVE_RESAMPLER",
     "monthly_returns_heatmap", "hour_weekday_heatmap", "sweep_heatmap",
-    "heikin_ashi_candles", "open_in_browser", "mtf_ema_timeframes", "scenario_figure", "add_pattern_overlays", "pattern_figure", "pattern_contact_sheet", "zoom_to_trade", "squeeze_momentum_figure", "studies_figure", "CROSSHAIR_JS",
+    "heikin_ashi_candles", "open_in_browser", "mtf_ema_timeframes", "AS_OF_JS", "scenario_figure", "add_pattern_overlays", "pattern_figure", "pattern_contact_sheet", "zoom_to_trade", "squeeze_momentum_figure", "studies_figure", "CROSSHAIR_JS",
 ]

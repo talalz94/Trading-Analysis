@@ -98,6 +98,20 @@ If Jupyter offers **"File Changed"** on a config, the answer is **Reload**, neve
 
 ---
 
+## Making a copy of a notebook
+
+Notebook 20 is notebook 19 plus one feature. The copy is only worth having while it stays a copy, so
+generate the config **from** the original rather than by hand, and let a test hold it there:
+
+```python
+drifted = [k for k in ka if repr(ka[k]) != repr(kb.get(k))]
+assert not drifted
+assert set(kb) - set(ka) == {"REWIND", "AS_OF"}     # exactly the new settings, nothing else
+```
+
+`test_notebook_20_config_is_a_copy_of_19s_plus_the_rewind_settings` is that test. Without it the two
+drift apart over a few sessions and the comparison the copy exists for stops meaning anything.
+
 ## Building a notebook
 
 Build scripts live in the scratchpad, not the repo — they are throwaway. The generated `.ipynb` is
@@ -116,6 +130,7 @@ library is a screenshot of something that no longer happens.
 
 | notebook | config | what it is for |
 |---|---|---|
+| `20_rewind` | `nb20_config.py` | 19's chart + the point-in-time tool; its config is a tested copy of 19's |
 | `19_fvg_viewer` | `nb19_config.py` | fair value gaps from several timeframes + the FVG veto, run with and without |
 | `18_trendline_trading_sim` | `nb18_config.py` | multi-timeframe trendline breaks, traded |
 | `17_multi_timeframe_patterns` | — | chart patterns from several timeframes on one chart |

@@ -458,7 +458,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    fvgs: bool = False, fvg_kwargs=None, fvg_frames=None, tf_fvgs=None,
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
                    fvg_show=("bull", "bear"),
-                   sr_frames=None, tf_sr=None, max_sr_picker: int = 6):
+                   sr_frames=None, tf_sr=None, max_sr_picker: int = 6,
+                   rewind: bool = False):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -1268,7 +1269,13 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             # ONE line per zone at its CURRENT level. A zone emits a row per price revision, so
             # drawing every row stacks a zone's whole history of slightly-different levels on the
             # chart — 1,366 segments for 40 zones. The last revision is the level in force.
-            zt = zt.sort_values("end_i").groupby("zone", as_index=False).tail(1)
+            #
+            # EXCEPT WHEN REWINDING. "The level in force" means TODAY's, painted across the whole
+            # window — a quiet lookahead when the point is to see what was known at some past bar.
+            # Keeping every revision as its own segment lets the rewind clip pick the one that was
+            # live then, with no special-casing in the tool.
+            if not rewind:
+                zt = zt.sort_values("end_i").groupby("zone", as_index=False).tail(1)
             zt = zt[zt["price"].between(_lo - _pad, _hi + _pad)]
         if not len(zt):
             return 0
@@ -1293,17 +1300,21 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         for r in zt.itertuples():
             # drawn across the whole visible window: a level established earlier is still the level
             x_from = tv[0] if r.start_i < lv else (tl_[int(r.start_i)] + step)
+            # a REVISION ends where the next one begins; only the last one runs to the right edge
+            x_to = tv[-1]
+            if rewind and int(r.end_i) < len(tl_) - 1:
+                x_to = min(tv[-1], tl_[int(r.end_i)] + step)
             tag = "\u00b7".join((tf_nm, "Z%d" % int(r.zone)))
             txt = ("<b>%s</b>  S/R<br>%s<br>%d touches" % (tag, format(r.price, ",.2f"),
                                                            int(r.touches)))
-            xs += [x_from, tv[-1], None]
+            xs += [x_from, x_to, None]
             ys += [r.price, r.price, None]
             cd += [txt, txt, txt]
             hx.append(tv[len(tv) // 2] if len(tv) else x_from)
             hy.append(r.price)
             hc.append(txt)
             if r.zone in pick:
-                per_zone.append((tag, label, [x_from, tv[-1]], [r.price, r.price], txt,
+                per_zone.append((tag, label, [x_from, x_to], [r.price, r.price], txt,
                                  pd.Timestamp(str(x_from)).value, int(r.touches)))
 
         _mine = sr_layer_ix.setdefault(tf_nm, [])
@@ -1833,6 +1844,21 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
     if menus:
         fig.update_layout(updatemenus=menus)
+
+    if rewind:
+        # WHICH TRACES THE REWIND MAY CLIP: everything with a birth — gaps, levels, trendlines and
+        # trades. Not the candles (they are the clock), not the EMAs (a step line has no birth and
+        # clipping it would just truncate the chart's own context). Stored as indices on the layout
+        # so the browser script needs no second payload and the figure carries its own tool.
+        # A DENY-LIST, not an allow-list. Naming the rewindable kinds missed the per-trade
+        # entry/stop/target traces, which carry neither a name nor a legendgroup -- and the next
+        # layer added would have been missed too. Two things are excluded and both for a reason:
+        #   candles  are the clock, and you want to SEE what happened after the bar you picked
+        #   EMAs     are context with no birth; a truncated step line reads as a broken indicator
+        _rw = [_i for _i, _t in enumerate(fig.data)
+               if _t.type != "candlestick"
+               and not (getattr(_t, "legendgroup", "") or "").startswith(("ema", "mtfema"))]
+        fig.update_layout(meta={"rewind": _rw})
 
     if view_start is not None:
         # the data before this is WARM-UP: it feeds the zones, lines and EMAs but is not shown

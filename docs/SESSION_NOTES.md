@@ -1568,3 +1568,65 @@ properties, and check that nbconvert actually **wrote** before trusting a clean 
   while the 15m line was still live because its own timeframe never closed through it. Both are
   labelled `15m·R8`, which is what reads as a duplicate. `tl_once_per_line` (default **off**) spends
   a line on its first entry.
+
+---
+
+## Kernel upgraded to the interpreter the tests actually use
+
+`~/AppData/Roaming/jupyter/kernels/python3` now points at `C:\Python313\python.exe`, overriding the
+system kernelspec that came with Python 3.9. Before: notebooks ran **3.9 / pandas 1.5.3 / numpy
+1.23.5 / numba 0.53.1 / plotly 5.14.1**; tests ran **3.13 / 2.3.3 / 2.3.3 / 0.62.1 / 6.3.1**.
+
+Checked before touching anything, by running the same computation under both and comparing:
+
+```
+                  kernel 3.9                repo 3.13
+close_sum         864754757.890000    ==    864754757.890000
+gaps 1128         top/bot/dead sums   ==    identical
+zones 133         8344662.529556      ==    8344662.529556
+trades 8          R_sum 6.994632      ==    6.994632, same causes in order
+```
+
+**No number moved.** What changed is speed — figure build **5,220 ms → 2,093 ms** (~2.5×), the full
+lab 1,275 → 998 ms; data load and detection were already noise. The old kernelspec is preserved in
+the backup under `_jupyter_kernels_backup/python3_py39_ORIGINAL`.
+
+The real argument was never speed: 514 tests all ran on 3.13, so **nothing tested the configuration
+the notebooks were actually using**. That blind spot is what produced the `autorangeoptions` break.
+
+### A failed nbconvert leaves the old outputs in place
+
+When that plotly call raised, nbconvert never wrote the file — so a script that opened the notebook
+and looked for error outputs read the *previous, successful* run and reported clean. Check that
+nbconvert **wrote** before trusting a green notebook.
+
+## Rewind: one clip does every shape
+
+`quant/viz/asof.py`. Arm the button, click a candle, and everything derived snaps back to what was
+knowable there. It works because the data was already causal — every artefact carries its own birth,
+so rewinding is a **filter over what is already true**, not a reconstruction.
+
+The whole tool is one operation: *drop segments starting after k, clip the rest at k with y
+interpolated*. Every trace here is `None`-separated segments, so that single rule handles all of it
+with nothing special-cased — a gap box ends at k (so one **mitigated later still reads open**, which
+is the entire point), a trendline keeps its slope, a later trade disappears. Candles and EMAs are
+left running deliberately: you study a bar to see what happened next.
+
+Three things worth keeping:
+
+- **A deny-list, not an allow-list.** Naming the rewindable kinds missed the per-trade
+  entry/stop/target traces, which carry neither a name nor a legendgroup — and the next layer added
+  would have been missed too. "Everything except the candles and the EMAs" cannot rot.
+- **plotly.py 6 base64-encodes numeric columns**, so `gd.data[i].y` is not always an array —
+  three trade-marker traces arrived as `{dtype, bdata}` and `.slice()` threw. `gd._fullData[i]` is
+  plotly's decoded copy, where the same column is a `Float64Array`.
+- **The S/R lookahead this exposed.** `sr_zone_table` emits a row per price revision and the normal
+  chart draws only the LAST — today's level painted across the whole window. Harmless live, a quiet
+  lookahead when studying history, so `rewind=True` keeps every revision and the clip picks the one
+  that was live.
+
+Verified by driving a real chart in a browser: 345 rewindable traces, **0 left past the cut**,
+candles and EMAs still running, the marker drawn, and `live` restoring exact point counts.
+
+`AS_OF` is the other half and cost almost nothing: since every detector is causal, **an earlier END
+is a point-in-time run**. Slower and not clickable, but nothing is filtered and it works inline.

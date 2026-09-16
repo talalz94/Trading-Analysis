@@ -13,6 +13,9 @@ import re
 
 import pytest
 
+# what an assignment looks like, in one place so every notebook is judged the same
+SETTING_RE = r"\s*([A-Z][A-Z0-9_]*)\s*(?:,\s*[A-Z][A-Z0-9_]*\s*)*=[^=]"
+
 NB = pathlib.Path(__file__).resolve().parents[1] / "notebooks" / "18_trendline_trading_sim.ipynb"
 CFG = NB.parent / "nb18_config.py"
 
@@ -49,7 +52,7 @@ def test_the_notebook_states_no_setting_of_its_own():
         if c["cell_type"] != "code":
             continue
         for line in "".join(c["source"]).splitlines():
-            m = re.match(r"\s*([A-Z][A-Z0-9_]*)\s*(?:,\s*[A-Z][A-Z0-9_]*\s*)*=[^=]", line)
+            m = re.match(SETTING_RE, line)
             if not m:
                 continue
             names = set(re.findall(r"[A-Z][A-Z0-9_]*", line.split("=")[0]))
@@ -238,3 +241,54 @@ def test_the_lab_loads_a_frame_for_every_timeframe_an_ema_names():
     elsewhere = set(ns["LINE_TFS"]) | set(ns["FVG_TFS"]) | set(ns.get("SR_TFS", ()))
     assert named - elsewhere, ("nb19's MTF_EMAS no longer names a timeframe outside the other "
                                "settings, so this guards nothing")
+
+
+# ---------------------------------------------------------------------------
+# notebook 20 — the rewind copy. Same two rules; plus it must stay a COPY.
+# ---------------------------------------------------------------------------
+NB20 = NB.parent / "20_rewind.ipynb"
+CFG20 = NB.parent / "nb20_config.py"
+
+
+def _cells20():
+    return json.loads(NB20.read_text(encoding="utf-8"))["cells"]
+
+
+def test_notebook_20_states_no_setting_and_defines_no_function():
+    import ast
+
+    bad = []
+    for c in _cells20():
+        if c["cell_type"] != "code":
+            continue
+        src = "".join(c["source"])
+        for line in src.splitlines():
+            if re.match(SETTING_RE, line):
+                bad.append("assigns: " + line.strip())
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        bad += ["defines: " + n.name for n in tree.body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    assert not bad, bad
+
+
+def test_notebook_20_config_is_a_copy_of_19s_plus_the_rewind_settings():
+    """The point of notebook 20 is that ONLY the rewind differs. If the trading settings drift
+    apart the two notebooks stop being comparable and the copy has no reason to exist."""
+    a, b = {}, {}
+    exec(compile(CFG19.read_text(encoding="utf-8"), str(CFG19), "exec"), a)
+    exec(compile(CFG20.read_text(encoding="utf-8"), str(CFG20), "exec"), b)
+    ka = {k: v for k, v in a.items() if k.isupper()}
+    kb = {k: v for k, v in b.items() if k.isupper()}
+    drifted = [k for k in ka if repr(ka[k]) != repr(kb.get(k))]
+    assert not drifted, f"notebook 20 no longer matches 19 on: {drifted}"
+    assert set(kb) - set(ka) == {"REWIND", "AS_OF"}, sorted(set(kb) - set(ka))
+
+
+def test_notebook_20_opens_the_chart_with_the_rewind_script():
+    src = chr(10).join("".join(c["source"]) for c in _cells20()
+                       if c["cell_type"] == "code")
+    assert "extra_js=AS_OF_JS" in src, (
+        "the tool only exists in the browser tab, so the script has to be injected there")
