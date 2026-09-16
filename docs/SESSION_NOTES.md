@@ -1660,3 +1660,63 @@ the only thing still drawn to the right is the candlestick trace — which is th
 
 **The general lesson:** a browser feature is not verified until it has been clicked in a browser.
 Both bugs in this tool (the base64 columns and this one) were invisible to the Python side.
+
+---
+
+## Autoscale jumped to the year 2000: `minallowed` must be epoch milliseconds
+
+`xaxis.autorangeoptions.minallowed` was being written as a date STRING
+(`"2026-06-01T00:00:00+00:00"`, straight from the pandas Timestamp). plotly.js cannot compare a
+string there — autorange produced **no valid range at all** and the axis fell back to its empty-date
+default, which is `2000-01-01 .. 2001-01-01`. Pressing Autoscale threw the chart 26 years into the
+past and the only way back was a page reload.
+
+Every string form fails; only the number works. Measured in the browser:
+
+```
+"2026-06-01T00:00:00+00:00"  ->  ["2000-01-01", "2001-01-01"]
+"2026-06-01T00:00:00"        ->  ["2000-01-01", "2001-01-01"]
+"2026-06-01"                 ->  ["2000-01-01", "2001-01-01"]
+Date.UTC(2026, 5, 1)         ->  ["2026-06-01", "2026-06-10 05:27"]   correct
+```
+
+Now `int(pd.Timestamp(_vs).value // 1_000_000)`, with a test asserting the type.
+
+## A rewound gap box collapsed into a line: a polygon is not a polyline
+
+The generic clip walked each `None`-separated segment to the cut and stopped. That is right for a
+line, and wrong for a **closed polygon**: a gap is `[x0,x1,x1,x0,x0] x [bot,bot,top,top,bot]`, so
+truncating at the cut kept only the first edge — the bottom — and every rewound gap drew as a flat
+line at its lower boundary.
+
+Two clips now, dispatched on `fill === 'toself'`:
+
+- **line — TRUNCATE**, interpolating y onto the cut. Moving x without recomputing y would tilt a
+  trendline, which is worse than not clipping.
+- **box — CLAMP** each vertex back to the cut. The polygon stays closed, so the box keeps the gap's
+  real height and only gets shorter. Verified on a box spanning the cut: 5 vertices, 2 distinct y
+  levels, height 356.03 preserved, drawn 05:45 → 06:10.
+
+## Button rows that lied about the chart
+
+Both timeframe rows opened highlighting **all** while `START_VISIBLE = ("trades",)` meant every gap
+and level layer started `legendonly`. `_row_active` now reads the traces' initial visibility: all
+visible → `all`, none visible → `none`, mixed → `-1` (highlight nothing) rather than name a button
+that is not true.
+
+## "That big candle should have left an FVG" — why it did not
+
+Trade #04's entry candle (2026-06-05 18:50, a 578-point red bar) looks like it must have gapped.
+It did not, and the reason is worth keeping: **a fair value gap is the space between the candle's
+NEIGHBOURS, not the size of the candle itself.**
+
+```
+18:45   low  59,669.60      <- the first candle's low
+18:50   the displacement candle, close 59,207.42
+18:55   high 59,649.99      <- the third candle wicked almost all the way back up
+```
+
+The gap is `high[18:55] < low[18:45]` → a band of **19.61 points, 0.059 ATR** — the 18:55 candle
+rallied back and ate all but a sliver of the space the drop had opened. At `FVG_MIN_SIZE_ATR = 0.50`
+it is filtered at detection, correctly; it was also mitigated six bars later. Set the gate to 0 to
+see gaps like it, at the cost of ~2,000 gaps on 5m.

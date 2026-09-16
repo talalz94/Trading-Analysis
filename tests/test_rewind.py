@@ -153,3 +153,15 @@ def test_the_cut_comes_from_the_points_own_data_value_not_the_formatted_click():
     assert "x0: rawX, x1: rawX" in AS_OF_JS, "the as-of line must be drawn at the raw x"
     assert "new Date(cut), x1: new Date(cut)" not in AS_OF_JS
     assert "UTC" in AS_OF_JS, "the readout should say which zone it is quoting"
+
+
+def test_a_gap_box_is_clamped_not_truncated():
+    """The bug: a gap is the closed polygon [x0,x1,x1,x0,x0] x [bot,bot,top,top,bot], and clipping
+    it like a polyline keeps only the first edge -- the bottom -- so every rewound gap collapsed
+    into a flat line. Clamping each vertex back to the cut keeps a box of the gap's REAL height and
+    only shortens it, which is what the tool is for: the height never depends on where you click."""
+    assert "function clipBox(" in AS_OF_JS
+    assert "o.box ? clipBox(" in AS_OF_JS, "the two clips must be dispatched on the trace's fill"
+    assert "box: t.fill === 'toself'" in AS_OF_JS, "a filled polygon has to be recognised as one"
+    # the line path must still INTERPOLATE, or a clipped trendline would tilt
+    assert "q.y + f * (p.y - q.y)" in AS_OF_JS
