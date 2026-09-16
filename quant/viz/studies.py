@@ -437,6 +437,20 @@ def _short(label, n=34):
     return label if len(label) <= n else label[:n - 1].rstrip() + "\u2026"
 
 
+def _row_active(fig, idx, n_buttons):
+    """Which button in an `all | ...timeframes... | none` row reflects the CURRENT state.
+
+    A row that opens on "all" while every layer is `legendonly` is simply lying about the chart.
+    Mixed states highlight nothing (-1) rather than pick a button that is not true.
+    """
+    vis = [fig.data[i].visible for i in idx]
+    if all(v is True for v in vis):
+        return 0
+    if not any(v is True for v in vis):
+        return n_buttons - 1          # the trailing "none"
+    return -1
+
+
 def _rgba(hexc, alpha):
     """#rrggbb -> an rgba() string. A box needs a fill far more transparent than its border."""
     h = hexc.lstrip("#")
@@ -1798,7 +1812,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         _fvg_btn.append(dict(label="none", method="restyle",
                              args=[{"visible": ["legendonly"] * len(_all_ix)}, _all_ix]))
         menus.append(dict(
-            type="buttons", direction="right", showactive=True, active=0,
+            type="buttons", direction="right", showactive=True,
+            active=_row_active(fig, _all_ix, len(_fvg_btn)),
             x=0.0, xanchor="left", y=1.105, yanchor="top",
             bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
             font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2),
@@ -1818,7 +1833,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         _sr_btn.append(dict(label="none", method="restyle",
                             args=[{"visible": ["legendonly"] * len(_all_sr)}, _all_sr]))
         menus.append(dict(
-            type="buttons", direction="right", showactive=True, active=0,
+            type="buttons", direction="right", showactive=True,
+            active=_row_active(fig, _all_sr, len(_sr_btn)),
             x=0.0, xanchor="left", y=1.165, yanchor="top",
             bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
             font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2),
@@ -1873,10 +1889,18 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         # slope, it just cannot pull the view off the period you asked for.
         fig.update_xaxes(range=[_vs, t[-1]])
         try:
-            # Belt: bounds the AXIS, so no layer can pull the view left however it is drawn. Added
-            # in plotly 5.19 and this project's Jupyter kernel runs 5.14, so it must degrade
-            # quietly -- the geometry clipping above is what holds the line there.
-            fig.update_xaxes(autorangeoptions=dict(minallowed=_vs))
+            # Belt: bounds the AXIS, so no layer can pull the view left however it is drawn.
+            #
+            # EPOCH MILLISECONDS, NOT A DATE STRING. plotly.js cannot compare a date STRING against
+            # a date axis here: every string form ("2026-06-01", with or without a time or an
+            # offset) made autorange yield nothing at all, and the axis fell back to its empty
+            # default of 2000-01-01..2001-01-01 -- so pressing Autoscale threw the chart 26 years
+            # into the past. The number is compared correctly and pins the edge exactly.
+            #
+            # Added in plotly 5.19; an older kernel must degrade quietly, and the geometry clipping
+            # above is what holds the line there.
+            fig.update_xaxes(autorangeoptions=dict(
+                minallowed=int(pd.Timestamp(_vs).value // 1_000_000)))
         except (ValueError, TypeError):
             pass
 

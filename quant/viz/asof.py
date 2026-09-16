@@ -14,8 +14,10 @@ one generic operation does the entire job:
 
 Read what that gives you, shape by shape, and note that nothing is special-cased:
 
-    gap box      [x0,x1,x1,x0,x0] -> the box ends at k. A gap MITIGATED AFTER k therefore still
-                 looks open, because at k it was. That is the whole point of the tool.
+    gap box      [x0,x1,x1,x0,x0] -> CLAMPED, so it stays a box of the gap's real height and
+                 only gets shorter. A gap MITIGATED AFTER k therefore still looks open, because at
+                 k it was. That is the whole point of the tool. (Truncating it like a polyline
+                 kept only the bottom edge and every gap rewound into a flat line.)
     trendline    two points -> clipped with y interpolated ALONG the line, so the slope stays
                  honest. A break that happened after k is simply not drawn.
     trade        entry/stop/target run from entry to exit -> clipped at k; a trade entered after k
@@ -67,14 +69,48 @@ AS_OF_JS = r"""
     ORIG = {};
     rewindable().forEach(function (i) {
       var t = (gd._fullData && gd._fullData[i]) || gd.data[i];
-      ORIG[i] = { x: arr(t.x), y: arr(t.y), cd: t.customdata ? arr(t.customdata) : null };
+      ORIG[i] = { x: arr(t.x), y: arr(t.y), cd: t.customdata ? arr(t.customdata) : null,
+                  box: t.fill === 'toself' };
     });
   }
 
   var ms = function (v) { return (v instanceof Date) ? v.getTime() : new Date(v).getTime(); };
 
-  // ONE CLIP, applied to every shape. Segments are separated by nulls; a segment starting after
-  // the cut is dropped, one crossing it is cut with y interpolated along the segment.
+  // TWO CLIPS, because a closed polygon is not a polyline.
+  //
+  //   a LINE is TRUNCATED: walk to the cut and interpolate y onto it, then stop. Moving x without
+  //   recomputing y would tilt a trendline, which is worse than not clipping at all.
+  //
+  //   a BOX is CLAMPED: a gap is the polygon [x0,x1,x1,x0,x0] x [bot,bot,top,top,bot], and
+  //   truncating it keeps only the first edge -- the bottom -- so every rewound gap collapsed into
+  //   a horizontal line. Pulling each vertex back to the cut instead keeps it a box of the gap's
+  //   real height, only shorter. Its height never depends on where you click; only its length.
+  function clipBox(xs, ys, cd, cut) {
+    var ox = [], oy = [], ocd = [], seg = [], i;
+    function flush() {
+      if (seg.length) {
+        var lo = Infinity, j;
+        for (j = 0; j < seg.length; j++) { if (seg[j].t < lo) { lo = seg[j].t; } }
+        if (lo <= cut) {                       // born at or before the cut: keep it, clamped
+          for (j = 0; j < seg.length; j++) {
+            var p = seg[j];
+            ox.push(p.t > cut ? new Date(cut) : p.x); oy.push(p.y);
+            if (cd) { ocd.push(p.c); }
+          }
+          ox.push(null); oy.push(null); if (cd) { ocd.push(null); }
+        }
+      }
+      seg = [];
+    }
+    for (i = 0; i < xs.length; i++) {
+      if (xs[i] === null || xs[i] === undefined) { flush(); continue; }
+      seg.push({ t: ms(xs[i]), x: xs[i], y: ys[i], c: cd ? cd[i] : null });
+    }
+    flush();
+    while (ox.length && ox[ox.length - 1] === null) { ox.pop(); oy.pop(); if (cd) { ocd.pop(); } }
+    return { x: ox, y: oy, cd: cd ? ocd : null };
+  }
+
   function clip(xs, ys, cd, cut) {
     var ox = [], oy = [], ocd = [], seg = [], i;
     function flush() {
@@ -112,7 +148,8 @@ AS_OF_JS = r"""
     var idx = rewindable(), X = [], Y = [], C = [], any = false;
     idx.forEach(function (i) {
       var o = ORIG[i];
-      var r = (cut === null) ? { x: o.x, y: o.y, cd: o.cd } : clip(o.x, o.y, o.cd, cut);
+      var r = (cut === null) ? { x: o.x, y: o.y, cd: o.cd }
+            : (o.box ? clipBox(o.x, o.y, o.cd, cut) : clip(o.x, o.y, o.cd, cut));
       X.push(r.x); Y.push(r.y); C.push(r.cd); if (r.cd) any = true;
     });
     var up = { x: X, y: Y };

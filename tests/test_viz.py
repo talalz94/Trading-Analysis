@@ -229,7 +229,8 @@ def test_autoscale_cannot_escape_the_window():
                          sr_frames={"1h": resample_ohlcv(base, "60min")})
     floor = fig.layout.xaxis.autorangeoptions.minallowed
     assert floor is not None, "autoscale is unbounded on the left"
-    assert pd.Timestamp(floor) == pd.Timestamp(view)
+    # epoch MILLISECONDS -- see test_the_autorange_floor_is_epoch_ms_not_a_date_string
+    assert pd.Timestamp(floor, unit="ms", tz="UTC") == pd.Timestamp(view)
 
 
 def test_a_gap_box_starts_at_the_window_not_at_its_birth():
@@ -324,3 +325,44 @@ def test_an_empty_pattern_list_means_none_not_all():
     assert _pats(none) == [], _pats(none)[:5]
     assert _pats(every), "the fixture produced no patterns — it is not testing anything"
     assert len(none.data) < len(every.data)
+
+
+def test_the_autorange_floor_is_epoch_ms_not_a_date_string():
+    """plotly.js cannot compare a date STRING against a date axis here. Every string form
+    ("2026-06-01", with or without a time or a "+00:00" offset) made autorange yield nothing and the
+    axis fell back to its EMPTY default of 2000-01-01..2001-01-01 -- so pressing Autoscale threw the
+    chart 26 years into the past. Measured in a real browser; the number works, the string does not."""
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc(n=6000)
+    view = pd.Timestamp(str(base["t"].iloc[3000]))
+    fig = pattern_figure(base, patterns=[], sr_zones=False, chart_tf="5m", emas=(),
+                         view_start=str(view))
+    floor = fig.layout.xaxis.autorangeoptions.minallowed
+    assert isinstance(floor, int), f"{floor!r} is {type(floor).__name__}, not epoch ms"
+    assert floor == view.value // 1_000_000
+
+
+def test_a_timeframe_button_row_opens_on_what_is_actually_drawn():
+    """A row highlighting "all" while every layer is legendonly is lying about the chart."""
+    from quant.data import resample_ohlcv
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc(n=6000)
+    kw = dict(patterns=[], chart_tf="5m", emas=(), fvgs=True, sr_zones=True,
+              view_start=str(base["t"].iloc[3000]),
+              fvg_frames={"1h": resample_ohlcv(base, "60min")},
+              sr_frames={"1h": resample_ohlcv(base, "60min")})
+
+    def rows(fig):
+        return {m.buttons[0].label: m.buttons[m.active].label
+                for m in (fig.layout.updatemenus or ())
+                if m.type == "buttons" and m.active is not None and m.active >= 0
+                and str(m.buttons[0].label).endswith(": all")}
+
+    off = rows(pattern_figure(base, start_visible=(), **kw))
+    assert off and all(v == "none" for v in off.values()), off
+
+    on = rows(pattern_figure(base, start_visible=("fvg_bull", "fvg_bear", "sr_zones"), **kw))
+    # the chart's own layers are on but the 1h ones are not, so neither end is true
+    assert all(v != "all" for v in on.values()), on
