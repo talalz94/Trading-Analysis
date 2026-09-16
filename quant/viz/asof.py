@@ -107,7 +107,7 @@ AS_OF_JS = r"""
     return { x: ox, y: oy, cd: cd ? ocd : null };
   }
 
-  function apply(cut) {
+  function apply(cut, rawX) {
     snapshot();
     var idx = rewindable(), X = [], Y = [], C = [], any = false;
     idx.forEach(function (i) {
@@ -120,8 +120,10 @@ AS_OF_JS = r"""
     Plotly.restyle(gd, up, idx);
     var shapes = (gd.layout.shapes || []).filter(function (s) { return s.name !== 'asof'; });
     if (cut !== null) {
+      // the RAW value, not new Date(cut) -- plotly renders a Date in the browser's local zone,
+      // which puts the marker hours away from the candle that was clicked
       shapes = shapes.concat([{ name: 'asof', type: 'line', xref: 'x', yref: 'paper',
-                                x0: new Date(cut), x1: new Date(cut), y0: 0, y1: 1,
+                                x0: rawX, x1: rawX, y0: 0, y1: 1,
                                 line: { color: '#ffd54f', width: 1, dash: 'dot' } }]);
     }
     Plotly.relayout(gd, { shapes: shapes });
@@ -154,13 +156,22 @@ AS_OF_JS = r"""
   }
   bRewind.onclick = function () { setArmed(!armed); };
   bLive.onclick = function () {
-    setArmed(false); atX = null; note.textContent = ''; apply(null);
+    setArmed(false); atX = null; note.textContent = ''; apply(null, null);
   };
   gd.on('plotly_click', function (ev) {
-    if (!armed || !ev.points || !ev.points.length) return;
-    atX = ms(ev.points[0].x);
-    note.textContent = 'as of ' + new Date(atX).toISOString().slice(0, 16).replace('T', ' ');
-    apply(atX);
+    if (!armed || !ev.points || !ev.points.length) { return; }
+    var p = ev.points[0];
+    // THE POINT'S OWN DATA VALUE, not ev.points[0].x. The click hands back a formatted,
+    // TIMEZONE-NAIVE string ("2026-06-06 06:10"), which new Date() reads as LOCAL time -- on a
+    // UTC+5 machine that cut the chart five hours early and silently dropped everything in
+    // between. The stored value carries its offset ("...T06:10:00+00:00") and parses correctly.
+    var fd = gd._fullData && gd._fullData[p.curveNumber];
+    var raw = (fd && fd.x && p.pointIndex !== undefined && p.pointIndex !== null)
+      ? fd.x[p.pointIndex] : p.x;
+    atX = ms(raw);
+    note.textContent = 'as of ' + new Date(atX).toISOString().slice(0, 16).replace('T', ' ')
+                     + ' UTC';
+    apply(atX, raw);
   });
 })();
 """

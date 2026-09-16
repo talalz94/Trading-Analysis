@@ -1630,3 +1630,33 @@ candles and EMAs still running, the marker drawn, and `live` restoring exact poi
 
 `AS_OF` is the other half and cost almost nothing: since every detector is causal, **an earlier END
 is a point-in-time run**. Slower and not clickable, but nothing is filtered and it works inline.
+
+### The rewind bug only a real click could find
+
+Driving the finished chart in a browser turned up something no Python test would have: the cut was
+landing **five hours early**.
+
+`plotly_click` hands back `ev.points[0].x` as a *formatted* string — `"2026-06-06 06:10"`, with no
+offset — and `new Date()` reads an offset-less string as **local time**. On a UTC+5 machine that is
+01:10Z, so everything between 01:10 and the clicked candle was dropped instead of clipped. The
+symptom was subtle in the right way: the chart still looked plausibly rewound, just to the wrong bar.
+
+Measured:
+
+```
+clicked candle        2026-06-06 06:10 (chart/UTC)
+cut actually applied  2026-06-06 01:10Z
+local offset          -300 minutes
+```
+
+The fix is to take the point's **stored** value — `gd._fullData[p.curveNumber].x[p.pointIndex]` —
+which still carries `+00:00` and parses correctly. The as-of marker had the mirror of the same
+problem: `x0: new Date(cut)` renders in the browser's zone, so it is drawn at the raw x instead. The
+readout now says `UTC` explicitly.
+
+After the fix, verified on the same click: as-of line at exactly `06:10:00Z`, **0 of 345 rewindable
+traces past the cut**, the 15m bullish gap layer *clipped* to end at 06:10 rather than dropped, and
+the only thing still drawn to the right is the candlestick trace — which is the intended behaviour.
+
+**The general lesson:** a browser feature is not verified until it has been clicked in a browser.
+Both bugs in this tool (the base64 columns and this one) were invisible to the Python side.
