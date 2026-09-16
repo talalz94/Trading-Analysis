@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **496 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **514 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -225,8 +225,26 @@ quant/
 │   ├── export.py        #   open_in_browser(fig), heikin_ashi_candles(df) — keeps notebooks helper-free
 │   ├── responsive.py    #   ResearchChart / price_chart / equity_chart (plotly-resampler; millions of pts)
 │   ├── charts.py        #   static price+trades, equity+drawdown (HTML-export safe)
+│   ├── asof.py          #   REWIND — AS_OF_JS, injected by open_in_browser(extra_js=). Arm the
+│   │                    #     button, click a candle, and every gap, level, trendline and trade
+│   │                    #     snaps back to what was knowable THERE. No kernel, no round trip.
+│   │                    #     THE WHOLE TOOL IS ONE CLIP: every rewindable trace is None-separated
+│   │                    #     segments, so "drop segments starting after k, clip the rest at k with
+│   │                    #     y interpolated" handles every shape without special-casing -- a gap
+│   │                    #     box ends at k (so one MITIGATED LATER still reads open, which is the
+│   │                    #     point), a trendline keeps its slope, a later trade disappears.
+│   │                    #     Candles and EMAs are deliberately left running: you study a bar to
+│   │                    #     see what happened NEXT. Reads gd.layout.meta.rewind, so it carries no
+│   │                    #     second copy of the data and is inert on a figure built without
+│   │                    #     rewind=True. plotly.py 6 base64-encodes numeric columns, so it decodes
+│   │                    #     through gd._fullData -- gd.data[i].y is not always an array.
 │   ├── studies.py       #   pattern_figure (candles + chart-pattern SHAPES: pivots, both trendlines,
 │   │                    #     neckline and measured-move target, one legend toggle each).
+│   │                    #     rewind=True names the clippable traces in layout.meta (everything
+│   │                    #     except the candles and the EMAs) and draws S/R as ONE SEGMENT PER
+│   │                    #     PRICE REVISION instead of one line at its final level -- the normal
+│   │                    #     chart paints today's level across the whole window, which is a quiet
+│   │                    #     lookahead when the point is to see what was known earlier.
 │   │                    #     S/R ZONES ARE PER TIMEFRAME: sr_frames={"1h": df_1h} clusters
 │   │                    #     levels on each frame IN ITS OWN BAR SPACE -- a level fitted on
 │   │                    #     1h pivots is not the same level as one fitted on 5m pivots --
@@ -391,7 +409,12 @@ quant/
 │                        #     mention makes the lab LOAD it, rather than the user having to add
 │                        #     "1m" to an unrelated setting to satisfy the finer-than-chart
 │                        #     refusal.
-│                        #     .trades/.all/.blocked/.gaps/.census()/.summary()/.figure()
+│                        #     AS_OF is JUST AN EARLIER END: every detector here is already
+│                        #     causal, so stopping the data at a bar gives the exact
+│                        #     point-in-time answer with no new logic. `.end` reports what was
+│                        #     actually used. Slower than the browser tool and not clickable,
+│                        #     but nothing is filtered and it works inline.
+│                        #     .trades/.all/.blocked/.gaps/.end/.census()/.summary()/.figure()
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
 │   └── search.py        #   optuna_search (optional; Bayesian)
@@ -421,6 +444,10 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   back, which is how EMAS_ON vanished and the notebook died on a
                          #   NameError. So cell 2 carries SETTING_DEFAULTS: a setting the
                          #   config predates falls back and prints the line to paste in.
+                         # 20_rewind + nb20_config.py = notebook 19's chart plus the REWIND
+                         #   tool. The config is a verified COPY of 19's (a test fails if any
+                         #   value drifts) plus REWIND and AS_OF, so the point-in-time view is
+                         #   the only difference between them. Notebook 19 is untouched.
                          # 19_fvg_viewer + nb19_config.py = FAIR VALUE GAPS from several
                          #   timeframes on one chart, plus a COPY of notebook 18's sim with the
                          #   FVG veto added and a with/without comparison. SEVEN code cells and
@@ -568,13 +595,18 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
 
 - Python **3.13**, Windows (PowerShell primary; Bash available). Run from repo root with
   `PYTHONPATH=.` or `pip install -e .`.
-- **THE JUPYTER KERNEL IS NOT THE REPO INTERPRETER.** The registered `python3` kernel here
-  is **Python 3.9 / plotly 5.14.1**, while the repo runs 3.13 / plotly 6.3.1 — so a notebook
-  can fail on an API the library was written against. `xaxis.autorangeoptions` (plotly 5.19+)
-  is the live example: it is wrapped in try/except and the drawing clips geometry to the
-  window itself so the behaviour holds on 5.14. ALWAYS execute a notebook with
-  `jupyter nbconvert --execute` before believing a viz change works. Kernel should be
-  Python ≥3.11 / pandas ≥2.2.
+- **The Jupyter kernel IS the repo interpreter — keep it that way.** A user-level kernelspec at
+  `~/AppData/Roaming/jupyter/kernels/python3` points `python3` at **C:\Python313\python.exe**,
+  overriding the system one that shipped with Python 3.9. Re-register with
+  `python -m ipykernel install --user --name python3 --display-name "Python 3 (3.13 - quant)"`.
+  Before this, notebooks ran 3.9 / pandas 1.5.3 / plotly 5.14.1 while the tests ran 3.13 /
+  pandas 2.3.3 / plotly 6.3.1 — so the notebooks exercised a configuration nothing tested, and
+  `xaxis.autorangeoptions` (plotly 5.19+) imported fine here and raised there. Output was proved
+  IDENTICAL across both to six decimals, so the upgrade changed no number; it is ~2.5x faster to
+  build a chart. The autorangeoptions call is still wrapped, and the geometry is still clipped to
+  the window, so an older kernel degrades rather than breaks. ALWAYS execute a notebook with
+  `jupyter nbconvert --execute` before believing a viz change works — and check nbconvert actually
+  WROTE, since a failed run leaves the previous outputs in place and an error scan then reads clean.
 - Installed & used: pandas, numpy, pyarrow, polars, **numba**, plotly, **plotly-resampler**,
   tsdownsample, joblib, scipy, tqdm, requests, dukascopy-python. Optional: optuna.
 - Data cached: BTC/PAXG 1m ≈ 742k rows (2025-01 → 2026-05), 5m/15m/1h derived. Fits in RAM; the
@@ -622,7 +654,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **496 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **514 total.**
 
 ## 12. Known limitations / honest caveats
 

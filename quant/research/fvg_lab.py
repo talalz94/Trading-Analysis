@@ -48,6 +48,7 @@ class FvgLab:
     trades: pd.DataFrame                  # with the veto, if it is on
     all: pd.DataFrame                     # without it, always
     gaps: Dict[str, pd.DataFrame] = field(default_factory=dict)
+    end: str = ""                         # the effective right edge: AS_OF when set, else END
 
     # ---------------------------------------------------------------- what happened
     @property
@@ -134,7 +135,9 @@ class FvgLab:
             trades=self.trades, trade_tp_rr=c.TP_RR,
             start_visible=_get(c, "START_VISIBLE", ("trades", "fvg_bull", "fvg_bear")),
             height=_get(c, "HEIGHT", 900),
-            title=(f"{c.SYMBOL} {c.TF}  {c.VIEW_START} to {c.END}  ·  "
+            rewind=_get(c, "REWIND", False),
+            title=(f"{c.SYMBOL} {c.TF}  {c.VIEW_START} to {self.end}"
+                   f"{'  (AS OF)' if _get(c, 'AS_OF', None) else ''}  ·  "
                    f"{'/'.join((c.TF,) + tuple(_get(c, 'FVG_TFS', ())))} fair value gaps"
                    f"  ·  {len(self.trades)} trades"))
         kw.update(overrides)
@@ -159,7 +162,12 @@ def fvg_lab(cfg) -> FvgLab:
 
     c = cfg
     src = _get(c, "SOURCE", "binance")
-    df = get_ohlcv(c.SYMBOL, c.TF, start=c.WARMUP_START, end=c.END, source=src,
+    # AS_OF IS JUST AN EARLIER END. Every detector, level and entry in this project is already
+    # causal, so "what was knowable at that bar" needs no new logic -- stop the data there and the
+    # whole pipeline produces the point-in-time answer. Exact and reproducible; it costs a re-run,
+    # which is the trade against the browser tool's instant-but-filtered rewind.
+    end = _get(c, "AS_OF", None) or c.END
+    df = get_ohlcv(c.SYMBOL, c.TF, start=c.WARMUP_START, end=end, source=src,
                    tz="UTC").reset_index(drop=True)
 
     # LINE frames are fitted and therefore TRADED. GAP frames are drawn and may veto, never fitted.
@@ -168,9 +176,9 @@ def fvg_lab(cfg) -> FvgLab:
     line_tfs = tuple(_get(c, "LINE_TFS", ()) or ())
     gap_tfs = tuple(_get(c, "FVG_TFS", ()) or ())
     warm = _get(c, "TF_WARMUP_BARS", 800)
-    line_frames = (tf_frames(c.SYMBOL, line_tfs, view_start=c.VIEW_START, end=c.END,
+    line_frames = (tf_frames(c.SYMBOL, line_tfs, view_start=c.VIEW_START, end=end,
                              warmup_bars=warm, source=src) if line_tfs else {})
-    gap_frames = (tf_frames(c.SYMBOL, gap_tfs, view_start=c.VIEW_START, end=c.END,
+    gap_frames = (tf_frames(c.SYMBOL, gap_tfs, view_start=c.VIEW_START, end=end,
                             warmup_bars=warm, source=src) if gap_tfs else {})
     # S/R layers: clustered, drawn, and nothing else. A level fitted on 1h pivots is a different
     # level from one fitted on 5m pivots, so each timeframe needs its own frame -- but none of them
@@ -180,7 +188,7 @@ def fvg_lab(cfg) -> FvgLab:
                  for k in sr_tfs if k in gap_frames or k in line_frames}
     _need = [k for k in sr_tfs if k not in sr_frames]
     if _need:
-        sr_frames.update(tf_frames(c.SYMBOL, tuple(_need), view_start=c.VIEW_START, end=c.END,
+        sr_frames.update(tf_frames(c.SYMBOL, tuple(_need), view_start=c.VIEW_START, end=end,
                                    warmup_bars=warm, source=src))
 
     fvg_kwargs = dict(mitigation=c.FVG_MITIGATION, min_size_atr=c.FVG_MIN_SIZE_ATR,
@@ -196,7 +204,7 @@ def fvg_lab(cfg) -> FvgLab:
     _ema_only = [k for k in mtf_ema_timeframes(c.MTF_EMAS, chart_tf=c.TF) if k not in ema_frames]
     if _ema_only:
         ema_frames.update(tf_frames(c.SYMBOL, tuple(_ema_only), view_start=c.VIEW_START,
-                                    end=c.END, warmup_bars=warm, source=src))
+                                    end=end, warmup_bars=warm, source=src))
 
     D = mtf_trendlines(df, line_frames, **c.TRENDLINE)
     D = add_mtf_emas(D, ema_frames, required_emas(c.ENTRY_RULES, chart_tf=c.TF))
@@ -260,6 +268,6 @@ def fvg_lab(cfg) -> FvgLab:
         gaps[tf] = fvg_table(f.reset_index(drop=True), **fvg_kwargs)
 
     return FvgLab(cfg=c, df=df, D=D, line_frames=line_frames, gap_frames=gap_frames,
-                  sr_frames=sr_frames, ema_frames=ema_frames,
+                  sr_frames=sr_frames, ema_frames=ema_frames, end=str(end),
                   fvg_kwargs=fvg_kwargs, params=params, trades=filtered, all=everything,
                   gaps=gaps)
