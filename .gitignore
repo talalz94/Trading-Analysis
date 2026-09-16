@@ -44,3 +44,7 @@ notebooks/chart.html
 notebooks/chart_fixed.html
 notebooks/chart_channels_trendlines.html
 .claude/launch.json
+notebooks/*.html
+experiments/results_*.csv
+experiments/_recalibrated_specs.json
+symmetrical_triangle
