@@ -140,3 +140,16 @@ def test_the_script_reads_the_figure_and_bails_out_when_there_is_nothing_to_do()
 
 def test_the_script_is_small_enough_to_inline_everywhere():
     assert len(AS_OF_JS) < 8000, f"{len(AS_OF_JS)} bytes of injected script"
+
+
+def test_the_cut_comes_from_the_points_own_data_value_not_the_formatted_click():
+    """The bug this replaces, found by clicking a real chart on a UTC+5 machine: plotly hands the
+    click back a formatted, TIMEZONE-NAIVE string ("2026-06-06 06:10"), and `new Date()` reads that
+    as LOCAL time -- so the chart was cut five hours early and everything in between silently
+    vanished instead of being clipped. The stored value carries its offset and parses correctly."""
+    assert "fd.x[p.pointIndex]" in AS_OF_JS, "the cut must come from the stored x, not ev.points[].x"
+    assert "curveNumber" in AS_OF_JS
+    # the marker has the same problem in reverse: plotly renders a Date in the browser's zone
+    assert "x0: rawX, x1: rawX" in AS_OF_JS, "the as-of line must be drawn at the raw x"
+    assert "new Date(cut), x1: new Date(cut)" not in AS_OF_JS
+    assert "UTC" in AS_OF_JS, "the readout should say which zone it is quoting"
