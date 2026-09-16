@@ -155,7 +155,7 @@ def fvg_lab(cfg) -> FvgLab:
     from ..indicators.trendlines import mtf_trendlines
     from ..scenarios import run_pieces
     from ..scenarios.entries import trendline_trigger
-    from ..strategies import fvg_clear
+    from ..strategies import build_fvg_rules, fvg_clear
     from ..strategies.conditions import raw
     from ..strategies.rulespec import build_rules, required_emas
     from ..viz import mtf_ema_timeframes
@@ -219,6 +219,7 @@ def fvg_lab(cfg) -> FvgLab:
         tl_dir_n=c.TL_DIR_N, tl_dir_src=c.TL_DIR_SRC, tl_dir_full_n=c.TL_DIR_FULL_N,
         tl_extend=c.TL_EXTEND, tl_combine=c.TL_COMBINE, tl_tol_atr=c.TL_TOL_ATR,
         tl_once_per_line=_get(c, "TL_ONCE_PER_LINE", False),
+        tl_confirm_n=_get(c, "TL_CONFIRM_N", 0),
         stop_n=c.STOP_N, stop_buffer_pct=c.STOP_BUFFER_PCT,
         be_at_rr=c.BE_AT_RR, tp_rr=c.TP_RR,
         sec_touch_n=c.SEC_TOUCH_N, sec_wrong_m=c.SEC_WRONG_M, sec_opp_n=c.SEC_OPP_N,
@@ -234,6 +235,9 @@ def fvg_lab(cfg) -> FvgLab:
         extra = build_rules(c.ENTRY_RULES, side, chart_tf=c.TF,
                             combine=_get(c, "RULES_COMBINE", "all"))
         out = in_window if extra is None else (in_window & extra)
+        gap_rules = build_fvg_rules(_get(c, "FVG_RULES", None), side)
+        if gap_rules is not None:
+            out = out & gap_rules
         if veto:
             out = out & fvg_clear(side, mode=c.FVG_VETO_MODE,
                                   timeframes=_get(c, "FVG_VETO_TFS"),

@@ -333,3 +333,103 @@ def test_the_picker_cap_bounds_the_dropdown_not_the_drawing():
     assert len(bulk) == 2, "the bulk layer must be drawn in full regardless of the cap"
     # and the count in the legend is the number DRAWN, not the number listed
     assert "(" in bulk[0].name and int(bulk[0].name.split("(")[1].split(",")[0]) >= len(named)
+
+
+# ---------------------------------------------------------------------------
+# the one-line gap-veto language
+# ---------------------------------------------------------------------------
+def test_a_gap_sentence_parses_the_way_it_reads():
+    from quant.strategies import parse_fvg_rule
+
+    r = parse_fvg_rule("short: opposite FVG 15m+1h within 20 candles min 0.8 ATR near 3 ATR")
+    assert r.direction is None                      # None == "opposite", resolved per side
+    assert r.timeframes == ("15m", "1h")
+    assert (r.within, r.min_atr, r.near_atr) == (20, 0.8, 3.0)
+    assert r.sides == ("short",)
+
+
+@pytest.mark.parametrize("text", [
+    "opposite fvg 15m within 20 min 0.8",
+    "within 20 opposite min 0.8 15m",                 # order does not matter
+    "no opposite fvg the 15m within 20 candles min 0.8 atr",   # filler ignored
+])
+def test_word_order_and_filler_do_not_change_a_gap_rule(text):
+    from quant.strategies import parse_fvg_rule
+
+    r = parse_fvg_rule(text)
+    assert (r.direction, r.timeframes, r.within, r.min_atr) == (None, ("15m",), 20, 0.8)
+
+
+def test_opposite_means_the_gap_whose_fill_moves_price_against_the_trade(vframe):
+    """The one word here anyone could read two ways, and reading it backwards inverts the filter.
+
+    "Opposite" is NOT "a bullish gap when I am short". It is the gap whose FILL would move price
+    AGAINST the trade: for a SHORT that is a BEARISH gap, which sits ABOVE and is filled by price
+    RISING -- the sweep that kills the short. For a LONG it is a BULLISH gap below.
+    """
+    from quant.strategies import fvg_blocks, fvg_rule_cond
+
+    assert np.array_equal(fvg_rule_cond("opposite fvg", "short")(vframe),
+                          fvg_blocks("short", which="bear")(vframe))
+    assert np.array_equal(fvg_rule_cond("opposite fvg", "long")(vframe),
+                          fvg_blocks("long", which="bull")(vframe))
+    # "same" is the exact mirror on both sides
+    assert np.array_equal(fvg_rule_cond("same fvg", "short")(vframe),
+                          fvg_blocks("short", which="bull")(vframe))
+    assert np.array_equal(fvg_rule_cond("same fvg", "long")(vframe),
+                          fvg_blocks("long", which="bear")(vframe))
+
+
+def test_describe_spells_out_which_gap_each_sentence_blocks_on():
+    """Left to a docstring, "opposite" is something you have to reason about every time."""
+    from quant.strategies import describe_fvg_rules
+
+    row = describe_fvg_rules(["opposite fvg 15m within 20"]).iloc[0]
+    assert row.blocks_short_on == "bearish gap"
+    assert row.blocks_long_on == "bullish gap"
+
+
+def test_an_absolute_direction_ignores_the_side(vframe):
+    from quant.strategies import fvg_rule_cond
+
+    a = fvg_rule_cond("bear fvg", "long")(vframe)
+    b = fvg_rule_cond("bear fvg", "short")(vframe)
+    assert np.array_equal(a, b), "bear should mean bear whichever way the trade points"
+
+
+def test_build_fvg_rules_returns_the_MAY_ENTER_condition(vframe):
+    from quant.strategies import build_fvg_rules, fvg_rule_cond
+
+    r = ["opposite fvg"]
+    allow = build_fvg_rules(r, "short")(vframe)
+    block = fvg_rule_cond(r[0], "short")(vframe)
+    assert np.array_equal(allow, ~block), "entry_filter takes a MAY-ENTER condition"
+
+
+def test_two_gap_rules_block_if_EITHER_objects(vframe):
+    from quant.strategies import build_fvg_rules, fvg_rule_cond
+
+    r = ["opposite fvg", "same fvg"]
+    allow = build_fvg_rules(r, "short")(vframe)
+    a = fvg_rule_cond(r[0], "short")(vframe)
+    b = fvg_rule_cond(r[1], "short")(vframe)
+    assert np.array_equal(allow, ~(a | b))
+
+
+def test_no_gap_rule_for_a_side_returns_none_rather_than_guessing():
+    from quant.strategies import build_fvg_rules
+
+    assert build_fvg_rules([], "long") is None
+    assert build_fvg_rules(["short: opposite fvg"], "long") is None
+
+
+@pytest.mark.parametrize("bad,why", [
+    ("15m within 20", "no direction"),
+    ("opposite fvg 15m within", "cannot read"),
+    ("opposite fvg sideways", "cannot read"),
+])
+def test_a_bad_gap_sentence_says_what_is_wrong_with_it(bad, why):
+    from quant.strategies import parse_fvg_rule
+
+    with pytest.raises(ValueError, match=why):
+        parse_fvg_rule(bad)

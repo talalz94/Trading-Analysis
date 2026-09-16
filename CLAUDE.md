@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **518 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **534 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -212,7 +212,15 @@ quant/
 │   │                    #     ABOVE blocks a long -- buying into a seller's zone). Gates:
 │   │                    #     max_age_bars (in the gap's OWN timeframe's bars), min_size_atr,
 │   │                    #     max_dist_atr, timeframes. They describe the NEAREST live gap, so
-│   │                    #     filter the population at DETECTION instead
+│   │                    #     filter the population at DETECTION instead.
+│   │                    #     A ONE-LINE LANGUAGE sits on top, for configs: "short: opposite FVG
+│   │                    #     15m+1h within 20 candles min 0.8 ATR near 3 ATR" -- parse_fvg_rule /
+│   │                    #     build_fvg_rules / describe_fvg_rules, order-free and filler-tolerant
+│   │                    #     like rulespec. "OPPOSITE" IS THE WORD THAT READS TWO WAYS, and taking
+│   │                    #     it backwards inverts the filter: it means the gap whose FILL moves
+│   │                    #     price AGAINST the trade, so for a SHORT it is a BEARISH gap above,
+│   │                    #     not a bullish one. describe_fvg_rules() prints the resolved direction
+│   │                    #     per side rather than leaving it to a docstring
 │   ├── builder.py       #   RuleStrategy + Rule: declarative entry->exit(->stop) rules with `once`
 │   │                    #     (one per episode), `rearm`, `after` sequencing, per-rule exits+stops
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)
@@ -380,7 +388,17 @@ quant/
 │   │                    #     along its OWN SLOPE rather than flat -- a rising support keeps rising,
 │   │                    #     line the moment it breaks -- without that, n>1 fired ZERO times on
 │   │                    #     the base timeframe. trendline_trigger() labels each trade with WHICH
-│   │                    #     timeframe fired, since the entry is an OR across them
+│   │                    #     timeframe fired, since the entry is an OR across them.
+│   │                    #     tl_confirm_n MOVES THE ENTRY OFF THE BREAK CANDLE: a break bar that is
+│   │                    #     huge next to its neighbours and closes a whole new body beyond the
+│   │                    #     line looks decisive and is the shape that gets swept, so its close is
+│   │                    #     the worst price of the move. Within n CHART candles one of the trade's
+│   │                    #     OWN COLOUR must close beyond the WHOLE trigger candle (below its low
+│   │                    #     for a short); the entry is on that close, and no confirmation means no
+│   │                    #     trade. It is also the ONLY way an entry can happen later than the
+│   │                    #     break -- tl_close_n asks for n CONSECUTIVE closes, a different
+│   │                    #     condition. The line's ID is held for the trigger window PLUS the wait,
+│   │                    #     or a delayed entry lands where the id is gone and every trade reads `?`
 │   ├── support_break.py #   support_break_short v1.0 core / v1.1 +HH-HL structure / v1.2 no-structure
 │   │                    #     / v1.3 nearest-trough — short below a down-sloping smoothed 200-EMA on a
 │   │                    #     support break; entry_mode = break_close|wait_n|n_red|pullback (Q2);
@@ -669,7 +687,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **518 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **534 total.**
 
 ## 12. Known limitations / honest caveats
 

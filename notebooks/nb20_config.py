@@ -220,3 +220,35 @@ REWIND = True
 # never see the future — and it works anywhere, including inline. Use it to pin a study.
 # None = off. e.g. "2026-06-05 20:00"
 AS_OF = None
+
+# =============================================================================================
+# §8  TWO MORE ENTRY CONDITIONS
+# =============================================================================================
+# WAIT FOR THE MOVE TO REPEAT ITSELF. A break candle that is huge next to its neighbours and closes
+# a whole new body beyond the line looks decisive — and is exactly the shape that gets swept back,
+# so entering on its close is entering at the worst price of the move. Non-zero means: within this
+# many CHART candles, one candle must be the TRADE'S OWN COLOUR and close beyond the WHOLE trigger
+# candle (below its low for a short, above its high for a long). The entry then happens on that
+# candle's close. No confirmation inside the window = no trade, which was the question being asked.
+#
+# This is also the ONLY setting that lets an entry happen later than the break: TL_CLOSE_N asks for
+# n CONSECUTIVE closes beyond the line, which is a different condition.
+TL_CONFIRM_N = 0          # 0 = off; 3 means "within three 5m candles"
+
+# GAP VETOES, one sentence each. ANDed onto everything else, so they can only remove entries.
+#
+#     <opposite|same|bull|bear>  [timeframe]  [within N]  [min X]  [near X]
+#
+#   opposite / same   relative to the TRADE — for a short, "opposite" is a BULLISH gap, the one
+#                     price would come back up through. bull / bear say it absolutely.
+#   timeframe         15m · 1h+4h · chart · any          (default: every layer loaded)
+#   within N          the gap formed within N bars OF ITS OWN TIMEFRAME   (default: no age limit)
+#   min X             the gap is at least X ATR tall                      (default: no limit)
+#   near X            price is within X ATR of it                         (default: no limit)
+#
+# Order does not matter and filler words are ignored. `long:` / `short:` scopes a rule to one side.
+# Cell 2 prints what each sentence parsed to — read it before trusting a rule.
+FVG_RULES = [
+    # "short: opposite FVG 15m+1h within 20 candles min 0.8 ATR near 3 ATR",
+    # "long:  opposite FVG 15m+1h within 20 candles min 0.8 ATR near 3 ATR",
+]

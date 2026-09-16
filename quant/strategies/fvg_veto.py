@@ -40,7 +40,9 @@ a second approximate one.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence
+import re
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -77,7 +79,7 @@ def fvg_layers(df: pd.DataFrame, *, prefix: str = "fvg",
 
 def fvg_blocks(side: str, *, mode: str = "retrace", prefix: str = "fvg",
                max_age_bars: int = 0, min_size_atr: float = 0.0, max_dist_atr: float = 0.0,
-               timeframes: Optional[Sequence[str]] = None) -> Cond:
+               timeframes: Optional[Sequence[str]] = None, which: Optional[str] = None) -> Cond:
     """TRUE on bars where an unmitigated gap should stop a `side` trade being opened.
 
     `side` is the TRADE's direction ("long"/"short"); which gap direction threatens it is decided
@@ -89,7 +91,12 @@ def fvg_blocks(side: str, *, mode: str = "retrace", prefix: str = "fvg",
         raise ValueError(f"side must be 'long' or 'short', got {side!r}")
     if mode not in VETO_MODES:
         raise ValueError(f"mode must be one of {VETO_MODES}, got {mode!r}")
-    which = _BLOCKED_BY[mode][side]
+    # `which` names the gap direction ABSOLUTELY ("bull"/"bear"); leave it None and `mode` derives
+    # it from the trade's side, which is what "opposite"/"same" mean in a rule sentence.
+    if which is None:
+        which = _BLOCKED_BY[mode][side]
+    elif which not in ("bull", "bear"):
+        raise ValueError(f"which must be 'bull' or 'bear', got {which!r}")
 
     def fn(df: pd.DataFrame) -> np.ndarray:
         layers = fvg_layers(df, prefix=prefix, timeframes=timeframes)
@@ -128,3 +135,155 @@ def fvg_clear(side: str, **kwargs) -> Cond:
     out = ~c
     out.name = f"fvg_clear{c.name[len('fvg_blocks'):]}"
     return out
+
+
+# =================================================================================================
+# A ONE-LINE LANGUAGE FOR GAP VETOES, so a config can say the rule instead of spelling out a call.
+# =================================================================================================
+#
+#     "short: opposite FVG 15m within 20 candles min 0.8 ATR near 3 ATR"
+#     "long: no bull fvg within 40 candles"
+#     "opposite fvg 1h+4h min 1.0 atr"
+#
+# Order does not matter and filler words ("no", "fvg", "candles", "bars", "the") are ignored, the
+# same deal as `quant.strategies.rulespec`. Every clause is optional except the DIRECTION.
+#
+#     DIRECTION   opposite | against  the gap whose FILL would move price AGAINST the trade.
+#                                      For a SHORT that is a BEARISH gap (it sits ABOVE and is
+#                                      filled by price rising, which is the sweep that kills the
+#                                      short); for a LONG it is a BULLISH gap below. Say it as
+#                                      "the gap that would take me out".
+#                 same | with          the mirror: the gap on the other side of that argument.
+#                 bull | bear          absolute, if you would rather say it outright
+#     TIMEFRAME   15m  ·  1h+4h  ·  chart  ·  any        (default: every layer loaded)
+#     within <n>  the gap formed within n bars OF ITS OWN TIMEFRAME       (default: no age limit)
+#     min <x>     the gap is at least x ATR tall                          (default: 0, no limit)
+#     near <x>    price is within x ATR of it                             (default: 0, no limit)
+#
+# A rule BLOCKS. `build_fvg_rules(specs, side)` returns the ANDed "may enter" condition, so it goes
+# straight into `entry_filter=` beside the rulespec rules.
+
+_FVG_DIR = {"opposite": None, "against": None, "same": "same", "with": "same",
+            "bull": "bull", "bullish": "bull", "bear": "bear", "bearish": "bear"}
+_FVG_FILLER = {"no", "a", "an", "the", "fvg", "fvgs", "gap", "gaps", "candles", "candle",
+               "bars", "bar", "atr", "is", "if", "there"}
+
+
+@dataclass(frozen=True)
+class FvgRule:
+    """One parsed sentence."""
+    direction: Optional[str]                 # "bull" | "bear" | "same" | None (= opposite)
+    timeframes: Optional[Tuple[str, ...]] = None
+    within: int = 0
+    min_atr: float = 0.0
+    near_atr: float = 0.0
+    sides: Tuple[str, ...] = ("long", "short")
+    text: str = ""
+
+
+def parse_fvg_rule(text: str) -> FvgRule:
+    """One sentence -> one `FvgRule`. Raises `ValueError` naming the problem."""
+    raw = str(text).strip()
+    body, sides = raw, ("long", "short")
+    m = re.match(r"^\s*(long|short)\s*:\s*(.*)$", raw, re.I)
+    if m:
+        sides, body = (m.group(1).lower(),), m.group(2)
+
+    direction = "MISSING"
+    tfs: List[str] = []
+    within, min_atr, near_atr = 0, 0.0, 0.0
+    toks = [t for t in re.split(r"[\s,]+", body.strip()) if t]
+    i = 0
+    while i < len(toks):
+        low = toks[i].lower().strip(".")
+        if low in _FVG_FILLER:
+            i += 1
+            continue
+        if low in _FVG_DIR:
+            direction = _FVG_DIR[low]
+            i += 1
+            continue
+        if low in ("within", "last", "past") and i + 1 < len(toks):
+            within = int(float(toks[i + 1]))
+            i += 2
+            continue
+        if low in ("min", "bigger", "over", "at") and i + 1 < len(toks):
+            min_atr = float(toks[i + 1])
+            i += 2
+            continue
+        if low in ("near", "within_atr", "closer") and i + 1 < len(toks):
+            near_atr = float(toks[i + 1])
+            i += 2
+            continue
+        if low in ("any", "all"):
+            tfs = []
+            i += 1
+            continue
+        # anything left that looks like a timeframe list: "15m", "1h+4h", "chart"
+        parts = [q for q in re.split(r"[+/]", toks[i]) if q]
+        if all(re.fullmatch(r"(chart|\d+(m|h|d))", q, re.I) for q in parts):
+            tfs += [q.lower() for q in parts]
+            i += 1
+            continue
+        raise ValueError(f"fvg rule {raw!r}: cannot read {toks[i]!r}. Expected a direction "
+                         f"(opposite/same/bull/bear), a timeframe (15m, 1h+4h, chart, any), or "
+                         f"`within N` / `min X` / `near X`")
+
+    if direction == "MISSING":
+        raise ValueError(f"fvg rule {raw!r}: no direction. Say `opposite`, `same`, `bull` or `bear`")
+    return FvgRule(direction=direction, timeframes=tuple(tfs) or None, within=within,
+                   min_atr=min_atr, near_atr=near_atr, sides=tuple(sides), text=raw)
+
+
+def fvg_rule_cond(spec, side: str, **kwargs) -> Cond:
+    """One `FvgRule` (or its sentence) -> the BLOCKING condition for `side`."""
+    r = spec if isinstance(spec, FvgRule) else parse_fvg_rule(spec)
+    if r.direction in (None, "same"):
+        mode, which = ("retrace" if r.direction is None else "barrier"), None
+    else:
+        mode, which = "retrace", r.direction
+    return fvg_blocks(side, mode=mode, which=which, timeframes=r.timeframes,
+                      max_age_bars=r.within, min_size_atr=r.min_atr,
+                      max_dist_atr=r.near_atr, **kwargs)
+
+
+def build_fvg_rules(specs: Optional[Sequence], side: str, **kwargs) -> Optional[Cond]:
+    """Every rule that applies to `side`, as ONE "may enter" condition, or None if there are none.
+
+    None means "no rule for this side", NOT "nothing passes" -- the same trap `build_rules` avoids.
+    Rules are ANDed as BLOCKS, so the allow condition is `~(block1 | block2 | ...)`: a trade is
+    taken when none of the sentences objects.
+    """
+    parsed = [sp if isinstance(sp, FvgRule) else parse_fvg_rule(sp) for sp in (specs or [])]
+    mine = [sp for sp in parsed if side in sp.sides]
+    if not mine:
+        return None
+    blocks = [fvg_rule_cond(sp, side, **kwargs) for sp in mine]
+    out = blocks[0]
+    for b in blocks[1:]:
+        out = out | b
+    clear = ~out
+    clear.name = "fvg_rules(" + " | ".join(sp.text or "?" for sp in mine) + ")"
+    return clear
+
+
+def describe_fvg_rules(specs: Optional[Sequence]) -> "pd.DataFrame":
+    """What each sentence parsed to -- the cheapest way to catch one that does not say what you
+    meant before it silently removes every entry."""
+    rows = []
+    for sp in (specs or []):
+        r = sp if isinstance(sp, FvgRule) else parse_fvg_rule(sp)
+        # the RESOLVED gap direction per side, because "opposite" is the one word here anyone
+        # could read two ways, and reading it backwards inverts the filter
+        res = {sd: (r.direction if r.direction in ("bull", "bear")
+                    else _BLOCKED_BY["barrier" if r.direction == "same" else "retrace"][sd])
+               for sd in ("long", "short")}
+        rows.append(dict(rule=r.text, says=("opposite" if r.direction is None else r.direction),
+                         blocks_long_on=res["long"] + "ish gap",
+                         blocks_short_on=res["short"] + "ish gap",
+                         timeframes="any" if not r.timeframes else "+".join(r.timeframes),
+                         within_bars=r.within or "-", min_atr=r.min_atr or "-",
+                         near_atr=r.near_atr or "-", applies_to="+".join(r.sides)))
+    return pd.DataFrame(rows, columns=["rule", "says", "blocks_long_on", "blocks_short_on",
+                                       "timeframes", "within_bars", "min_atr", "near_atr",
+                                       "applies_to"])
