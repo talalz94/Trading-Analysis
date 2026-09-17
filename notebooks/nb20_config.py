@@ -239,8 +239,10 @@ TL_CONFIRM_N = 0          # 0 = off; 3 means "within three 5m candles"
 #
 #     <opposite|same|bull|bear>  [timeframe]  [within N]  [min X]  [near X]
 #
-#   opposite / same   relative to the TRADE — for a short, "opposite" is a BULLISH gap, the one
-#                     price would come back up through. bull / bear say it absolutely.
+#   opposite / same   relative to the TRADE, meaning the gap whose FILL moves price AGAINST it.
+#                     For a SHORT that is a BEARISH gap (it sits above and is filled by price
+#                     RISING — the sweep that kills the short); for a LONG, a BULLISH gap below.
+#                     bull / bear say it absolutely, if you would rather not think about it.
 #   timeframe         15m · 1h+4h · chart · any          (default: every layer loaded)
 #   within N          the gap formed within N bars OF ITS OWN TIMEFRAME   (default: no age limit)
 #   min X             the gap is at least X ATR tall                      (default: no limit)

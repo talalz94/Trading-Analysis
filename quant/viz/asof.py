@@ -29,6 +29,12 @@ and the normal chart draws only the LAST one — today's level, painted across t
 studying history that is a quiet lookahead, so `pattern_figure(rewind=True)` draws every revision as
 its own segment. The clip above then shows the revision that was live at k, with no extra logic.
 
+WHAT IT READS. The trace SPEC, `gd.data` -- and it decodes plotly.py's base64 columns itself.
+plotly only expands `_fullData` and only attaches `_inputArray` for traces it has DRAWN, so anything
+built `visible:false` (every isolatable gap, every per-trade group) has no readable geometry in
+either place. Snapshotting from `_fullData` captured empty arrays for exactly the traces the pickers
+exist to show, and `live` then restored that emptiness permanently.
+
 WHERE IT RUNS. In the browser tab, via `open_in_browser(fig, extra_js=AS_OF_JS)` — the same hook
 `CROSSHAIR_JS` uses. It needs no kernel and no round trip. It does NOT work in an inline notebook
 cell, where the script is never injected; for that, set `AS_OF` in the config and let the figure be
@@ -54,28 +60,66 @@ AS_OF_JS = r"""
   var ORIG = null, armed = false, atX = null;
 
   // plotly.py 6 sends numeric columns base64-encoded ({dtype, bdata}), so gd.data[i].y is not
-  // always an array -- three trade-marker traces arrived that way and .slice() threw. _fullData
-  // is plotly's decoded copy, where the same column is a Float64Array.
+  // always an array -- three trade-marker traces arrived that way and .slice() threw.
+  //
+  // DECODE IT HERE rather than leaning on plotly's decoded copy. plotly only decodes a column when
+  // it DRAWS the trace: `_inputArray` is attached during supply-defaults, which returns early for
+  // anything `visible:false`. So for every isolatable gap and every per-trade group -- exactly the
+  // traces the pickers exist to show -- neither _fullData[i].y nor gd.data[i]._inputArray exists,
+  // and the only copy of the numbers in the page is the base64 string itself.
+  var DTYPE = { f8: Float64Array, f4: Float32Array, i4: Int32Array, u4: Uint32Array,
+                i2: Int16Array, u2: Uint16Array, i1: Int8Array, u1: Uint8Array };
+
+  function fromB64(o) {
+    var C = DTYPE[o.dtype];
+    if (!C || typeof o.bdata !== 'string') { return null; }
+    try {
+      var bin = atob(o.bdata), n = bin.length, buf = new Uint8Array(n), i;
+      if (n % C.BYTES_PER_ELEMENT) { return null; }
+      for (i = 0; i < n; i++) { buf[i] = bin.charCodeAt(i); }
+      return Array.from(new C(buf.buffer, 0, n / C.BYTES_PER_ELEMENT));
+    } catch (e) { return null; }
+  }
+
   function arr(v) {
     if (v === null || v === undefined) { return []; }
     if (Array.isArray(v)) { return v.slice(); }
     if (ArrayBuffer.isView(v)) { return Array.from(v); }
-    if (typeof v === 'object' && v._inputArray) { return Array.from(v._inputArray); }
+    if (typeof v === 'object') {
+      if (v._inputArray) { return Array.from(v._inputArray); }
+      if (v.bdata) { return fromB64(v) || []; }
+    }
     return [];
+  }
+
+  // gd.data IS THE TRUTH; _fullData is only a fallback.
+  //
+  // plotly expands _fullData for traces it has actually DRAWN. Everything built `visible:false` --
+  // every isolatable gap, every per-trade entry/stop/target group, every trendline behind the
+  // picker -- has no x, no y and no fill there. Snapshotting from _fullData therefore captured
+  // EMPTY arrays for precisely the traces the pickers exist to show, and because `live` restores
+  // from the snapshot it wrote that emptiness straight back: after one rewind, picking a trade drew
+  // nothing at all, for the rest of the session, and pressing live could not bring it back.
+  function pick(spec, full, key) {
+    var a = arr(spec && spec[key]);
+    return a.length ? a : arr(full && full[key]);
   }
 
   function snapshot() {
     if (ORIG) { return; }
     ORIG = {};
     rewindable().forEach(function (i) {
-      var t = (gd._fullData && gd._fullData[i]) || gd.data[i];
-      // FILL COMES FROM gd.data, NOT _fullData. plotly only computes full defaults for traces it
-      // has drawn, and every isolatable gap is built `visible:false` -- so _fullData[i].fill was
-      // UNDEFINED for all 41 of them, they were classed as lines, and picking one gap out of the
-      // dropdown and rewinding collapsed it to a degenerate sliver. The spec always has it.
-      var spec = gd.data[i] || t;
-      ORIG[i] = { x: arr(t.x), y: arr(t.y), cd: t.customdata ? arr(t.customdata) : null,
-                  box: spec.fill === 'toself' || t.fill === 'toself' };
+      var full = (gd._fullData && gd._fullData[i]) || null;
+      var spec = gd.data[i] || full;
+      if (!spec) { return; }
+      var x = pick(spec, full, 'x');
+      // A trace we could not read is a trace we must not write: one unreadable column would
+      // otherwise be blanked by the first clip and stay blank forever.
+      if (!x.length) { return; }
+      ORIG[i] = { x: x, y: pick(spec, full, 'y'),
+                  cd: (spec.customdata || (full && full.customdata))
+                      ? pick(spec, full, 'customdata') : null,
+                  box: spec.fill === 'toself' || (full && full.fill === 'toself') };
     });
   }
 
@@ -159,17 +203,20 @@ AS_OF_JS = r"""
       // the ENTRY markers only. Counting every marker in the `trades` group counts exits too and
       // reports "16 trades" for eight.
       if (!t || !/^(long|short) entries/.test(String(t.name || ''))) { return; }
-      total += (ORIG && ORIG[i] ? ORIG[i].x : arr(t.x)).filter(function (v) {
-        return v !== null && v !== undefined; }).length;
-      live += arr((gd._fullData && gd._fullData[i] || t).x).filter(function (v) {
-        return v !== null && v !== undefined; }).length;
+      // BOTH counts come off gd.data: the snapshot for the total, the CURRENT (already-clipped)
+      // spec for the live one. Reading `live` from _fullData reported 0 of 8 whenever a single
+      // trade was isolated, because the group trace it counts is hidden then.
+      var keep = function (v) { return v !== null && v !== undefined && v === v; };
+      total += ((ORIG && ORIG[i] ? ORIG[i].x : arr(t.x)) || []).filter(keep).length;
+      live += arr(t.x).filter(keep).length;
     });
     return { total: total, live: live };
   }
 
   function apply(cut, rawX) {
     snapshot();
-    var idx = rewindable(), X = [], Y = [], C = [], any = false;
+    var idx = rewindable().filter(function (i) { return !!ORIG[i]; });
+    var X = [], Y = [], C = [], any = false;
     idx.forEach(function (i) {
       var o = ORIG[i];
       var r = (cut === null) ? { x: o.x, y: o.y, cd: o.cd }
