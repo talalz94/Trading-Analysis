@@ -255,6 +255,15 @@ quant/
 │   │                    #     truncating it kept only the bottom edge, so every rewound gap
 │   │                    #     collapsed into a flat line. Clamped, its height is always the gap's
 │   │                    #     real height and only its length follows the click.
+│   │                    #     IT READS gd.data, THE SPEC -- and decodes plotly.py's base64 itself.
+│   │                    #     plotly expands _fullData, and attaches a decoded _inputArray to a b64
+│   │                    #     column, only for traces it has DRAWN; every isolatable gap and every
+│   │                    #     per-trade group is built visible:false, so for exactly the traces the
+│   │                    #     pickers exist to show there is no readable geometry in either. The
+│   │                    #     snapshot stored EMPTY arrays for them and `live`, which restores from
+│   │                    #     the snapshot, wrote that emptiness back for good -- one rewind and no
+│   │                    #     trade the dropdown offered ever drew again. A trace it cannot read is
+│   │                    #     now left alone rather than blanked.
 │   ├── studies.py       #   pattern_figure (candles + chart-pattern SHAPES: pivots, both trendlines,
 │   │                    #     neckline and measured-move target, one legend toggle each).
 │   │                    #     rewind=True names the clippable traces in layout.meta (everything
