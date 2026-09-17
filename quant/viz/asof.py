@@ -22,7 +22,9 @@ Read what that gives you, shape by shape, and note that nothing is special-cased
                  honest. A break that happened after k is simply not drawn.
     trade        entry/stop/target run from entry to exit -> clipped at k; a trade entered after k
                  disappears; one still open at k is drawn only as far as k.
-    markers      single points -> dropped when they sit after k.
+    markers      single points -> DROPPED when they sit after k, never interpolated. A marker is a
+                 fact, not a path: interpolating the entry-marker trace put a "trade" on the cut at
+                 a price no trade was ever taken at.
 
 ONE INACCURACY IS HANDLED AT DRAW TIME, NOT HERE. `sr_zone_table` emits a row per price revision,
 and the normal chart draws only the LAST one — today's level, painted across the whole window. For
@@ -34,6 +36,12 @@ plotly only expands `_fullData` and only attaches `_inputArray` for traces it ha
 built `visible:false` (every isolatable gap, every per-trade group) has no readable geometry in
 either place. Snapshotting from `_fullData` captured empty arrays for exactly the traces the pickers
 exist to show, and `live` then restored that emptiness permanently.
+
+WHAT IT WRITES AT THE CUT. A STRING, never a `Date`. plotly formats a Date in the browser's own
+timezone while the rest of the column is ISO strings carrying an offset, so on a UTC+5 machine every
+clamped edge and every interpolated endpoint was painted five hours right of the cut -- gap boxes ran
+past the yellow line and past their own real end. The trace DATA was correct throughout, so only
+looking at the rendered chart could catch it.
 
 WHERE IT RUNS. In the browser tab, via `open_in_browser(fig, extra_js=AS_OF_JS)` — the same hook
 `CROSSHAIR_JS` uses. It needs no kernel and no round trip. It does NOT work in an inline notebook
@@ -116,14 +124,29 @@ AS_OF_JS = r"""
       // A trace we could not read is a trace we must not write: one unreadable column would
       // otherwise be blanked by the first clip and stay blank forever.
       if (!x.length) { return; }
+      var mode = String(spec.mode || (full && full.mode) || '');
       ORIG[i] = { x: x, y: pick(spec, full, 'y'),
                   cd: (spec.customdata || (full && full.customdata))
                       ? pick(spec, full, 'customdata') : null,
-                  box: spec.fill === 'toself' || (full && full.fill === 'toself') };
+                  box: spec.fill === 'toself' || (full && full.fill === 'toself'),
+                  pts: mode.indexOf('markers') >= 0 && mode.indexOf('lines') < 0 };
     });
   }
 
-  var ms = function (v) { return (v instanceof Date) ? v.getTime() : new Date(v).getTime(); };
+  // NOT EVERY COLUMN IS IN THE SAME FORMAT. The candles carry "+00:00"; the trade markers are
+  // TIMEZONE-NAIVE ("2026-06-06 08:25"). `new Date()` reads a naive string as LOCAL, so on a UTC+5
+  // machine an 08:25 entry compared as 03:25 -- it sorted BEFORE a 07:15 cut and a trade that had
+  // not happened yet stayed on the chart. plotly.js reads a naive string as UTC, so match plotly
+  // rather than the browser.
+  var ms = function (v) {
+    if (v instanceof Date) { return v.getTime(); }
+    if (typeof v === 'string') {
+      var z = v.trim().replace(' ', 'T');
+      if (!/(Z|[+\-]\d{2}:?\d{2})$/.test(z)) { z += 'Z'; }
+      return Date.parse(z);
+    }
+    return new Date(v).getTime();
+  };
 
   // TWO CLIPS, because a closed polygon is not a polyline.
   //
@@ -134,7 +157,7 @@ AS_OF_JS = r"""
   //   truncating it keeps only the first edge -- the bottom -- so every rewound gap collapsed into
   //   a horizontal line. Pulling each vertex back to the cut instead keeps it a box of the gap's
   //   real height, only shorter. Its height never depends on where you click; only its length.
-  function clipBox(xs, ys, cd, cut) {
+  function clipBox(xs, ys, cd, cut, cutX) {
     var ox = [], oy = [], ocd = [], seg = [], i;
     function flush() {
       if (seg.length) {
@@ -143,7 +166,7 @@ AS_OF_JS = r"""
         if (lo <= cut) {                       // born at or before the cut: keep it, clamped
           for (j = 0; j < seg.length; j++) {
             var p = seg[j];
-            ox.push(p.t > cut ? new Date(cut) : p.x); oy.push(p.y);
+            ox.push(p.t > cut ? cutX : p.x); oy.push(p.y);
             if (cd) { ocd.push(p.c); }
           }
           ox.push(null); oy.push(null); if (cd) { ocd.push(null); }
@@ -160,7 +183,20 @@ AS_OF_JS = r"""
     return { x: ox, y: oy, cd: cd ? ocd : null };
   }
 
-  function clip(xs, ys, cd, cut) {
+  // A MARKER IS A FACT, NOT A PATH. Interpolating one invents a point that never existed: with the
+  // entry markers held in a single trace, `clip` drew a line between two entries and put a "trade"
+  // on the cut at a price no trade was ever taken at. There is nothing to interpolate along, so a
+  // marker trace is simply truncated -- the ones after the cut had not happened, and they go.
+  function clipPts(xs, ys, cd, cut) {
+    var ox = [], oy = [], ocd = [], i;
+    for (i = 0; i < xs.length; i++) {
+      if (xs[i] === null || xs[i] === undefined || ms(xs[i]) > cut) { continue; }
+      ox.push(xs[i]); oy.push(ys[i]); if (cd) { ocd.push(cd[i]); }
+    }
+    return { x: ox, y: oy, cd: cd ? ocd : null };
+  }
+
+  function clip(xs, ys, cd, cut, cutX) {
     var ox = [], oy = [], ocd = [], seg = [], i;
     function flush() {
       if (!seg.length) { return; }
@@ -171,7 +207,7 @@ AS_OF_JS = r"""
         var q = seg[j - 1];
         if (q && q.t <= cut) {                       // crosses the cut: interpolate onto it
           var f = (p.t === q.t) ? 0 : (cut - q.t) / (p.t - q.t);
-          keep.push({ t: cut, x: new Date(cut), y: q.y + f * (p.y - q.y), c: q.c });
+          keep.push({ t: cut, x: cutX, y: q.y + f * (p.y - q.y), c: q.c });
         }
         break;                                       // everything past the cut is future
       }
@@ -215,12 +251,27 @@ AS_OF_JS = r"""
 
   function apply(cut, rawX) {
     snapshot();
+    // THE X WE WRITE AT THE CUT MUST BE A STRING, NOT A Date.
+    //
+    // The clipped vertices were `new Date(cut)`, and plotly formats a Date in the BROWSER'S zone
+    // while every other x on the trace is an ISO string carrying "+00:00". On a UTC+5 machine that
+    // drew each clamped edge FIVE HOURS to the right of the cut: a gap box clipped at 07:15 was
+    // painted out to 12:15, past the yellow line and past its own real end. Numerically it was
+    // correct the whole time -- `new Date(x).getTime()` round-trips -- which is why measuring the
+    // trace data found nothing and only looking at the picture showed it.
+    //
+    // The clicked point's own stored value is already the right string in the right format.
+    var cutX = rawX;
+    if (cutX instanceof Date) { cutX = cutX.toISOString(); }
+    if (cutX === null || cutX === undefined) { cutX = new Date(cut).toISOString(); }
     var idx = rewindable().filter(function (i) { return !!ORIG[i]; });
     var X = [], Y = [], C = [], any = false;
     idx.forEach(function (i) {
       var o = ORIG[i];
       var r = (cut === null) ? { x: o.x, y: o.y, cd: o.cd }
-            : (o.box ? clipBox(o.x, o.y, o.cd, cut) : clip(o.x, o.y, o.cd, cut));
+            : (o.box ? clipBox(o.x, o.y, o.cd, cut, cutX)
+                     : o.pts ? clipPts(o.x, o.y, o.cd, cut)
+                             : clip(o.x, o.y, o.cd, cut, cutX));
       X.push(r.x); Y.push(r.y); C.push(r.cd); if (r.cd) any = true;
     });
     var up = { x: X, y: Y };

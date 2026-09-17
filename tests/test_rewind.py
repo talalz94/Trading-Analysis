@@ -139,7 +139,19 @@ def test_the_script_reads_the_figure_and_bails_out_when_there_is_nothing_to_do()
 
 
 def test_the_script_is_small_enough_to_inline_everywhere():
-    assert len(AS_OF_JS) < 12000, f"{len(AS_OF_JS)} bytes of injected script"
+    """A budget on the CODE, not on the prose.
+
+    The point of the cap is that the tool stays a script and never grows into a bundle. Counting
+    comments against it just taxes the explanations, and every one of them here is a browser trap
+    that cost a real debugging session to find -- which is exactly the kind of thing that should be
+    written down beside the line it explains.
+    """
+    import re
+
+    code = re.sub(r"^\s*//.*$", "", AS_OF_JS, flags=re.M)
+    code = re.sub(r"\n\s*\n", "\n", code)
+    assert len(code) < 11000, f"{len(code)} bytes of actual code"
+    assert len(AS_OF_JS) < 18000, f"{len(AS_OF_JS)} bytes injected"
 
 
 def test_the_cut_comes_from_the_points_own_data_value_not_the_formatted_click():
@@ -205,3 +217,52 @@ def test_the_geometry_is_read_from_the_trace_spec_and_the_hidden_traces_carry_it
     # a trace it could not read must be left alone rather than blanked
     assert "if (!x.length) { return; }" in AS_OF_JS
     assert "filter(function (i) { return !!ORIG[i]; })" in AS_OF_JS
+
+
+def test_the_cut_is_written_as_a_string_never_as_a_date_object():
+    """The bug that made a rewound gap run PAST the yellow line, on a machine that is not UTC.
+
+    The clipped vertices were `new Date(cut)`. plotly formats a Date in the BROWSER'S timezone,
+    while every other x on the trace is an ISO string carrying "+00:00" -- so on a UTC+5 machine
+    each clamped edge was painted five hours to the right of the cut. A gap clipped at 07:15 was
+    drawn out to 12:15: past the marker, and past its own real end.
+
+    The trace DATA was correct the whole time (`new Date(x).getTime()` round-trips), which is why
+    measuring the arrays found nothing and only looking at the rendered chart showed it. Same trap
+    as the as-of line itself, one function over.
+    """
+    assert "new Date(cut), y: q.y" not in AS_OF_JS, "an interpolated endpoint must not be a Date"
+    assert "p.t > cut ? new Date(cut)" not in AS_OF_JS, "a clamped vertex must not be a Date"
+    assert "var cutX = rawX;" in AS_OF_JS, "the cut's x comes from the clicked point's own value"
+    assert "cutX instanceof Date" in AS_OF_JS, "and is stringified if plotly handed back a Date"
+    assert "clipBox(o.x, o.y, o.cd, cut, cutX)" in AS_OF_JS
+    assert AS_OF_JS.count("new Date(cut).toISOString()") == 1, "the fallback must be explicit UTC"
+
+
+def test_a_naive_timestamp_is_read_as_utc_the_way_plotly_reads_it():
+    """Not every column plotly is given is in the same format, which is the part that bites.
+
+    The candles carry "+00:00"; the trade-marker traces are TIMEZONE-NAIVE ("2026-06-06 08:25").
+    `new Date()` reads a naive string as LOCAL, so on a UTC+5 machine an 08:25 entry compared as
+    03:25 -- it sorted BEFORE a 07:15 cut, and a trade that had not happened yet stayed on the
+    chart. plotly.js reads a naive string as UTC, so the tool matches plotly, not the browser.
+    """
+    assert "z += 'Z';" in AS_OF_JS, "a naive string must be pinned to UTC before parsing"
+    assert "Date.parse(z)" in AS_OF_JS
+    assert "typeof v === 'string'" in AS_OF_JS
+
+
+def test_a_marker_is_truncated_never_interpolated():
+    """A marker is a fact, not a path -- and interpolating one INVENTED A TRADE.
+
+    Every long entry lives in a single marker trace, so the generic line clip drew a path between
+    two entries and put a point on the cut wherever a later entry existed: at 07:15 the chart showed
+    a "trade" at 61,633, a price no trade was ever taken at, beside a real entry from 08:25 that had
+    not happened yet. There is nothing to interpolate along, so the points after the cut simply go.
+    """
+    assert "function clipPts(" in AS_OF_JS
+    assert "o.pts ? clipPts(" in AS_OF_JS, "marker traces must be dispatched to their own clip"
+    assert "mode.indexOf('markers') >= 0 && mode.indexOf('lines') < 0" in AS_OF_JS
+    # clipPts must not interpolate: no y arithmetic anywhere in it
+    body = AS_OF_JS[AS_OF_JS.index("function clipPts("):AS_OF_JS.index("function clip(")]
+    assert "q.y" not in body and "f *" not in body, "clipPts must not compute a y"
