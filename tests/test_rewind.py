@@ -169,3 +169,39 @@ def test_a_gap_box_is_clamped_not_truncated():
     assert "var spec = gd.data[i]" in AS_OF_JS, "fill must come from the trace spec"
     # the line path must still INTERPOLATE, or a clipped trendline would tilt
     assert "q.y + f * (p.y - q.y)" in AS_OF_JS
+
+
+def test_the_geometry_is_read_from_the_trace_spec_and_the_hidden_traces_carry_it():
+    """The bug behind "after a rewind I cannot see any trade artefacts again".
+
+    plotly expands `_fullData`, and attaches the decoded `_inputArray` to a base64 column, only for
+    traces it has actually DRAWN. Every isolatable gap and every per-trade entry/stop/target group
+    is built `visible=False`, so for exactly the traces the pickers exist to show there is no
+    readable geometry there at all. Snapshotting through `_fullData` therefore stored EMPTY arrays
+    for them, and because `live` restores from the snapshot it wrote that emptiness back for good:
+    one rewind, and every trade the dropdown could offer drew nothing for the rest of the session.
+
+    The spec is the one copy that is always present, so the tool reads `gd.data` first and decodes
+    plotly.py's base64 itself. This holds the PYTHON half of that contract — that the hidden traces
+    really do carry their geometry in the spec.
+    """
+    base = _ohlc()
+    fig = _fig(base, rewind=True)
+    rw = fig.layout.meta["rewind"]
+
+    hidden = [i for i in rw if fig.data[i].visible is False]
+    assert hidden, "no visible=False traces built — this test is not exercising the case"
+    for i in hidden:
+        t = fig.data[i]
+        assert t.x is not None and len(t.x), f"trace {i} ({t.name!r}) has no x in the spec"
+        assert t.y is not None and len(t.y), f"trace {i} ({t.name!r}) has no y in the spec"
+
+    assert "var spec = gd.data[i]" in AS_OF_JS, "the spec must be read first"
+    assert "gd._fullData && gd._fullData[i]) || null" in AS_OF_JS, "_fullData is only the fallback"
+    assert "function pick(spec, full, key)" in AS_OF_JS
+    # and it must decode the base64 itself, since _inputArray is absent for the same traces
+    assert "function fromB64(" in AS_OF_JS and "atob(" in AS_OF_JS
+    assert "if (v.bdata)" in AS_OF_JS, "a raw {dtype, bdata} column has to be decodable"
+    # a trace it could not read must be left alone rather than blanked
+    assert "if (!x.length) { return; }" in AS_OF_JS
+    assert "filter(function (i) { return !!ORIG[i]; })" in AS_OF_JS
