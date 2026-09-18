@@ -287,7 +287,9 @@ def test_notebook_20_config_is_a_copy_of_19s_plus_the_rewind_settings():
     assert not drifted, f"notebook 20 no longer matches 19 on: {drifted}"
     # notebook 20 owns the point-in-time tool AND the two entry conditions built alongside it;
     # everything else must still match 19 exactly
-    assert set(kb) - set(ka) == {"REWIND", "AS_OF", "TL_CONFIRM_N", "FVG_RULES"},         sorted(set(kb) - set(ka))
+    assert set(kb) - set(ka) == {"REWIND", "AS_OF", "FVG_RULES",
+                                 "TL_CONFIRM_N", "TL_CONFIRM_ALL", "TL_CONFIRM_MODE",
+                                 "TL_CONFIRM_COLOUR"},         sorted(set(kb) - set(ka))
 
 
 def test_notebook_20_opens_the_chart_with_the_rewind_script():

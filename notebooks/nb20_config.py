@@ -85,7 +85,7 @@ TL_FULL_M     = 0          # candles formed ENTIRELY beyond it
 TL_TOUCH_K    = 0          # the line must have had this many touches
 TL_DIR_N      = 0          # candles of the TRADE'S OWN COLOUR (red for a short, green for a long)
 TL_DIR_SRC    = "chart"    # "chart" = candles of TF | "line" = the line's own timeframe
-TL_DIR_FULL_N = 0          # candles BOTH the right colour AND wholly clear of the line
+TL_DIR_FULL_N = 0#{"5m": 1, "15m": 1, "1h": 1, "*": 1}           # candles BOTH the right colour AND wholly clear of the line
 
 TL_COMBINE = "all"         # "all" = every enabled condition, "any" = one of them
 TL_TOL_ATR = 0.0           # how far past the line counts as past it, in ATR
@@ -107,7 +107,27 @@ TL_ONCE_PER_LINE = False   # True: a given trendline may trigger only its FIRST 
 #
 # This is also the ONLY setting that lets an entry happen later than the break: TL_CLOSE_N asks for
 # n CONSECUTIVE closes beyond the line, which is a different condition.
+# THE REFERENCE IS THE TRIGGER CANDLE -- call it `rs`. Every other setting in §2.2 measures
+# against the LINE; this one measures against rs, which is the only way to ask "did the move hold
+# below the candle that fired it". Takes a plain number, or a DICT per LINE timeframe, so a noisy
+# 1h break can be made to prove itself while a 5m break is taken as it comes:
+#     TL_CONFIRM_N = {"1h": 2, "*": 0}       two candles after rs, on 1h lines only
 TL_CONFIRM_N = 0          # 0 = off; 3 means "within three 5m candles"
+
+TL_CONFIRM_ALL = False    # False: ONE of the next n candles must qualify (entry on the first).
+                          #   True:  ALL n must, consecutively from rs+1 (entry on the nth).
+                          #   True is the stricter reading of "n candles must form below rs"
+TL_CONFIRM_MODE = "close"  # "close": the candle CLOSES beyond rs   (below rs's LOW, for a short)
+                          #   "full":  the WHOLE candle is beyond rs (its HIGH below rs's LOW)
+                          #   Both measure against rs's far edge, so "beyond rs" means clear of the
+                          #   entire candle -- closing back inside its range is the sweep
+TL_CONFIRM_COLOUR = True  # the confirming candles must also be the trade's own colour
+                          #   (red for a short, green for a long). False drops the colour test
+
+# ONE rs PER LINE? Careful: a 1h line typically reads BROKEN on several consecutive 5m bars, so
+# every one of them is an rs and each gets its own confirmation window -- fail at 18:50 and a later
+# bar can still confirm and trade. Set TL_ONCE_PER_LINE = True above if you mean "the FIRST break
+# is the only rs, and if it is not confirmed the line is spent".
 
 # ---------------------------------------------------------------------------------------------
 # 2.3  EXTRA RULES — ANDed onto the break, so they can only remove entries

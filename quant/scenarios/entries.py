@@ -679,46 +679,83 @@ def _tl_entry(p: dict, side: str) -> Cond:
                         seen.add(k)
                         keep[i] = True
                     hit = keep
+            # AFTER once_per_line, never before: that filter spends a line on its first BREAK, and
+            # confirmation moves the entry to a LATER bar where the line's id may already be gone.
+            # Run it first and "one trade per line" would be deciding on the wrong bar.
+            # PER TIMEFRAME, like every other condition here, and applied to THIS prefix's hits
+            # rather than to the OR of all of them -- a 1h break and a 15m break do not deserve the
+            # same amount of proof, which was the whole reason the others take a dict.
+            cn = tl_per_tf(p, "tl_confirm_n", pref)
+            if cn > 0:
+                hit = _confirm_beyond(hit, df["open"].to_numpy(float),
+                                      df["high"].to_numpy(float), df["low"].to_numpy(float),
+                                      df["close"].to_numpy(float), side, cn,
+                                      need_all=bool(p.get("tl_confirm_all", False)),
+                                      mode=str(p.get("tl_confirm_mode", "close")),
+                                      colour=bool(p.get("tl_confirm_colour", True)))
             fired |= hit
-        cn = int(p.get("tl_confirm_n", 0) or 0)
-        if cn > 0:
-            fired = _confirm_beyond(fired, df["open"].to_numpy(float),
-                                    df["high"].to_numpy(float), df["low"].to_numpy(float),
-                                    df["close"].to_numpy(float), side, cn)
         return fired
 
     return raw(fn, f"mtf_trendline_{side}")
 
 
 def _confirm_beyond(fired: np.ndarray, o: np.ndarray, h: np.ndarray, lo: np.ndarray,
-                    c: np.ndarray, side: str, n: int) -> np.ndarray:
-    """Move each trigger forward to the first candle that CONFIRMS it, or drop it.
+                    c: np.ndarray, side: str, n: int, *, need_all: bool = False,
+                    mode: str = "close", colour: bool = True) -> np.ndarray:
+    """Move each trigger forward to the candles that CONFIRM it, or drop it.
 
-    The case this is for: a break candle that is huge relative to its neighbours and closes a whole
-    new body beyond the line. It looks decisive and is exactly the shape that gets swept back --
-    entering on its close is entering at the worst price of the move. So instead of taking that
-    close, wait for the market to do it again:
+    THE REFERENCE IS THE TRIGGER CANDLE ITSELF -- call it `rs` -- not the line. That is the whole
+    point of this rule and what separates it from `tl_close_n`: a break candle that is huge next to
+    its neighbours and closes a whole new body beyond the line looks decisive and is exactly the
+    shape that gets swept back, so entering on its close is entering at the worst price of the move.
+    Asking for more closes beyond the LINE does not test that; asking the next candles to hold
+    below `rs` does.
 
-        within the next `n` CHART candles, one candle must be the TRADE'S OWN COLOUR and close
-        beyond the whole trigger candle -- below its LOW for a short, above its HIGH for a long
+    `mode` and `colour` are separate questions on purpose, because they measure different things:
 
-    The entry then happens on THAT candle's close, not the break's. No confirmation inside the
-    window means no trade: the move did not repeat itself, which was the whole question.
+        mode="close"   the candle CLOSES beyond rs      (close below rs's LOW, for a short)
+        mode="full"    the WHOLE candle is beyond rs    (high below rs's LOW, for a short)
+        colour=True    and it is the trade's own colour (red for a short, green for a long)
 
-    Beyond the trigger candle's LOW/HIGH rather than its close, because the point is a fresh body
-    clear of the whole bar -- closing back inside its range is the sweep, not the continuation.
+    Both compare against rs's LOW (a short) or HIGH (a long) -- the far edge, so "beyond rs" means
+    clear of the entire candle rather than of its close. Closing back inside rs's range is the
+    sweep, not the continuation.
+
+    `need_all` picks what n counts:
+
+        need_all=False   ONE of the next n candles must qualify; entry on the first that does
+        need_all=True    ALL n candles after rs must qualify, consecutively; entry on the nth
+
+    No qualifying candle means no trade: the move did not repeat itself, which was the question.
     """
     out = np.zeros(len(fired), bool)
     if n <= 0:
         return fired.copy()
-    right_colour = (c < o) if side == "short" else (c > o)
+    right = (c < o) if side == "short" else (c > o)
+    if not colour:
+        right = np.ones(len(fired), bool)
+    full = str(mode).lower() == "full"
     last = len(fired) - 1
+
+    def ok(i, j):
+        if not right[j]:
+            return False
+        if side == "short":
+            return (h[j] < lo[i]) if full else (c[j] < lo[i])
+        return (lo[j] > h[i]) if full else (c[j] > h[i])
+
     for i in np.flatnonzero(fired):
-        for j in range(i + 1, min(last, i + n) + 1):
-            beyond = (c[j] < lo[i]) if side == "short" else (c[j] > h[i])
-            if right_colour[j] and beyond:
-                out[j] = True
-                break
+        if need_all:
+            end = i + n
+            if end > last:
+                continue
+            if all(ok(i, j) for j in range(i + 1, end + 1)):
+                out[end] = True
+        else:
+            for j in range(i + 1, min(last, i + n) + 1):
+                if ok(i, j):
+                    out[j] = True
+                    break
     return out
 
 
@@ -764,7 +801,7 @@ def trendline_trigger(df: pd.DataFrame, trades: pd.DataFrame, params: dict,
     held = {}
     for p_ in tuple(params.get("tl_prefixes") or ("",)):
         hold = max(tl_per_tf(params, "tl_close_n", p_), tl_per_tf(params, "tl_full_m", p_),
-                   tl_per_tf(params, "tl_dir_full_n", p_)) - 1             + int(params.get("tl_confirm_n", 0) or 0)
+                   tl_per_tf(params, "tl_dir_full_n", p_)) - 1 + tl_per_tf(params, "tl_confirm_n", p_)
         for w in ("res", "sup"):
             col = f"{p_}tl_{w}_n"
             if col not in df.columns:
