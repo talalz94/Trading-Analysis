@@ -1054,3 +1054,94 @@ def test_a_confirmed_trade_still_names_the_line_it_broke(mtf):
     t = trendline_trigger(r.df, r.trades, p, prefix_names=p["tl_tf_names"])
     if len(t):
         assert not any("?" in str(c) for c in t["cause"]), list(t["cause"])
+
+
+# ---------------------------------------------------------------------------
+# confirmation measured against the TRIGGER CANDLE, not the line
+# ---------------------------------------------------------------------------
+def _rs_frame():
+    """A break candle `rs`, then candles built to pass or fail each confirmation option."""
+    import pandas as _pd
+    o = [100, 100, 99.0, 98.6, 97.0]
+    h = [101, 101, 99.2, 99.4, 97.4]
+    lo = [99,   98,  97.6, 98.2, 96.0]
+    c = [100.5, 99,  97.8, 99.0, 96.4]
+    t = _pd.date_range("2026-01-01", periods=len(o), freq="5min", tz="UTC")
+    return _pd.DataFrame({"t": t, "open": o, "high": h, "low": lo, "close": c})
+
+
+def test_confirmation_is_measured_against_rs_not_against_the_line():
+    """`rs` is the candle that fired the trade, and its LOW is the bar to clear.
+
+    Every other condition in the family asks about the LINE. This one asks whether the move held
+    below the candle that triggered it -- the only way to test "that break candle was a sweep",
+    because a sweep closes back inside rs's own range while still sitting beyond the line.
+    """
+    from quant.scenarios.entries import _confirm_beyond
+
+    df = _rs_frame()
+    o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    fired = np.zeros(len(df), bool)
+    fired[1] = True                      # rs = bar 1, low 98.0
+    # bar 2 is red and closes 97.8, below rs's low -> confirms
+    out = _confirm_beyond(fired, o, h, lo, c, "short", 1)
+    assert out[2] and out.sum() == 1
+
+
+def test_all_n_candles_versus_one_within_the_window():
+    """`n` reads two ways and they are not the same rule, so it is a setting rather than a guess."""
+    from quant.scenarios.entries import _confirm_beyond
+
+    df = _rs_frame()
+    o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    fired = np.zeros(len(df), bool)
+    fired[1] = True                      # rs low 98.0; bar 2 qualifies, bar 3 closes 99.0 (above)
+
+    # one within the window: bar 2 confirms and the search stops there
+    any_two = _confirm_beyond(fired, o, h, lo, c, "short", 2, need_all=False)
+    assert any_two[2] and any_two.sum() == 1
+
+    # all n: bar 3 closes back above rs's low, so two consecutive candles never happens
+    all_two = _confirm_beyond(fired, o, h, lo, c, "short", 2, need_all=True)
+    assert not all_two.any(), "a candle closing back inside rs must break the run"
+
+    # and with need_all the entry is on the nth bar, not the first that qualifies
+    fired2 = np.zeros(len(df), bool)
+    fired2[2] = True                     # rs = bar 2 (low 97.6); bars 3,4 -> only bar 4 is below
+    assert not _confirm_beyond(fired2, o, h, lo, c, "short", 2, need_all=True).any()
+
+
+def test_colour_and_whole_candle_are_separate_questions():
+    """They measure different things, so asking for one must not silently impose the other."""
+    from quant.scenarios.entries import _confirm_beyond
+
+    df = _rs_frame()
+    o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    fired = np.zeros(len(df), bool)
+    fired[1] = True                      # rs low 98.0; bar 2 closes 97.8 but its HIGH is 99.2
+
+    assert _confirm_beyond(fired, o, h, lo, c, "short", 1, mode="close")[2], "close is below rs"
+    assert not _confirm_beyond(fired, o, h, lo, c, "short", 1, mode="full").any(), \
+        "the whole candle is NOT below rs -- its high is 99.2 against rs's low of 98.0"
+
+    # colour off admits a green candle that still closes beyond rs
+    green = df.copy()
+    green.loc[2, "open"] = 97.0          # bar 2 becomes green, close 97.8 still below rs's low
+    g = (green[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    go, gh, glo, gc = g
+    assert not _confirm_beyond(fired, go, gh, glo, gc, "short", 1, colour=True).any()
+    assert _confirm_beyond(fired, go, gh, glo, gc, "short", 1, colour=False)[2]
+
+
+def test_the_wait_can_be_set_per_line_timeframe():
+    """A 1h break and a 5m break do not deserve the same amount of proof -- which is why every
+    other condition in this family takes a dict, and why this one now does too."""
+    from quant.scenarios.entries import tl_per_tf
+
+    p = {"tl_confirm_n": {"1h": 2, "*": 0}, "tl_tf_names": {"": "5m", "15m__": "15m", "1h__": "1h"}}
+    assert tl_per_tf(p, "tl_confirm_n", "1h__") == 2
+    assert tl_per_tf(p, "tl_confirm_n", "15m__") == 0
+    assert tl_per_tf(p, "tl_confirm_n", "") == 0
+    # a plain number still applies everywhere, so existing configs are untouched
+    q = dict(p, tl_confirm_n=3)
+    assert all(tl_per_tf(q, "tl_confirm_n", k) == 3 for k in ("", "15m__", "1h__"))
