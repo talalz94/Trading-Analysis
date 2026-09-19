@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **542 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **551 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -432,7 +432,11 @@ quant/
 │   │                    #     first BREAK, and confirmation moves the entry to a later bar where the
 │   │                    #     id may be gone. CAREFUL: a 1h line reads BROKEN on several consecutive
 │   │                    #     chart bars, so every one of them is an rs with its own window; "the
-│   │                    #     first break is the only rs" is tl_once_per_line=True, not this setting
+│   │                    #     first break is the only rs" is tl_once_per_line=True, not this setting.
+│   │                    #     tl_confirm_cancel RETIRES rs when price CLOSES BACK OVER IT
+│   │                    #     (above rs's high for a short): without it the window keeps scanning
+│   │                    #     after the break has been undone, hunting for a confirmation that
+│   │                    #     would now mean something else. Exact mirror of the confirmation
 │   ├── support_break.py #   support_break_short v1.0 core / v1.1 +HH-HL structure / v1.2 no-structure
 │   │                    #     / v1.3 nearest-trough — short below a down-sloping smoothed 200-EMA on a
 │   │                    #     support break; entry_mode = break_close|wait_n|n_red|pullback (Q2);
@@ -482,6 +486,14 @@ quant/
 │                        #     actually used. Slower than the browser tool and not clickable,
 │                        #     but nothing is filtered and it works inline.
 │                        #     .trades/.all/.blocked/.gaps/.end/.census()/.summary()/.figure()
+│   ├── variant.py     #   variant(CFG, **overrides) -> the same settings with one thing
+│   │                  #     changed, DEEP-copied. Every A/B a notebook wants is "the same
+│   │                  #     study with one difference"; a shallow copy lets a dict setting be
+│   │                  #     mutated through the variant and silently compare a thing against
+│   │                  #     itself, and an unknown key would be added without complaint
+│   └── compare.py     #   compare_runs() one row per arm, trade_diff() one row per entry time
+│                      #     across both -- a filter can only REMOVE or DELAY, so totals alone
+│                      #     cannot separate "removed losers" from "removed trades at random"
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
 │   └── search.py        #   optuna_search (optional; Bayesian)
@@ -511,6 +523,13 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   back, which is how EMAS_ON vanished and the notebook died on a
                          #   NameError. So cell 2 carries SETTING_DEFAULTS: a setting the
                          #   config predates falls back and prints the line to paste in.
+                         # 21_break_confirmation + nb21_config.py = a 1h trendline break must
+                         #   be CONFIRMED by a later candle before it is traded, and the setup
+                         #   is CANCELLED if price closes back over rs. 20's settings with one
+                         #   rule on (a test holds them equal), run with and without via
+                         #   variant(), so the rule is the only variable. Its config is the
+                         #   SHORT kind: 124 lines to 20's 333, because a settings file is a
+                         #   control panel and the rules are documented beside the code
                          # 20_rewind + nb20_config.py = notebook 19's chart plus the REWIND
                          #   tool. The config is a verified COPY of 19's (a test fails if any
                          #   value drifts) plus REWIND and AS_OF, so the point-in-time view is
@@ -721,7 +740,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **542 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **551 total.**
 
 ## 12. Known limitations / honest caveats
 
