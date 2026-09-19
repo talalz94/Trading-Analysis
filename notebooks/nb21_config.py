@@ -40,6 +40,10 @@ TL_ONCE_PER_LINE = False             # True = only the FIRST break of each line 
 
 # 2.3  THE CONFIRMATION — measured against rs, the candle that fired, NOT against the line.
 #      THIS IS WHAT NOTEBOOK 21 IS FOR.
+TL_CONFIRM_FROM   = "first"          # which bar is rs: "first" = the bar the break STARTED on |
+                                     #   "every" = every bar the line reads broken. A 1h line reads
+                                     #   broken for a RUN of 5m bars; "every" lets the rule confirm
+                                     #   against a small chop candle instead of the real break
 TL_CONFIRM_N      = {"1h": 3, "*": 0}   # candles of grace after rs; per LINE timeframe. 1h only
 TL_CONFIRM_ALL    = False            # False = ONE of the n confirms | True = all n, consecutively
 TL_CONFIRM_MODE   = "close"          # "close" beyond rs | "full" = the whole candle beyond rs

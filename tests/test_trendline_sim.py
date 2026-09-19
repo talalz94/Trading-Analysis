@@ -1227,3 +1227,40 @@ def test_compare_runs_and_trade_diff_line_the_two_arms_up():
     assert len(d) == 2, "one row per entry time across BOTH runs"
     assert d.loc["2026-06-05 18:50", "R  on"] != d.loc["2026-06-05 18:50", "R  on"], \
         "the removed trade must be blank in the ON column"
+
+
+def test_rs_can_be_the_bar_the_break_started_on_rather_than_every_bar_of_it():
+    """The break condition is a STATE, not an event, and that quietly gutted the confirmation.
+
+    "The last candle closed beyond the line" stays true for every bar price holds there, so a 1h
+    line reads broken across a RUN of chart bars. Treating each as its own rs hands the rule the
+    EASIEST reference in the run: the decisive break candle is large and its low is far away, while
+    the small chop candles behind it sit a hundred points higher, so "close beyond rs" gets
+    satisfied against a bar nobody would call the break. Measured on real data, the trade the rule
+    was meant to stop survived against rs = a chop candle two bars later.
+    """
+    from quant.scenarios.entries import _tl_entry
+
+    df = pd.DataFrame({
+        "open":  [102.0, 101.0, 99.0, 98.0, 96.5],
+        "high":  [103.0, 101.0, 99.5, 98.5, 102.0],
+        "low":   [101.0,  97.0, 98.0, 96.0, 96.0],
+        "close": [101.0,  99.0, 98.0, 96.5, 101.0],
+        "tl_sup": [100.0] * 5,                       # the line, flat, so bars 1-3 read broken
+    })
+    base = dict(tl_prefixes=("",), tl_close_n=1, tl_combine="all", tl_extend=False,
+                tl_confirm_n=1, tl_tf_names={"": "5m"})
+
+    broken = _tl_entry(dict(base, tl_confirm_n=0), "short")(df)
+    assert list(broken) == [False, True, True, True, False], "the break is a RUN, not one bar"
+
+    # "every": rs = bar 2 (low 98) is confirmed by bar 3 closing 96.5 -- a chop candle, not the break
+    every = _tl_entry(dict(base, tl_confirm_from="every"), "short")(df)
+    assert every[3] and every.sum() == 1
+
+    # "first": rs = bar 1 (low 97) only, and bar 2 closes 98, above it -> no trade at all
+    first = _tl_entry(dict(base, tl_confirm_from="first"), "short")(df)
+    assert not first.any(), "only the bar the break STARTED on may be rs"
+
+    # and the default must leave every existing config alone
+    assert np.array_equal(_tl_entry(base, "short")(df), every)

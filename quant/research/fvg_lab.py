@@ -224,6 +224,7 @@ def fvg_lab(cfg) -> FvgLab:
         tl_confirm_mode=_get(c, "TL_CONFIRM_MODE", "close"),
         tl_confirm_colour=_get(c, "TL_CONFIRM_COLOUR", True),
         tl_confirm_cancel=_get(c, "TL_CONFIRM_CANCEL", False),
+        tl_confirm_from=_get(c, "TL_CONFIRM_FROM", "every"),
         stop_n=c.STOP_N, stop_buffer_pct=c.STOP_BUFFER_PCT,
         be_at_rr=c.BE_AT_RR, tp_rr=c.TP_RR,
         sec_touch_n=c.SEC_TOUCH_N, sec_wrong_m=c.SEC_WRONG_M, sec_opp_n=c.SEC_OPP_N,

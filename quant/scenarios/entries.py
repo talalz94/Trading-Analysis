@@ -687,6 +687,18 @@ def _tl_entry(p: dict, side: str) -> Cond:
             # same amount of proof, which was the whole reason the others take a dict.
             cn = tl_per_tf(p, "tl_confirm_n", pref)
             if cn > 0:
+                if str(p.get("tl_confirm_from", "every")).lower() == "first":
+                    # WHICH BAR IS rs. The break condition is a STATE, not an event -- "the last
+                    # candle closed beyond the line" stays true for every bar price holds there, so
+                    # a 1h line reads broken on a whole run of chart bars and each one was being
+                    # treated as its own rs. That guts the rule: the decisive break candle is big
+                    # and its low is far away, while the small chop candles behind it have lows a
+                    # hundred points higher, so "close beyond rs" is trivially satisfied by the
+                    # easiest reference in the run rather than by the one the rule exists to test.
+                    # "first" keeps only the bar the break STARTED on. A later, separate run breaks
+                    # the line again and gets its own rs, which is what makes this narrower than
+                    # tl_once_per_line -- that spends the line for good.
+                    hit = hit & ~np.concatenate(([False], hit[:-1]))
                 hit = _confirm_beyond(hit, df["open"].to_numpy(float),
                                       df["high"].to_numpy(float), df["low"].to_numpy(float),
                                       df["close"].to_numpy(float), side, cn,
