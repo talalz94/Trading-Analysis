@@ -1145,3 +1145,85 @@ def test_the_wait_can_be_set_per_line_timeframe():
     # a plain number still applies everywhere, so existing configs are untouched
     q = dict(p, tl_confirm_n=3)
     assert all(tl_per_tf(q, "tl_confirm_n", k) == 3 for k in ("", "15m__", "1h__"))
+
+
+def test_rs_is_cancelled_when_price_closes_back_over_it():
+    """A break that has been undone is not a setup that is still waiting.
+
+    Without this the window keeps scanning after price has closed back over rs: the move is dead,
+    price is on the other side of the candle that fired it, and the rule is still hunting for a
+    confirmation that would now mean something else. The cancel is the exact mirror of the
+    confirmation -- close clear of rs and you are in, close back over rs and it is off.
+    """
+    import pandas as _pd
+    from quant.scenarios.entries import _confirm_beyond
+
+    #          rs                 reclaim            would-confirm
+    o  = [100, 100.0, 101.0, 99.0]
+    h  = [101, 101.0, 103.0, 99.5]
+    lo = [99,   98.0,  99.0, 96.0]
+    c  = [100,  99.0, 102.0, 96.5]     # bar 2 closes 102 > rs's high 101 -> rs is dead
+    o, h, lo, c = (np.asarray(x, float) for x in (o, h, lo, c))
+    fired = np.zeros(4, bool)
+    fired[1] = True                     # rs = bar 1
+
+    # bar 3 is red and closes 96.5, below rs's low of 98 -- it WOULD confirm
+    assert _confirm_beyond(fired, o, h, lo, c, "short", 3, cancel=False)[3]
+    # but bar 2 reclaimed rs first, so with the cancel on there is no trade at all
+    assert not _confirm_beyond(fired, o, h, lo, c, "short", 3, cancel=True).any()
+
+
+def test_the_cancel_is_off_by_default_and_mirrors_for_longs():
+    from quant.scenarios.entries import _confirm_beyond
+
+    o  = np.array([100, 100.0, 99.0, 103.0])
+    h  = np.array([101, 101.0, 100.0, 104.0])
+    lo = np.array([99,   98.0,  96.0, 102.5])
+    c  = np.array([100, 100.5,  96.5, 103.5])   # bar 2 closes 96.5 < rs's low 98 -> kills a LONG
+    fired = np.zeros(4, bool)
+    fired[1] = True
+
+    assert _confirm_beyond(fired, o, h, lo, c, "long", 3, cancel=False)[3], "bar 3 clears rs's high"
+    assert not _confirm_beyond(fired, o, h, lo, c, "long", 3, cancel=True).any()
+    # default must leave every existing config untouched
+    assert np.array_equal(_confirm_beyond(fired, o, h, lo, c, "long", 3),
+                          _confirm_beyond(fired, o, h, lo, c, "long", 3, cancel=False))
+
+
+# ---------------------------------------------------------------------------
+# the two notebook-facing helpers notebook 21 is built on
+# ---------------------------------------------------------------------------
+def test_variant_copies_deeply_and_refuses_a_typo():
+    """An A/B is only worth running if the two arms really differ.
+
+    A shallow copy lets a dict setting be mutated through the variant and change the original under
+    a later run, and an unknown key would be added silently -- both turn "no difference" into an
+    answer indistinguishable from the real one.
+    """
+    from types import SimpleNamespace
+    from quant.research import variant
+
+    cfg = SimpleNamespace(TL_CLOSE_N={"5m": 1}, TP_RR=3.0, lowercase="ignored")
+    v = variant(cfg, TP_RR=2.0)
+    assert v.TP_RR == 2.0 and cfg.TP_RR == 3.0
+    v.TL_CLOSE_N["5m"] = 99
+    assert cfg.TL_CLOSE_N["5m"] == 1, "the original was mutated through the copy"
+    assert not hasattr(v, "lowercase"), "only settings are carried"
+    with pytest.raises(KeyError):
+        variant(cfg, TP_RRR=2.0)
+
+
+def test_compare_runs_and_trade_diff_line_the_two_arms_up():
+    from quant.research import compare_runs, trade_diff
+
+    a = pd.DataFrame({"entry_time": pd.to_datetime(["2026-06-01 01:40", "2026-06-05 18:50"]),
+                      "side": ["short", "short"], "trigger": ["15m", "1h"],
+                      "R": [2.8, -1.05], "close_reason": ["take_profit", "stop_loss"]})
+    b = a.iloc[:1]                                    # the confirmation removed the second trade
+    s = compare_runs(off=a, on=b)
+    assert list(s["trades"]) == [2, 1] and s["total R"].iloc[1] == 2.8
+
+    d = trade_diff(off=a, on=b)
+    assert len(d) == 2, "one row per entry time across BOTH runs"
+    assert d.loc["2026-06-05 18:50", "R  on"] != d.loc["2026-06-05 18:50", "R  on"], \
+        "the removed trade must be blank in the ON column"

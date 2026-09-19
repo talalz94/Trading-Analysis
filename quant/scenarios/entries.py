@@ -692,7 +692,8 @@ def _tl_entry(p: dict, side: str) -> Cond:
                                       df["close"].to_numpy(float), side, cn,
                                       need_all=bool(p.get("tl_confirm_all", False)),
                                       mode=str(p.get("tl_confirm_mode", "close")),
-                                      colour=bool(p.get("tl_confirm_colour", True)))
+                                      colour=bool(p.get("tl_confirm_colour", True)),
+                                      cancel=bool(p.get("tl_confirm_cancel", False)))
             fired |= hit
         return fired
 
@@ -701,7 +702,8 @@ def _tl_entry(p: dict, side: str) -> Cond:
 
 def _confirm_beyond(fired: np.ndarray, o: np.ndarray, h: np.ndarray, lo: np.ndarray,
                     c: np.ndarray, side: str, n: int, *, need_all: bool = False,
-                    mode: str = "close", colour: bool = True) -> np.ndarray:
+                    mode: str = "close", colour: bool = True,
+                    cancel: bool = False) -> np.ndarray:
     """Move each trigger forward to the candles that CONFIRM it, or drop it.
 
     THE REFERENCE IS THE TRIGGER CANDLE ITSELF -- call it `rs` -- not the line. That is the whole
@@ -726,6 +728,12 @@ def _confirm_beyond(fired: np.ndarray, o: np.ndarray, h: np.ndarray, lo: np.ndar
         need_all=False   ONE of the next n candles must qualify; entry on the first that does
         need_all=True    ALL n candles after rs must qualify, consecutively; entry on the nth
 
+    `cancel` retires rs the moment price CLOSES BACK OVER IT -- above rs's high for a short, below
+    its low for a long. Without it the window keeps scanning after the break has been undone: the
+    setup is dead, price is back on the other side, and the rule is still waiting for a candle that
+    would now mean something else entirely. It is the exact mirror of the confirmation, so the two
+    read as one rule: close clear of rs and you are in, close back over rs and it is off.
+
     No qualifying candle means no trade: the move did not repeat itself, which was the question.
     """
     out = np.zeros(len(fired), bool)
@@ -744,18 +752,24 @@ def _confirm_beyond(fired: np.ndarray, o: np.ndarray, h: np.ndarray, lo: np.ndar
             return (h[j] < lo[i]) if full else (c[j] < lo[i])
         return (lo[j] > h[i]) if full else (c[j] > h[i])
 
+    def dead(i, j):
+        if not cancel:
+            return False
+        return (c[j] > h[i]) if side == "short" else (c[j] < lo[i])
+
     for i in np.flatnonzero(fired):
-        if need_all:
-            end = i + n
-            if end > last:
+        hits = 0
+        for j in range(i + 1, min(last, i + n) + 1):
+            if dead(i, j):
+                break
+            if not ok(i, j):
+                if need_all:
+                    break          # the run has to be consecutive from rs+1
                 continue
-            if all(ok(i, j) for j in range(i + 1, end + 1)):
-                out[end] = True
-        else:
-            for j in range(i + 1, min(last, i + n) + 1):
-                if ok(i, j):
-                    out[j] = True
-                    break
+            hits += 1
+            if not need_all or hits == n:
+                out[j] = True
+                break
     return out
 
 

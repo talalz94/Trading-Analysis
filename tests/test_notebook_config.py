@@ -297,3 +297,65 @@ def test_notebook_20_opens_the_chart_with_the_rewind_script():
                        if c["cell_type"] == "code")
     assert "extra_js=AS_OF_JS" in src, (
         "the tool only exists in the browser tab, so the script has to be injected there")
+
+
+# ---------------------------------------------------------------------------
+# notebook 21 — the 1h break confirmation
+# ---------------------------------------------------------------------------
+NB21 = NB.parent / "21_break_confirmation.ipynb"
+CFG21 = NB.parent / "nb21_config.py"
+
+
+def _cells21():
+    return json.loads(NB21.read_text(encoding="utf-8"))["cells"]
+
+
+def test_notebook_21_exists_with_its_own_settings_file():
+    assert NB21.is_file() and CFG21.is_file()
+
+
+def test_notebook_21_states_no_setting_and_defines_no_function():
+    import ast
+
+    bad = []
+    for c in _cells21():
+        if c["cell_type"] != "code":
+            continue
+        src = "".join(c["source"])
+        bad += ["assigns: " + l.strip() for l in src.splitlines() if re.match(SETTING_RE, l)]
+        bad += ["defines: " + n.name for n in ast.parse(src).body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    assert not bad, bad
+
+
+def test_notebook_21_config_is_20s_plus_the_cancel_switch():
+    """21 exists to isolate ONE rule. If the trading settings drift from 20 the comparison stops
+    meaning anything, exactly as it would between 19 and 20."""
+    a, b = {}, {}
+    exec(compile(CFG20.read_text(encoding="utf-8"), str(CFG20), "exec"), a)
+    exec(compile(CFG21.read_text(encoding="utf-8"), str(CFG21), "exec"), b)
+    ka = {k: v for k, v in a.items() if k.isupper()}
+    kb = {k: v for k, v in b.items() if k.isupper()}
+    assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL"}, sorted(set(kb) - set(ka))
+    drifted = [k for k in ka if repr(ka[k]) != repr(kb.get(k))]
+    assert drifted == ["TL_CONFIRM_N"], f"only the confirmation may differ, got {drifted}"
+    assert kb["TL_CONFIRM_N"], "notebook 21 is pointless with the confirmation off"
+    assert kb["TL_CONFIRM_CANCEL"] is True
+
+
+def test_notebook_21_config_is_not_an_essay():
+    """The settings file is a control panel, not documentation -- the rules themselves are
+    documented beside the code that runs them. A config you have to READ is one you stop editing."""
+    text = CFG21.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    comment = sum(1 for l in lines if l.lstrip().startswith("#"))
+    assert len(lines) < 160, f"{len(lines)} lines"
+    assert comment / max(len(lines), 1) < 0.35, f"{comment} of {len(lines)} lines are comment"
+
+
+def test_notebook_21_runs_the_study_both_ways():
+    """A confirmation can only remove or delay trades, so a single run cannot say whether it
+    removed losers or removed trades at random. Both columns or the notebook proves nothing."""
+    src = chr(10).join("".join(c["source"]) for c in _cells21() if c["cell_type"] == "code")
+    assert "variant(" in src and "TL_CONFIRM_N=0" in src, "the OFF run must be built from the ON one"
+    assert "compare_runs(" in src and "trade_diff(" in src
