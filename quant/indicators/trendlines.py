@@ -49,6 +49,7 @@ class _Line:
     broke: bool = False
     touch_i: tuple = ()
     touch_price: tuple = ()
+    beyond_n: int = 0         # consecutive closes on the wrong side, for break_sustain_bars
 
     def at(self, x: float) -> float:
         return self.slope * x + self.intercept
@@ -72,7 +73,7 @@ def add_trendlines(df: pd.DataFrame, *,
                    min_touches: int = 3, lookback_pivots: int = 16,
                    line_tol_atr: float = 0.6, min_span_bars: int = 40,
                    max_age_bars: int = 500, break_buffer_atr: float = 0.0,
-                   max_distance_atr: float = 8.0,
+                   max_distance_atr: float = 8.0, break_sustain_bars: int = 0,
                    prefix: str = "tl") -> pd.DataFrame:
     """Fit the live support and resistance trendlines bar by bar and flag their breaks.
 
@@ -111,6 +112,21 @@ def add_trendlines(df: pd.DataFrame, *,
     break_buffer_atr
         Require the close to clear the line by this much ATR before calling it a break. 0 = a plain
         close through. Raise it to filter marginal pokes.
+    break_sustain_bars
+        HOW LONG A BREAK HAS TO STICK before the line is retired. 0 (the default) keeps the original
+        behaviour: the first close through kills the line, for good.
+
+        That default is wrong for any strategy that asks a break to prove itself. A break can fail
+        its confirmation and the line dies anyway, so a line that would have given a far better
+        signal an hour later is gone -- measured on 15m S5, retired 06-02 07:15 on a break nothing
+        confirmed, while price closed back under the same line at 08:30 and stayed there for 55
+        bars. Non-zero means: a close through starts a count, a close back on the original side
+        RESETS it and the line lives on, and only `break_sustain_bars` consecutive closes beyond
+        retire it. The break is then flagged on the bar it was sustained to, not on the first poke.
+
+        The line is still published while the count runs, so the level is there to trade against;
+        and `max_distance_atr` still retires it outright if price simply leaves, which is the case
+        this counter cannot catch.
     """
     out = df.reset_index(drop=True).copy()
     if f"zz_label" not in out.columns:
@@ -223,18 +239,19 @@ def add_trendlines(df: pd.DataFrame, *,
             ln.end_i = i
             if kind < 0:
                 sup_px[i], sup_sl[i], sup_tc[i] = y, ln.slope, ln.touches
-                if close[i] < y - buf:
-                    brk_dn[i] = True
-                    ln.broke, ln.end_i = True, i
-                    retired[kind].add(tuple(ln.touch_i))
-                    live[kind] = None
+                beyond = close[i] < y - buf
             else:
                 res_px[i], res_sl[i], res_tc[i] = y, ln.slope, ln.touches
-                if close[i] > y + buf:
-                    brk_up[i] = True
-                    ln.broke, ln.end_i = True, i
-                    retired[kind].add(tuple(ln.touch_i))
-                    live[kind] = None
+                beyond = close[i] > y + buf
+            # A BREAK HAS TO STICK. With break_sustain_bars a close back on the original side resets
+            # the count and the line lives on, so a poke that nothing confirms no longer spends it.
+            # At 0 this is exactly the original branch: one close through, retired.
+            ln.beyond_n = ln.beyond_n + 1 if beyond else 0
+            if beyond and ln.beyond_n > break_sustain_bars:
+                (brk_dn if kind < 0 else brk_up)[i] = True
+                ln.broke, ln.end_i = True, i
+                retired[kind].add(tuple(ln.touch_i))
+                live[kind] = None
 
     # A line that never published — born and superseded on the same bar, or never once found within
     # distance of price — has no span it was ever valid over, so it is not a line. Drop it rather

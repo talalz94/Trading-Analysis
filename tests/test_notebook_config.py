@@ -338,10 +338,15 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     kb = {k: v for k, v in b.items() if k.isupper()}
     assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
                                  "SHOW_REJECTED"}, sorted(set(kb) - set(ka))
-    drifted = [k for k in ka if repr(ka[k]) != repr(kb.get(k))]
-    assert drifted == ["TL_CONFIRM_N"], f"only the confirmation may differ, got {drifted}"
+    drifted = sorted(k for k in ka if repr(ka[k]) != repr(kb.get(k)))
+    assert drifted == ["TL_CONFIRM_N", "TRENDLINE"],         f"only the confirmation and the line's break rule may differ, got {drifted}"
     assert kb["TL_CONFIRM_N"], "notebook 21 is pointless with the confirmation off"
     assert kb["TL_CONFIRM_CANCEL"] is True
+    # the two belong together: requiring a break to prove itself while the line still dies on the
+    # first poke throws away the better signal the same line gives later -- the 15m S5 case
+    assert kb["TRENDLINE"].get("break_sustain_bars", 0) > 0, (
+        "a confirmation without break_sustain_bars retires lines on breaks it just rejected")
+    assert {k: v for k, v in kb["TRENDLINE"].items() if k != "break_sustain_bars"} == ka["TRENDLINE"]
 
 
 def test_notebook_21_config_is_not_an_essay():

@@ -24,7 +24,12 @@ TF_WARMUP_BARS = 800                 # per extra timeframe, in its own bars
 # 2.1  which lines
 LINE_TFS  = ("15m", "1h")            # fitted AND traded (gap timeframes are §3)
 TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.6,
-                 min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0)
+                 min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0,
+                 # a break must STICK for this many bars before the line is retired. 0 = the first
+                 # close through kills it, which throws the line away on a poke nothing confirmed.
+                 # A close back on the original side resets the count. max_distance_atr still
+                 # retires a line price has simply walked away from.
+                 break_sustain_bars=1)
 
 # 2.2  the break — each is a run of n chart candles ending at the entry, measured against the LINE
 TL_CLOSE_N    = {"5m": 1, "15m": 1, "1h": 1, "*": 2}   # closes beyond it
