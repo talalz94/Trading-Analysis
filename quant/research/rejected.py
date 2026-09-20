@@ -37,10 +37,12 @@ def rejected_setups(lab) -> pd.DataFrame:
     t = D["t"]
 
     busy = np.zeros(len(D), bool)                 # bars a position was already running over
+    took = set()                                  # (bar, side) pairs that BECAME a trade
     tr = lab.trades
     if len(tr) and {"entry_i", "exit_i"} <= set(tr.columns):
         for a, b in zip(tr["entry_i"].to_numpy(int), tr["exit_i"].to_numpy(int)):
             busy[a:max(a + 1, b)] = True
+        took = set(zip(tr["entry_i"].to_numpy(int), tr["side"].astype(str)))
 
     # the LINE each rejection belongs to, so the chart can draw the setup that never traded and
     # not just a dot. Geometry comes from the line's own frame -- the same source the drawn
@@ -91,7 +93,10 @@ def rejected_setups(lab) -> pd.DataFrame:
                     got = _confirm_beyond(one, o, h, lo, cl, side, n, cancel=cancel, **kw)
                     if got.any():
                         at = int(np.flatnonzero(got)[0])
-                        if not busy[at]:
+                        # `busy` spans entry..exit INCLUSIVE, so a setup whose confirmation lands
+                        # on its own trade's entry bar reads as blocked by the position it just
+                        # opened. 15m-S7 traded at +1.05R and still appeared in the missed list.
+                        if not busy[at] or (at, side) in took:
                             continue                      # this one traded
                         reason = "already open"
                     else:
@@ -99,7 +104,7 @@ def rejected_setups(lab) -> pd.DataFrame:
                         no_cancel = _confirm_beyond(one, o, h, lo, cl, side, n, cancel=False, **kw)
                         reason = "cancelled" if (cancel and no_cancel.any()) else "not confirmed"
                         at = i
-                elif busy[i]:
+                elif busy[i] and (i, side) not in took:
                     reason, at = "already open", i
                 else:
                     continue
