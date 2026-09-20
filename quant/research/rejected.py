@@ -45,16 +45,20 @@ def rejected_setups(lab) -> pd.DataFrame:
     # the LINE each rejection belongs to, so the chart can draw the setup that never traded and
     # not just a dot. Geometry comes from the line's own frame -- the same source the drawn
     # trendlines use, so a missed setup and a traded one cannot disagree about where the line was.
+    from ..indicators.trendlines import trendline_table
+
     geom = {}
-    for pref, frame in (lab.line_frames or {}).items():
-        from ..indicators.trendlines import trendline_table
+    # THE CHART'S OWN TIMEFRAME IS NOT IN line_frames -- its lines are fitted on D itself. Leaving
+    # it out gave every 5m rejection a marker and no line, which is most of them.
+    frames = {c.TF: D, **(lab.line_frames or {})}
+    for name, frame in frames.items():
         try:
             tt = trendline_table(frame)
         except Exception:
             continue
         tv = frame["t"].to_numpy()
         for r in tt.itertuples():
-            geom[(pref, r.id)] = (tv[int(r.start_i)], float(r.y_start),
+            geom[(name, r.id)] = (tv[int(r.start_i)], float(r.y_start),
                                   tv[int(r.end_i)], float(r.y_end))
 
     rows = []
@@ -105,6 +109,18 @@ def rejected_setups(lab) -> pd.DataFrame:
                 num = int(D[idc].to_numpy()[i]) if idc in D.columns else -1
                 lid = f"{'R' if side == 'long' else 'S'}{num}" if num >= 0 else ""
                 g = geom.get((tf, lid), (None, None, None, None))
+                # EXTENDED TO THE BREAK. A higher-timeframe line stops where its OWN frame last
+                # published it, which on the chart's grid is up to one of its bars before the break
+                # -- so the segment ended in mid-air short of the marker. The fit is linear in bar
+                # index and bars are evenly spaced, so extrapolating in TIME is exact.
+                if g[0] is not None and pd.notna(g[0]):
+                    # pandas Timestamps throughout: a tz-aware frame's `t.to_numpy()` yields
+                    # OBJECT Timestamps, which will not compare against a naive datetime64
+                    x0, x1, bt = pd.Timestamp(g[0]), pd.Timestamp(g[2]), t.iloc[at]
+                    span = (x1 - x0).total_seconds()
+                    if span > 0 and bt > x1:
+                        f = (bt - x0).total_seconds() / span
+                        g = (x0, g[1], bt, g[1] + f * (g[3] - g[1]))
                 rows.append({"t": t.iloc[at], "side": side, "tf": tf, "reason": reason,
                              "price": float(cl[at]), "break_t": t.iloc[i],
                              "line": f"{tf}·{lid}" if lid else "",
