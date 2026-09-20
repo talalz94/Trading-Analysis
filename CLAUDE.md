@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **556 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **557 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -516,6 +516,15 @@ quant/
 │   │                  #     built against the trace list as it stood when the menu was made, so
 │   │                  #     a layer added afterwards is in no payload and no control can touch
 │   │                  #     it. SHOW_REJECTED opts in; it costs a re-run of the conditions
+│   │                  #     Each one is ALSO pickable on its own -- line + break marker, hidden
+│   │                  #     until asked -- and the executed/missed toggle folds into the EXISTING
+│   │                  #     group menu rather than adding a third dropdown, because every cascade
+│   │                  #     payload addresses the list as `updatemenus[4]` BY INDEX and a new menu
+│   │                  #     would retarget them. Five dropdowns is ~1,050px of header in a 890px
+│   │                  #     plot and plotly does not wrap, so with a missed half they spread over
+│   │                  #     the three rows the layer buttons already use, and the top margin grows
+│   │                  #     66px to keep them off the centred title. All of it gated on there
+│   │                  #     BEING missed setups: notebooks 18-20 keep their exact layout
 │   ├── variant.py     #   variant(CFG, **overrides) -> the same settings with one thing
 │   │                  #     changed, DEEP-copied. Every A/B a notebook wants is "the same
 │   │                  #     study with one difference"; a shallow copy lets a dict setting be
@@ -770,7 +779,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **556 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **557 total.**
 
 ## 12. Known limitations / honest caveats
 

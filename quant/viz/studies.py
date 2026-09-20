@@ -473,7 +473,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
                    fvg_show=("bull", "bear"),
                    sr_frames=None, tf_sr=None, max_sr_picker: int = 6,
-                   rewind: bool = False, rejected=None):
+                   rewind: bool = False, rejected=None, max_missed_picker: int = 8):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -1565,6 +1565,42 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     # MULTI-SELECT lives in the LEGEND, not here: a plotly dropdown is single-choice by nature.
     # Picking a family promotes its instances to individual legend entries, so you can then tick
     # exactly the two channel-ups you want and leave everything else off, EMAs included.
+    # ---- THE MISSED SETUPS, one pickable entry each ------------------------------------------
+    # The reason-grouped layer further down is the overview; this is the single-setup view, built
+    # the same way a trade is: the LINE it would have broken plus a marker at the break, hidden
+    # until the dropdown asks for it. Added HERE, before the menus, precisely so the pickers own
+    # them -- isolating a trade must hide these, and isolating one of these must hide the trades.
+    # (The reason layer is the opposite case and is appended after the menus on purpose.)
+    MISS_TRACES = 2
+    _MISS_COL = {"entry rule": "#7a828c", "not confirmed": "#d9a441",
+                 "cancelled": "#c96a4a", "already open": "#5b7fa6"}
+    missed_picker = []          # (label, row, first_trace_index)
+    if rejected is not None and len(rejected) and trades is not None:
+        _per = {}
+        for _r in rejected.itertuples():
+            # CAPPED PER REASON, not from one shared pool: "entry rule" outnumbers the others
+            # three to one here and would drain a shared cap before the interesting ones appeared.
+            if _per.get(_r.reason, 0) >= max_missed_picker:
+                continue
+            _per[_r.reason] = _per.get(_r.reason, 0) + 1
+            _g = f"miss#{len(missed_picker)}"
+            _c = _MISS_COL.get(_r.reason, "#8b93a0")
+            _idx = len(fig.data)
+            _ln = getattr(_r, "line", "") or "?"
+            _has = not (pd.isna(getattr(_r, "x0", None)) or pd.isna(getattr(_r, "y0", None)))
+            fig.add_trace(go.Scattergl(
+                x=[_r.x0, _r.x1] if _has else [], y=[_r.y0, _r.y1] if _has else [],
+                mode="lines", name=f"{_ln} (missed)", legendgroup=_g, visible=False,
+                showlegend=False, line=dict(color=_c, width=1.8, dash="dot"),
+                hovertemplate=f"{_ln}<br>the line this setup would have broken<extra></extra>"))
+            fig.add_trace(go.Scattergl(
+                x=[_r.t], y=[_r.price], mode="markers", name=f"{_ln} break", legendgroup=_g,
+                visible=False, showlegend=False,
+                marker=dict(symbol="x-thin", size=13, color=_c, line=dict(width=2.2, color=_c)),
+                hovertemplate=(f"{_ln}  {_r.side}<br>skipped: {_r.reason}"
+                               "<br>%{x|%b-%d %H:%M}  %{y:,.2f}<extra></extra>")))
+            missed_picker.append((f"{_ln} {_r.side[0].upper()}  {_r.reason}", _r, _idx))
+
     menus = []
 
     if picker or trade_picker:
@@ -1586,7 +1622,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                      for k, v in data.items()}, layout or {}, ctl]
 
         owned = ({i for _, _, i, _ in picker} | {i + 1 for _, _, i, _ in picker}
-                 | {z[2] + k for z in trade_picker for k in range(TRADE_TRACES)})
+                 | {z[2] + k for z in trade_picker for k in range(TRADE_TRACES)}
+                 | {z[2] + k for z in missed_picker for k in range(MISS_TRACES)})
         fam_groups = {}
         for fam, lbl, idx, sortk in sorted(picker, key=lambda z: z[3]):
             fam_groups.setdefault(fam, []).append((lbl, idx))
@@ -1717,9 +1754,25 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         menu = dict(direction="down", showactive=True, yanchor="top", y=1.045,
                     bgcolor="rgba(28,32,38,0.96)", bordercolor="#4a5058", borderwidth=1,
                     font=dict(size=11, color="#dfe3e8"), pad=dict(l=2, r=2, t=2, b=2))
-        menus += [dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
-                  dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
-                  dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)]
+        # WHERE THE DROPDOWNS GO. Five of them on one row is about 1,050px of header in a plot
+        # 890px wide, and plotly does not wrap -- they simply overlap, which they have been doing.
+        # With a MISSED half there are still five, so they move onto the three rows the layer
+        # buttons already occupy, using the empty right-hand half of each:
+        #
+        #   row 3 (top)   S/R: ...        |  traded/missed toggle  |  the list
+        #   row 2         FVGs: ...       |  timeframe             |  family
+        #   row 1                         |  occurrence            |          EMAs (right)
+        #
+        # Gated on `missed_picker` so every notebook without it keeps the layout it has today.
+        _wide = bool(missed_picker)
+        _cas = ([dict(buttons=tf_buttons, x=0.40, xanchor="left", **dict(menu, y=1.105)),
+                 dict(buttons=_fam_buttons(), x=0.65, xanchor="left", **dict(menu, y=1.105)),
+                 dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)]
+                if _wide else
+                [dict(buttons=tf_buttons, x=0.0, xanchor="left", **menu),
+                 dict(buttons=_fam_buttons(), x=0.155, xanchor="left", **menu),
+                 dict(buttons=_inst_buttons(None), x=0.40, xanchor="left", **menu)])
+        menus += _cas
 
         if trade_picker:
             # A TRADE and everything it owns, in one click -- its entry, stop, target and exit, plus
@@ -1775,13 +1828,47 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 out += [_row(*z) for z in rows]
                 return out
 
+            # THE SETUPS THAT DID NOT TRADE, in the same two menus. One toggle picks executed or
+            # missed, the list beside it fills with whichever you chose -- rather than a third
+            # dropdown, which would crowd the row AND shift `updatemenus[4]`, the index every
+            # cascade payload above addresses the list by.
+            def _isolate_missed(first):
+                v = list(base)
+                for i in owned:
+                    v[i] = False
+                for j, tr in enumerate(fig.data):
+                    g = getattr(tr, "legendgroup", "") or ""
+                    if g and g != "price" and not g.startswith(("ema", "mtfema")):
+                        v[j] = False
+                for k in range(MISS_TRACES):
+                    v[first + k] = True
+                return v
+
+            def _missed_buttons(why):
+                out = [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
+                            args=_upd({"visible": _all_trades()}))]
+                out += [dict(label=f"{lbl}  ·  {r.t:%b-%d %H:%M}", method="update",
+                             args=_upd({"visible": _isolate_missed(i)}))
+                        for lbl, r, i in missed_picker if r.reason == why]
+                return out
+
             grp_buttons = []
             for g in groups:
                 n = sum(1 for z in trade_picker if groups[g](z))
                 grp_buttons.append(dict(
-                    label=f"{g}  ({n})", method="update",
+                    # the "traded" prefix only earns its place when there is a MISSED half to tell
+                    # it apart from; without one it is noise on every older notebook's chart
+                    label=(f"traded · {g}  ({n})" if missed_picker else f"{g}  ({n})"),
+                    method="update",
                     args=_upd({"visible": _all_trades()},
                               {"updatemenus[4].buttons": _trade_buttons(g),
+                               "updatemenus[4].active": 0})))
+            for why in sorted({r.reason for _, r, _ in missed_picker}):
+                n = sum(1 for _, r, _ in missed_picker if r.reason == why)
+                grp_buttons.append(dict(
+                    label=f"MISSED · {why}  ({n})", method="update",
+                    args=_upd({"visible": _all_trades()},
+                              {"updatemenus[4].buttons": _missed_buttons(why),
                                "updatemenus[4].active": 0})))
             # 41 rows is 780px of dropdown in a plot area of about 760, and plotly menus clip
             # rather than scroll, so a long list opens on a prompt and the groups on the left are
@@ -1796,8 +1883,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                                   args=_upd({"visible": _all_trades()})),
                              dict(label="── pick a group on the left ──", method="update",
                                   args=_upd({"visible": _all_trades()}))])
-            menus.append(dict(buttons=grp_buttons, x=0.60, xanchor="left", **menu))
-            menus.append(dict(buttons=opening, x=0.74, xanchor="left", **menu))
+            _tm = dict(menu, y=1.165) if missed_picker else menu
+            menus.append(dict(buttons=grp_buttons,
+                              x=0.40 if missed_picker else 0.60, xanchor="left", **_tm))
+            menus.append(dict(buttons=opening,
+                              x=0.68 if missed_picker else 0.74, xanchor="left", **_tm))
 
     # ONE TIMEFRAME'S GAPS AT A TIME. The legend already toggles each layer, but it lists them as
     # "4h . FVG bullish" / "4h . FVG bearish" -- two clicks per timeframe and six rows to hunt
@@ -1950,7 +2040,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         # line that caused it vanish. "toggle" makes a double-click do what a single click does.
         legend=dict(orientation="v", x=1.01, y=1, bgcolor="rgba(0,0,0,0.35)",
                     itemdoubleclick="toggle"),
-        margin=dict(l=50, r=210, t=104, b=40),
+        # The centred title shares the very top of the container with the TOP menu row. With the
+        # layer buttons alone that row is short and left-hand, so the title cleared it; once the
+        # trade menus move up there, they sit straight under it. More headroom pushes the rows
+        # (paper coords, so they follow the plot area) clear of the title.
+        margin=dict(l=50, r=210, t=104 + (66 if missed_picker else 0), b=40),
         title_x=0.5, title_xanchor="center", title_y=0.985, title_yanchor="top")
     fig.update_yaxes(side="right")
     return fig
