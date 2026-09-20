@@ -486,3 +486,55 @@ def test_the_missed_picker_adds_no_menu_and_leaves_the_old_layout_alone():
     assert {m.y for m in plain.layout.updatemenus if m.buttons and "longs" in str(m.buttons[0].label)} \
         != {m.y for m in withm.layout.updatemenus if m.buttons and "traded" in str(m.buttons[0].label)}, \
         "the rearranged row must apply only when there is a missed half"
+
+
+def test_every_missed_setup_gets_a_line_that_reaches_its_break():
+    """The test that was deleted for being vacuous, on a fixture that actually exercises the code.
+
+    The first attempt ran against a sine wave: the fitter never accepted a line on it, so
+    `rejected_setups` returned an EMPTY table and every assertion passed over zero rows. This frame
+    is built to produce one -- three troughs on a flat support 50 bars apart, then a break that
+    nothing confirms -- so there is a row to be wrong about.
+
+    Two faults it guards, both found by looking at the chart rather than at a total:
+      * the chart's OWN timeframe is not in `line_frames`, so keying off that dict alone left every
+        5m rejection as a marker with no line -- 17 of 38 on the real data;
+      * a line ends where ITS frame last published it, up to one of its own bars before the break,
+        so the segment stopped in mid-air short of the marker it belongs to.
+    """
+    import types
+
+    import pandas as _pd
+    from quant.indicators.trendlines import add_trendline_ids, add_trendlines
+    from quant.research.rejected import rejected_setups
+
+    n = 220
+    close = 108 + 6 * np.sin(2 * np.pi * np.arange(n) / 50)
+    low, high = close - 1.0, close + 1.0
+    for k in (12, 62, 112):                      # the three touches the fitter needs
+        low[k], close[k], high[k] = 100.0, 100.8, 102.0
+    for k in range(180, 200):                    # a break, with no confirming candle after it
+        close[k], low[k], high[k] = 96.0 - (k - 180) * 0.3, 95.0, 97.0
+    t = _pd.date_range("2026-01-01", periods=n, freq="15min", tz="UTC")
+    df = _pd.DataFrame({"t": t, "open_time": t, "open": close, "high": high, "low": low,
+                        "close": close, "volume": 1.0})
+    D = add_trendline_ids(add_trendlines(
+        df, atr_mult=1.5, min_touches=3, lookback_pivots=16, line_tol_atr=1.5,
+        min_span_bars=40, max_age_bars=500, max_distance_atr=30.0))
+
+    cfg = types.SimpleNamespace(TF="15m", VIEW_START=str(t[0]), ENTRY_RULES=[],
+                                RULES_COMBINE="all", TRADE_LONG=True, TRADE_SHORT=True)
+    lab = types.SimpleNamespace(
+        D=D, cfg=cfg, line_frames={}, trades=_pd.DataFrame(),
+        params=dict(tl_prefixes=("",), tl_tf_names={"": "15m"}, tl_close_n=1,
+                    tl_combine="all", tl_extend=False, tl_confirm_n=3,
+                    tl_confirm_from="first", tl_confirm_mode="close",
+                    tl_confirm_colour=True, tl_confirm_all=False, tl_confirm_cancel=True))
+
+    out = rejected_setups(lab)
+    assert len(out), "the fixture must produce a rejection or this test guards nothing"
+    assert (out["tf"] == "15m").any(), "the CHART's own frame was not searched for lines"
+    assert out["line"].ne("").all(), "a rejection with no line id cannot be drawn"
+    assert out["x0"].notna().all(), "a rejection with no geometry is a marker floating alone"
+    late = out[out["t"] > out["x1"]]
+    assert not len(late), f"{len(late)} segments stop before their own break marker"
