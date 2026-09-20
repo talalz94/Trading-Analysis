@@ -31,5 +31,7 @@ from __future__ import annotations
 from .fvg_lab import FvgLab, fvg_lab
 from .variant import variant
 from .compare import compare_runs, trade_diff
+from .rejected import rejected_setups
 
-__all__ = ["FvgLab", "fvg_lab", "variant", "compare_runs", "trade_diff"]
+__all__ = ["FvgLab", "fvg_lab", "variant", "compare_runs", "trade_diff",
+           "rejected_setups"]

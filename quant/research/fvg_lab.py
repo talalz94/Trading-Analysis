@@ -107,6 +107,16 @@ class FvgLab:
               "them\nat random lowers total R while leaving the per-trade number alone. And see "
               "docs/WHAT_WORKS.md\nbefore reading anything into a window this small.")
 
+    @property
+    def rejected(self) -> pd.DataFrame:
+        """Every trendline break that did NOT become a trade, with the reason it was turned down.
+
+        Only judgeable evidence about a filter. Computed on demand, because it re-runs the entry
+        conditions and most callers never look at it.
+        """
+        from .rejected import rejected_setups
+        return rejected_setups(self)
+
     # ---------------------------------------------------------------- the chart
     def figure(self, **overrides):
         """The chart, with every setting the config asked for. `overrides` go to `pattern_figure`."""
@@ -136,6 +146,10 @@ class FvgLab:
             start_visible=_get(c, "START_VISIBLE", ("trades", "fvg_bull", "fvg_bear")),
             height=_get(c, "HEIGHT", 900),
             rewind=_get(c, "REWIND", False),
+            # SHOW_REJECTED is opt-in: computing it re-runs the entry conditions, and a chart that
+            # nobody asked to see them on should not pay for it. The layer starts legendonly even
+            # when it is on, so the chart still opens on price and trades.
+            rejected=self.rejected if _get(c, "SHOW_REJECTED", False) else None,
             title=(f"{c.SYMBOL} {c.TF}  {c.VIEW_START} to {self.end}"
                    f"{'  (AS OF)' if _get(c, 'AS_OF', None) else ''}  ·  "
                    f"{'/'.join((c.TF,) + tuple(_get(c, 'FVG_TFS', ())))} fair value gaps"

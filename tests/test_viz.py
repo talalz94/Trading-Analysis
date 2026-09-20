@@ -366,3 +366,68 @@ def test_a_timeframe_button_row_opens_on_what_is_actually_drawn():
     on = rows(pattern_figure(base, start_visible=("fvg_bull", "fvg_bear", "sr_zones"), **kw))
     # the chart's own layers are on but the 1h ones are not, so neither end is true
     assert all(v != "all" for v in on.values()), on
+
+
+# ---------------------------------------------------------------------------
+# the setups that did NOT trade
+# ---------------------------------------------------------------------------
+def test_the_rejected_layer_cannot_disturb_the_chart_it_is_added_to():
+    """The requirement, in the user's words: do not disturb the current view.
+
+    A filter is only judgeable against what it removed, so the rejections have to be drawable --
+    but the chart people actually use shows live trades, and a new layer must not change it. Two
+    guarantees, and the second is the one that is easy to get wrong: every button row carries a
+    visibility payload built against the trace list AS IT STOOD when the menu was made, so a layer
+    appended afterwards is in no payload at all. Add it earlier and `FVGs: 4h` or isolating one
+    trade would silently switch it on or off.
+    """
+    import json
+
+    import pandas as _pd
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    common = dict(patterns=[], sr_zones=True, trendlines=True, fvgs=True, chart_tf="5m",
+                  emas=(50,), view_start=str(base["t"].iloc[3000]))
+    rej = _pd.DataFrame({"t": list(base["t"].iloc[3100:3140:10]),
+                         "side": ["short"] * 4, "tf": ["1h"] * 4,
+                         "reason": ["not confirmed", "not confirmed", "cancelled", "entry rule"],
+                         "price": list(base["close"].iloc[3100:3140:10])})
+
+    a = pattern_figure(base, **common)
+    b = pattern_figure(base, rejected=rej, **common)
+
+    J = lambda f, i: json.dumps(f.data[i].to_plotly_json(), sort_keys=True, default=str)
+    assert all(J(a, i) == J(b, i) for i in range(len(a.data))), "an existing trace changed"
+    jm = lambda f: json.dumps([m.to_plotly_json() for m in f.layout.updatemenus],
+                              sort_keys=True, default=str)
+    assert jm(a) == jm(b), "a menu payload changed"
+
+    added = list(range(len(a.data), len(b.data)))
+    assert added, "nothing was drawn"
+    assert all(b.data[i].visible == "legendonly" for i in added), "the layer must open OFF"
+
+    touched = set()
+    for m in b.layout.updatemenus:
+        for btn in m.buttons:
+            for arg in (btn.args or ()):
+                if isinstance(arg, (list, tuple)) and arg and all(isinstance(x, int) for x in arg):
+                    touched |= set(arg)
+    assert not (touched & set(added)), "a button can reach the rejected layer"
+
+
+def test_one_legend_entry_per_reason_and_none_for_a_reason_with_no_rows():
+    """Four reasons is four questions; a single lumped trace could not answer any of them."""
+    import pandas as _pd
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    rej = _pd.DataFrame({"t": list(base["t"].iloc[3100:3130:10]),
+                         "side": ["short"] * 3, "tf": ["1h"] * 3,
+                         "reason": ["not confirmed", "not confirmed", "cancelled"],
+                         "price": list(base["close"].iloc[3100:3130:10])})
+    fig = pattern_figure(base, patterns=[], sr_zones=False, trendlines=False, chart_tf="5m",
+                         emas=(), view_start=str(base["t"].iloc[3000]), rejected=rej)
+    names = [t.name for t in fig.data if (t.meta or "") == "rejected"]
+    assert sorted(names) == ["skipped · cancelled (1)", "skipped · not confirmed (2)"]
+    assert not any("already open" in n for n in names), "an empty reason must draw nothing"
