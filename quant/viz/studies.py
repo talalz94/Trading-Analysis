@@ -1572,6 +1572,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     # them -- isolating a trade must hide these, and isolating one of these must hide the trades.
     # (The reason layer is the opposite case and is appended after the menus on purpose.)
     MISS_TRACES = 2
+    # THE SAME COLOURS THE TRADED LINES USE. A short breaks a SUPPORT and a long a RESISTANCE, so
+    # the line a missed setup would have broken is drawn exactly as it would have been had it
+    # traded -- a muted grey read as chart furniture and was invisible against the candles.
+    _MISS_LINE = {"short": "#2ecc71", "long": "#e74c3c"}
     _MISS_COL = {"entry rule": "#7a828c", "not confirmed": "#d9a441",
                  "cancelled": "#c96a4a", "already open": "#5b7fa6"}
     missed_picker = []          # (label, row, first_trace_index)
@@ -1591,7 +1595,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             fig.add_trace(go.Scattergl(
                 x=[_r.x0, _r.x1] if _has else [], y=[_r.y0, _r.y1] if _has else [],
                 mode="lines", name=f"{_ln} (missed)", legendgroup=_g, visible=False,
-                showlegend=False, line=dict(color=_c, width=1.8, dash="dot"),
+                showlegend=False,
+                line=dict(color=_MISS_LINE.get(str(_r.side), "#2ecc71"), width=2.0),
                 hovertemplate=f"{_ln}<br>the line this setup would have broken<extra></extra>"))
             fig.add_trace(go.Scattergl(
                 x=[_r.t], y=[_r.price], mode="markers", name=f"{_ln} break", legendgroup=_g,
@@ -1599,7 +1604,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 marker=dict(symbol="x-thin", size=13, color=_c, line=dict(width=2.2, color=_c)),
                 hovertemplate=(f"{_ln}  {_r.side}<br>skipped: {_r.reason}"
                                "<br>%{x|%b-%d %H:%M}  %{y:,.2f}<extra></extra>")))
-            missed_picker.append((f"{_ln} {_r.side[0].upper()}  {_r.reason}", _r, _idx))
+            missed_picker.append((f"{_ln} {_r.side[0].upper()}", _r, _idx))
 
     menus = []
 
@@ -1845,7 +1850,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 return v
 
             def _missed_buttons(why):
-                out = [dict(label=f"▸ show all {len(trade_picker)} trades again", method="update",
+                # NOT "show all N trades again": that is the executed list's reset row, and reading
+                # it at the top of a MISSED list says the opposite of what has been selected.
+                out = [dict(label="▸ clear — back to the trades", method="update",
                             args=_upd({"visible": _all_trades()}))]
                 out += [dict(label=f"{lbl}  ·  {r.t:%b-%d %H:%M}", method="update",
                              args=_upd({"visible": _isolate_missed(i)}))
