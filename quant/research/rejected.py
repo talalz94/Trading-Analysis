@@ -42,6 +42,21 @@ def rejected_setups(lab) -> pd.DataFrame:
         for a, b in zip(tr["entry_i"].to_numpy(int), tr["exit_i"].to_numpy(int)):
             busy[a:max(a + 1, b)] = True
 
+    # the LINE each rejection belongs to, so the chart can draw the setup that never traded and
+    # not just a dot. Geometry comes from the line's own frame -- the same source the drawn
+    # trendlines use, so a missed setup and a traded one cannot disagree about where the line was.
+    geom = {}
+    for pref, frame in (lab.line_frames or {}).items():
+        from ..indicators.trendlines import trendline_table
+        try:
+            tt = trendline_table(frame)
+        except Exception:
+            continue
+        tv = frame["t"].to_numpy()
+        for r in tt.itertuples():
+            geom[(pref, r.id)] = (tv[int(r.start_i)], float(r.y_start),
+                                  tv[int(r.end_i)], float(r.y_end))
+
     rows = []
     for pref in tuple(p.get("tl_prefixes") or ("",)):
         tf = (p.get("tl_tf_names") or {}).get(pref, pref or "chart")
@@ -84,8 +99,25 @@ def rejected_setups(lab) -> pd.DataFrame:
                     reason, at = "already open", i
                 else:
                     continue
+                # WHICH line, and where it ran -- `{pref}tl_{res|sup}_n` is the id live on that
+                # bar, the same column a taken trade uses to name the line it broke.
+                idc = f"{pref}tl_{'res' if side == 'long' else 'sup'}_n"
+                num = int(D[idc].to_numpy()[i]) if idc in D.columns else -1
+                lid = f"{'R' if side == 'long' else 'S'}{num}" if num >= 0 else ""
+                g = geom.get((tf, lid), (None, None, None, None))
                 rows.append({"t": t.iloc[at], "side": side, "tf": tf, "reason": reason,
-                             "price": float(cl[at]), "break_t": t.iloc[i]})
+                             "price": float(cl[at]), "break_t": t.iloc[i],
+                             "line": f"{tf}·{lid}" if lid else "",
+                             "x0": g[0], "y0": g[1], "x1": g[2], "y1": g[3]})
 
-    out = pd.DataFrame(rows, columns=["t", "side", "tf", "reason", "price", "break_t"])
-    return out.sort_values("t").reset_index(drop=True) if len(out) else out
+    out = pd.DataFrame(rows, columns=["t", "side", "tf", "reason", "price", "break_t",
+                                      "line", "x0", "y0", "x1", "y1"])
+    if not len(out):
+        return out
+    # WARM-UP REJECTIONS ARE NOT MISSED TRADES. The frame starts at WARMUP_START so the lines and
+    # gaps have history, but the chart opens at VIEW_START -- a rejection from three weeks before
+    # the window is off-screen, un-clickable, and would pad the picker with rows nobody can look at.
+    vs = getattr(c, "VIEW_START", None)
+    if vs is not None:
+        out = out[out["t"] >= pd.Timestamp(vs, tz="UTC")]
+    return out.sort_values("t").reset_index(drop=True)

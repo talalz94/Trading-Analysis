@@ -431,3 +431,58 @@ def test_one_legend_entry_per_reason_and_none_for_a_reason_with_no_rows():
     names = [t.name for t in fig.data if (t.meta or "") == "rejected"]
     assert sorted(names) == ["skipped · cancelled (1)", "skipped · not confirmed (2)"]
     assert not any("already open" in n for n in names), "an empty reason must draw nothing"
+
+
+def test_the_missed_picker_adds_no_menu_and_leaves_the_old_layout_alone():
+    """Two constraints, both easy to break and both load-bearing.
+
+    `updatemenus[4]` is addressed BY INDEX from every cascade payload, so a third trade dropdown
+    would silently retarget them at whatever landed in slot 4. The executed/missed toggle therefore
+    folds into the existing group menu instead of adding one.
+
+    And the rearranged rows are gated on there BEING missed setups, because notebooks 18-20 were
+    not asked to change.
+    """
+    import pandas as _pd
+    from quant.viz.studies import pattern_figure
+
+    base = _ohlc()
+    trades = _pd.DataFrame({
+        "tid": ["#01"], "side": ["short"], "entry_time": [base["t"].iloc[3200]],
+        "exit_time": [base["t"].iloc[3260]], "entry_price": [float(base["close"].iloc[3200])],
+        "exit_price": [float(base["close"].iloc[3260])],
+        "stop_price": [float(base["close"].iloc[3200]) * 1.01],
+        "pnl": [1.0], "R": [1.5], "close_reason": ["take_profit"], "cause": [""],
+        "entry_i": [3200], "exit_i": [3260], "qty": [1.0], "bars_held": [60],
+        "fees": [0.0], "gross_pnl": [1.0], "return_pct": [0.1], "trigger": ["1h"]})
+    rej = _pd.DataFrame({"t": list(base["t"].iloc[3300:3320:10]), "side": ["short"] * 2,
+                         "tf": ["1h"] * 2, "reason": ["not confirmed"] * 2,
+                         "price": list(base["close"].iloc[3300:3320:10]),
+                         "break_t": list(base["t"].iloc[3300:3320:10]),
+                         "line": ["1h·S1", "1h·S1"],
+                         "x0": list(base["t"].iloc[3280:3300:10]),
+                         "y0": list(base["close"].iloc[3280:3300:10]),
+                         "x1": list(base["t"].iloc[3300:3320:10]),
+                         "y1": list(base["close"].iloc[3300:3320:10])})
+    common = dict(patterns=[], sr_zones=False, trendlines=True, chart_tf="5m", emas=(),
+                  view_start=str(base["t"].iloc[3000]), trades=trades)
+
+    plain = pattern_figure(base, **common)
+    withm = pattern_figure(base, rejected=rej, **common)
+
+    assert len(withm.layout.updatemenus) == len(plain.layout.updatemenus), \
+        "a new menu would shift updatemenus[4], which the cascades address by index"
+
+    grp = [m for m in withm.layout.updatemenus
+           if m.buttons and "traded" in str(m.buttons[0].label)][0]
+    assert any("MISSED" in str(b.label) for b in grp.buttons), "no missed half in the toggle"
+    miss = [b for b in grp.buttons if "MISSED" in str(b.label)][0]
+    assert "updatemenus[4].buttons" in miss.args[1], "the toggle must refill the SAME list menu"
+
+    # the old chart keeps the old labels and the old single row
+    old = [m for m in plain.layout.updatemenus if m.buttons and "longs" in str(m.buttons[0].label)]
+    assert old and not str(old[0].buttons[0].label).startswith("traded"), \
+        "a chart with nothing missed must not gain a 'traded' prefix"
+    assert {m.y for m in plain.layout.updatemenus if m.buttons and "longs" in str(m.buttons[0].label)} \
+        != {m.y for m in withm.layout.updatemenus if m.buttons and "traded" in str(m.buttons[0].label)}, \
+        "the rearranged row must apply only when there is a missed half"
