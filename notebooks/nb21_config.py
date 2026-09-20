@@ -44,7 +44,7 @@ TL_CONFIRM_FROM   = "first"          # which bar is rs: "first" = the bar the br
                                      #   "every" = every bar the line reads broken. A 1h line reads
                                      #   broken for a RUN of 5m bars; "every" lets the rule confirm
                                      #   against a small chop candle instead of the real break
-TL_CONFIRM_N      = {"1h": 3, "*": 0}   # candles of grace after rs; per LINE timeframe. 1h only
+TL_CONFIRM_N      = {"1h": 3, "15m": 3, "*": 0}   # candles of grace after rs, per LINE timeframe
 TL_CONFIRM_ALL    = False            # False = ONE of the n confirms | True = all n, consecutively
 TL_CONFIRM_MODE   = "close"          # "close" beyond rs | "full" = the whole candle beyond rs
 TL_CONFIRM_COLOUR = True             # the confirming candle must be the trade's own colour
@@ -113,6 +113,9 @@ MTF_EMAS = [("1m", 20, 50, 100, 200),
 EMAS_ON  = False                     # drawn, but off at open
 SHOW_TRENDLINES = True
 START_VISIBLE   = ("trades",)        # + "fvg_bull" / "fvg_bear" / "sr_zones"
+SHOW_REJECTED   = True               # draw the breaks that did NOT trade, one legend entry
+                                     #   per reason. Always starts OFF the chart; costs a
+                                     #   re-run of the entry conditions, so it is opt-in
 HEIGHT          = 900
 
 # dropdown caps — everything is DRAWN regardless; a plotly menu clips rather than scrolls

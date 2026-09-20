@@ -473,7 +473,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
                    fvg_show=("bull", "bear"),
                    sr_frames=None, tf_sr=None, max_sr_picker: int = 6,
-                   rewind: bool = False):
+                   rewind: bool = False, rejected=None):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
@@ -488,6 +488,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     `emas` overlays moving averages, one legend toggle each. It DEFAULTS to (20, 50, 100, 200)
     rather than to nothing on purpose: a caller that has not been updated still gets them. Pass
     `emas=()` for a bare chart.
+
+    `rejected` is the table from `quant.research.rejected_setups` — every trendline break that did
+    NOT become a trade, with the reason. One legend entry per reason, all starting `legendonly`, and
+    added after the button rows so no menu payload covers them: the chart opens exactly as it does
+    without them, and no existing control can disturb them.
 
     `zone_lookback_bars` is how far back S/R zones are built from, counted back from the start of
     the view. Warm-up helps most indicators and HURTS this one: the tracker keeps the most-touched
@@ -1860,6 +1865,33 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
     if menus:
         fig.update_layout(updatemenus=menus)
+
+    # ---- THE SETUPS THAT DID NOT TRADE -------------------------------------------------------
+    # A filter can only be judged against what it REMOVED, and the chart shows only what survived:
+    # a rule that deletes a good setup looks exactly like one that deletes nothing, because both
+    # just leave a shorter list of trades. `quant.research.rejected_setups` labels each break with
+    # why it was turned down; this puts them back on the chart so a lost winner is something you
+    # can SEE.
+    #
+    # ADDED AFTER THE MENUS, DELIBERATELY. Every button row carries a visibility payload built
+    # against the trace list as it stood when the menu was made, so traces appended here are in no
+    # payload at all -- pressing `FVGs: 4h` or isolating one trade cannot touch this layer, and the
+    # chart opens byte-identical to before because every one of these starts `legendonly`.
+    if rejected is not None and len(rejected):
+        _RJ = {"entry rule": "#7a828c", "not confirmed": "#d9a441",
+               "cancelled": "#c96a4a", "already open": "#5b7fa6"}
+        for _why, _col in _RJ.items():
+            _r = rejected[rejected["reason"] == _why]
+            if not len(_r):
+                continue
+            fig.add_trace(go.Scattergl(
+                x=list(_r["t"]), y=list(_r["price"]), mode="markers",
+                name=f"skipped · {_why} ({len(_r)})", legendgroup=f"rej:{_why}",
+                visible="legendonly", meta="rejected",
+                marker=dict(symbol="x-thin", size=9, color=_col,
+                            line=dict(width=1.6, color=_col)),
+                customdata=[f"{w.side} {w.tf}  ·  skipped: {w.reason}" for w in _r.itertuples()],
+                hovertemplate="%{customdata}<br>%{x|%b-%d %H:%M}  %{y:,.2f}<extra></extra>"))
 
     if rewind:
         # WHICH TRACES THE REWIND MAY CLIP: everything with a birth — gaps, levels, trendlines and

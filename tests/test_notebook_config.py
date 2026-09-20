@@ -336,7 +336,8 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     exec(compile(CFG21.read_text(encoding="utf-8"), str(CFG21), "exec"), b)
     ka = {k: v for k, v in a.items() if k.isupper()}
     kb = {k: v for k, v in b.items() if k.isupper()}
-    assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM"}, sorted(set(kb) - set(ka))
+    assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
+                                 "SHOW_REJECTED"}, sorted(set(kb) - set(ka))
     drifted = [k for k in ka if repr(ka[k]) != repr(kb.get(k))]
     assert drifted == ["TL_CONFIRM_N"], f"only the confirmation may differ, got {drifted}"
     assert kb["TL_CONFIRM_N"], "notebook 21 is pointless with the confirmation off"
