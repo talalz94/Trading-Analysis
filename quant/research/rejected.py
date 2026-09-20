@@ -52,16 +52,23 @@ def rejected_setups(lab) -> pd.DataFrame:
     geom = {}
     # THE CHART'S OWN TIMEFRAME IS NOT IN line_frames -- its lines are fitted on D itself. Leaving
     # it out gave every 5m rejection a marker and no line, which is most of them.
+    # THE CONFIG'S OWN FITTER SETTINGS, not the defaults. `trendline_table` refits from scratch
+    # when `df.attrs["tl_lines"]` is missing -- and it IS missing, because assigning the EMA and gap
+    # columns onto D drops pandas attrs. Calling it bare therefore fitted a DIFFERENT set of lines
+    # (127 against the config's 124) and every missed setup drew geometry belonging to some other
+    # line: "S53" resolved to 06-08 11:15-12:00 while the id column meant 06-09 12:00-13:20.
+    tl_kw = dict(getattr(c, "TRENDLINE", None) or {})
     frames = {c.TF: D, **(lab.line_frames or {})}
     for name, frame in frames.items():
         try:
-            tt = trendline_table(frame)
+            tt = trendline_table(frame, **tl_kw)
         except Exception:
             continue
         tv = frame["t"].to_numpy()
         for r in tt.itertuples():
             geom[(name, r.id)] = (tv[int(r.start_i)], float(r.y_start),
-                                  tv[int(r.end_i)], float(r.y_end))
+                                  tv[int(r.end_i)], float(r.y_end),
+                                  tv[int(r.born_i)], int(r.touches))
 
     rows = []
     for pref in tuple(p.get("tl_prefixes") or ("",)):
@@ -113,7 +120,7 @@ def rejected_setups(lab) -> pd.DataFrame:
                 idc = f"{pref}tl_{'res' if side == 'long' else 'sup'}_n"
                 num = int(D[idc].to_numpy()[i]) if idc in D.columns else -1
                 lid = f"{'R' if side == 'long' else 'S'}{num}" if num >= 0 else ""
-                g = geom.get((tf, lid), (None, None, None, None))
+                g = geom.get((tf, lid), (None, None, None, None, None, 0))
                 # EXTENDED TO THE BREAK. A higher-timeframe line stops where its OWN frame last
                 # published it, which on the chart's grid is up to one of its bars before the break
                 # -- so the segment ended in mid-air short of the marker. The fit is linear in bar
@@ -125,14 +132,15 @@ def rejected_setups(lab) -> pd.DataFrame:
                     span = (x1 - x0).total_seconds()
                     if span > 0 and bt > x1:
                         f = (bt - x0).total_seconds() / span
-                        g = (x0, g[1], bt, g[1] + f * (g[3] - g[1]))
+                        g = (x0, g[1], bt, g[1] + f * (g[3] - g[1]), g[4], g[5])
                 rows.append({"t": t.iloc[at], "side": side, "tf": tf, "reason": reason,
                              "price": float(cl[at]), "break_t": t.iloc[i],
                              "line": f"{tf}·{lid}" if lid else "",
-                             "x0": g[0], "y0": g[1], "x1": g[2], "y1": g[3]})
+                             "x0": g[0], "y0": g[1], "x1": g[2], "y1": g[3],
+                             "born_t": g[4], "touches": g[5]})
 
     out = pd.DataFrame(rows, columns=["t", "side", "tf", "reason", "price", "break_t",
-                                      "line", "x0", "y0", "x1", "y1"])
+                                      "line", "x0", "y0", "x1", "y1", "born_t", "touches"])
     if not len(out):
         return out
     # WARM-UP REJECTIONS ARE NOT MISSED TRADES. The frame starts at WARMUP_START so the lines and
