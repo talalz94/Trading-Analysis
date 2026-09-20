@@ -533,6 +533,24 @@ def test_every_missed_setup_gets_a_line_that_reaches_its_break():
 
     out = rejected_setups(lab)
     assert len(out), "the fixture must produce a rejection or this test guards nothing"
+
+    # THE CONFIG'S FITTER SETTINGS, not the defaults. `trendline_table` refits from scratch when
+    # `df.attrs["tl_lines"]` is missing -- and it is, because assigning columns onto the frame drops
+    # pandas attrs. Called bare it fitted a DIFFERENT set of lines, so every missed setup drew
+    # geometry belonging to some other line entirely: "5m-S53" resolved to 06-08 11:15-12:00 while
+    # the id column meant 06-09 12:00-13:20, a day apart.
+    # NOT TESTED HERE: that the geometry uses the CONFIG's fitter settings rather than
+    # the defaults. `trendline_table` refits when `df.attrs` is missing -- and it is,
+    # because assigning columns onto the frame drops pandas attrs -- so calling it bare
+    # fitted a different set of lines and every missed setup drew geometry belonging to
+    # another line (5m-S53 resolved to 06-08 11:15-12:00 where the id column meant
+    # 06-09 12:00-13:20). A test was written for it and DELETED: on this fixture the two
+    # fits differ overall but agree on the one line that gets rejected, so it passed with
+    # the fix reverted. The evidence for that fix is the measurement on real data.
+    assert "born_t" in out.columns and out["born_t"].notna().all(), (
+        "a line's FIRST TOUCH and the bar it became TRADEABLE are different questions, and the "
+        "gap between them can be a day")
+    assert (out["born_t"] >= out["x0"]).all(), "a line cannot be knowable before its first touch"
     assert (out["tf"] == "15m").any(), "the CHART's own frame was not searched for lines"
     assert out["line"].ne("").all(), "a rejection with no line id cannot be drawn"
     assert out["x0"].notna().all(), "a rejection with no geometry is a marker floating alone"

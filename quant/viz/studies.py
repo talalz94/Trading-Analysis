@@ -1571,7 +1571,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     # until the dropdown asks for it. Added HERE, before the menus, precisely so the pickers own
     # them -- isolating a trade must hide these, and isolating one of these must hide the trades.
     # (The reason layer is the opposite case and is appended after the menus on purpose.)
-    MISS_TRACES = 2
+    MISS_TRACES = 3      # the line, the bar it became KNOWN, and the break
     # THE SAME COLOURS THE TRADED LINES USE. A short breaks a SUPPORT and a long a RESISTANCE, so
     # the line a missed setup would have broken is drawn exactly as it would have been had it
     # traded -- a muted grey read as chart furniture and was invisible against the candles.
@@ -1598,11 +1598,33 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 showlegend=False,
                 line=dict(color=_MISS_LINE.get(str(_r.side), "#2ecc71"), width=2.0),
                 hovertemplate=f"{_ln}<br>the line this setup would have broken<extra></extra>"))
+            # WHEN IT BECAME KNOWN. A line is fitted through pivots that all sit BEFORE it can be
+            # traded -- its last pivot has to confirm first -- so "when was this line formed" has
+            # two honest answers and the gap between them can be a day. 5m-S53's first touch is
+            # 06-08 05:40; it only became tradeable at 06-09 12:00 and broke 75 minutes later.
+            _bt = getattr(_r, "born_t", None)
+            _by = None
+            if _has and _bt is not None and not pd.isna(_bt):
+                _span = (pd.Timestamp(_r.x1) - pd.Timestamp(_r.x0)).total_seconds()
+                if _span > 0:
+                    _f = (pd.Timestamp(_bt) - pd.Timestamp(_r.x0)).total_seconds() / _span
+                    _by = _r.y0 + _f * (_r.y1 - _r.y0)
+            fig.add_trace(go.Scattergl(
+                x=[_bt] if _by is not None else [], y=[_by] if _by is not None else [],
+                mode="markers", name=f"{_ln} known", legendgroup=_g, visible=False,
+                showlegend=False,
+                marker=dict(symbol="circle-open", size=11,
+                            line=dict(width=2.2, color=_MISS_LINE.get(str(_r.side), "#2ecc71"))),
+                hovertemplate=(f"{_ln} became TRADEABLE here"
+                               f"<br>fitted on {getattr(_r, 'touches', 0)} touches, the first at "
+                               f"{pd.Timestamp(_r.x0):%b-%d %H:%M}"
+                               "<br>%{x|%b-%d %H:%M}<extra></extra>")))
             fig.add_trace(go.Scattergl(
                 x=[_r.t], y=[_r.price], mode="markers", name=f"{_ln} break", legendgroup=_g,
                 visible=False, showlegend=False,
                 marker=dict(symbol="x-thin", size=13, color=_c, line=dict(width=2.2, color=_c)),
-                hovertemplate=(f"{_ln}  {_r.side}<br>skipped: {_r.reason}"
+                hovertemplate=(f"{_ln}  {_r.side}  BROKE here"
+                               f"<br>NO TRADE: {_r.reason}"
                                "<br>%{x|%b-%d %H:%M}  %{y:,.2f}<extra></extra>")))
             missed_picker.append((f"{_ln} {_r.side[0].upper()}", _r, _idx))
 
