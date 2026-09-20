@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **554 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **556 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -146,7 +146,18 @@ quant/
 │   │                    #     resistance line bar by bar (same RANSAC + envelope, same causality:
 │   │                    #     published only from the bar its last pivot CONFIRMED) and flags
 │   │                    #     tl_break_up / tl_break_dn on the close through it. A broken line is
-│   │                    #     retired. trendline_table() gives one row per line for drawing.
+│   │                    #     retired -- but only once the break STICKS: break_sustain_bars is
+│   │                    #     how many consecutive closes beyond it are needed, a close back on
+│   │                    #     the original side RESETS the count, and 0 (default) is the old
+│   │                    #     retire-on-first-close-through. 0 is wrong for any strategy that
+│   │                    #     asks a break to prove itself: the break fails its confirmation,
+│   │                    #     no trade is taken, and the LINE DIES ANYWAY -- 15m S5 retired
+│   │                    #     06-02 07:15 on a break nothing confirmed, while price closed back
+│   │                    #     under the same line at 08:30 and stayed 55 bars. The level is
+│   │                    #     still published while the count runs, so it is there to trade
+│   │                    #     against; max_distance_atr still retires a line price walked away
+│   │                    #     from, which the counter cannot catch.
+│   │                    #     trendline_table() gives one row per line for drawing.
 │   │                    #     mtf_trendlines(df_1m, frames) fits lines on EVERY timeframe and
 │   │                    #     merges them onto the base grid (align_timeframes shift_bars=1, so a
 │   │                    #     1h line is invisible until its bar closed) -> tl_res/5m__tl_res/...;
@@ -759,7 +770,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **554 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **556 total.**
 
 ## 12. Known limitations / honest caveats
 

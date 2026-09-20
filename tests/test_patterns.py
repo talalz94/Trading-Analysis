@@ -1495,3 +1495,68 @@ def test_a_menu_press_never_removes_a_pinned_entry_from_the_legend(rnd):
             checked += 1
             assert all(patch["showlegend"][i] for i in pinned), f"{b.label} dropped a pinned entry"
     assert checked, "no menu button carried a showlegend patch"
+
+
+# ---------------------------------------------------------------------------
+# a break has to STICK before it spends the line
+# ---------------------------------------------------------------------------
+def _poke_then_break_frame():
+    """A flat support at 100 with three touches, then a ONE-BAR poke that recovers, then a real
+    break that stays below."""
+    n = 220
+    close = 108 + 6 * np.sin(2 * np.pi * np.arange(n) / 50)
+    low, high = close - 1.0, close + 1.0
+    for k in (12, 62, 112):                      # the three touches that fit the line
+        low[k], close[k], high[k] = 100.0, 100.8, 102.0
+    low[150], close[150] = 98.0, 99.0            # the poke: one close through
+    close[151], low[151] = 104.0, 103.0          # ...immediately reclaimed
+    for k in range(180, 200):                    # the real break, sustained
+        close[k], low[k], high[k] = 96.0 - (k - 180) * 0.3, 95.0, 97.0
+    t = pd.date_range("2026-01-01", periods=n, freq="15min", tz="UTC")
+    return pd.DataFrame({"t": t, "open_time": t, "open": close, "high": high, "low": low,
+                         "close": close, "volume": 1.0})
+
+
+_SUSTAIN_KW = dict(atr_mult=1.5, min_touches=3, lookback_pivots=16, line_tol_atr=1.5,
+                   min_span_bars=40, max_age_bars=500, max_distance_atr=30.0)
+
+
+def test_an_unconfirmed_poke_no_longer_spends_the_line():
+    """The bug this fixes, measured on real data before it was written.
+
+    `add_trendlines` retired a line on the FIRST close through it, whatever happened next. For any
+    strategy that asks a break to prove itself that is fatal: the break fails its confirmation, no
+    trade is taken, and the line dies anyway -- so the far better signal it would have given later
+    never exists. 15m S5 retired 06-02 07:15 on a break nothing confirmed, while price closed back
+    under the same line at 08:30 and stayed there for 55 bars.
+    """
+    from quant.indicators.trendlines import add_trendlines, trendline_table
+
+    df = _poke_then_break_frame()
+    now = trendline_table(add_trendlines(df, **_SUSTAIN_KW, break_sustain_bars=3))
+    was = trendline_table(add_trendlines(df, **_SUSTAIN_KW, break_sustain_bars=0))
+
+    a = was[was["kind"] < 0].iloc[0]
+    b = now[now["kind"] < 0].iloc[0]
+    assert int(a.end_i) == 150, "the one-bar poke used to retire the line"
+    assert int(b.end_i) > 175, "it must now survive a poke that is immediately reclaimed"
+    assert bool(b.broke), "and still break once price STAYS beyond it"
+    assert 180 <= int(b.end_i) <= 190, "retired shortly into the sustained break, not at the poke"
+
+
+def test_the_sustain_count_resets_and_zero_is_the_old_behaviour():
+    """A close back on the original side RESETS the count -- otherwise 'three closes beyond' would
+    quietly mean 'three closes beyond at any time', which a chopping market satisfies by accident."""
+    from quant.indicators.trendlines import add_trendlines
+
+    df = _poke_then_break_frame()
+    zero = add_trendlines(df, **_SUSTAIN_KW, break_sustain_bars=0)
+    plain = add_trendlines(df, **_SUSTAIN_KW)
+    for col in [c for c in zero.columns if c.startswith("tl_")]:
+        assert zero[col].equals(plain[col]), f"{col} drifted at the default"
+
+    # the poke at 150 is one close beyond; with sustain=1 that is not enough to retire the line,
+    # and 151 reclaims it, so the break flag must not fire there
+    one = add_trendlines(df, **_SUSTAIN_KW, break_sustain_bars=1)
+    assert not bool(one["tl_break_dn"].iloc[150]), "a single reclaimed close is not a break"
+    assert bool(one["tl_break_dn"].iloc[180:200].any()), "the sustained break must still register"
