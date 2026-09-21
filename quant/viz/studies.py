@@ -1576,6 +1576,25 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     # the line a missed setup would have broken is drawn exactly as it would have been had it
     # traded -- a muted grey read as chart furniture and was invisible against the candles.
     _MISS_LINE = {"short": "#2ecc71", "long": "#e74c3c"}
+
+    def _lag_note(r):
+        """WHY a line is not tradeable the moment price last touched it.
+
+        The obvious reading -- "price bounced off it three times, so it is confirmed" -- is right
+        about the touches and wrong about the timing. The third touch is only a TOUCH once the
+        zigzag has called that bar a pivot, and it cannot do that until price has moved away by
+        `atr_mult` ATR: a low is not a swing low until something proves it turned. So the line
+        becomes tradeable some bars AFTER the touch, and price is necessarily far from it by then.
+        That distance is not a problem with the confirmation -- it IS the confirmation.
+        """
+        lt = getattr(r, "last_touch_t", None)
+        if lt is None or pd.isna(lt) or pd.isna(getattr(r, "born_t", None)):
+            return ""
+        mins = (pd.Timestamp(r.born_t) - pd.Timestamp(lt)).total_seconds() / 60
+        if mins <= 0:
+            return ""
+        return (f"<br>last touch {pd.Timestamp(lt):%b-%d %H:%M} — tradeable {mins:.0f} min later,"
+                "<br>once price moved far enough away to confirm that pivot")
     _MISS_COL = {"entry rule": "#7a828c", "not confirmed": "#d9a441",
                  "cancelled": "#c96a4a", "already open": "#5b7fa6"}
     missed_picker = []          # (label, row, first_trace_index)
@@ -1615,10 +1634,12 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 showlegend=False,
                 marker=dict(symbol="circle-open", size=11,
                             line=dict(width=2.2, color=_MISS_LINE.get(str(_r.side), "#2ecc71"))),
-                hovertemplate=(f"{_ln} became TRADEABLE here"
-                               f"<br>fitted on {getattr(_r, 'touches', 0)} touches, the first at "
-                               f"{pd.Timestamp(_r.x0):%b-%d %H:%M}"
-                               "<br>%{x|%b-%d %H:%M}<extra></extra>")))
+                hovertemplate=(
+                    f"{_ln} became TRADEABLE here"
+                    f"<br>fitted on {getattr(_r, 'touches', 0)} touches, the first at "
+                    f"{pd.Timestamp(_r.x0):%b-%d %H:%M}"
+                    + _lag_note(_r) +
+                    "<br>%{x|%b-%d %H:%M}<extra></extra>")))
             fig.add_trace(go.Scattergl(
                 x=[_r.t], y=[_r.price], mode="markers", name=f"{_ln} break", legendgroup=_g,
                 visible=False, showlegend=False,

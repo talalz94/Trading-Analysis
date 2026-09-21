@@ -68,7 +68,8 @@ def rejected_setups(lab) -> pd.DataFrame:
         for r in tt.itertuples():
             geom[(name, r.id)] = (tv[int(r.start_i)], float(r.y_start),
                                   tv[int(r.end_i)], float(r.y_end),
-                                  tv[int(r.born_i)], int(r.touches))
+                                  tv[int(r.born_i)], int(r.touches),
+                                  tv[int(max(r.touch_i))] if len(r.touch_i) else tv[int(r.start_i)])
 
     rows = []
     for pref in tuple(p.get("tl_prefixes") or ("",)):
@@ -120,7 +121,7 @@ def rejected_setups(lab) -> pd.DataFrame:
                 idc = f"{pref}tl_{'res' if side == 'long' else 'sup'}_n"
                 num = int(D[idc].to_numpy()[i]) if idc in D.columns else -1
                 lid = f"{'R' if side == 'long' else 'S'}{num}" if num >= 0 else ""
-                g = geom.get((tf, lid), (None, None, None, None, None, 0))
+                g = geom.get((tf, lid), (None, None, None, None, None, 0, None))
                 # EXTENDED TO THE BREAK. A higher-timeframe line stops where its OWN frame last
                 # published it, which on the chart's grid is up to one of its bars before the break
                 # -- so the segment ended in mid-air short of the marker. The fit is linear in bar
@@ -132,15 +133,16 @@ def rejected_setups(lab) -> pd.DataFrame:
                     span = (x1 - x0).total_seconds()
                     if span > 0 and bt > x1:
                         f = (bt - x0).total_seconds() / span
-                        g = (x0, g[1], bt, g[1] + f * (g[3] - g[1]), g[4], g[5])
+                        g = (x0, g[1], bt, g[1] + f * (g[3] - g[1]), g[4], g[5], g[6])
                 rows.append({"t": t.iloc[at], "side": side, "tf": tf, "reason": reason,
                              "price": float(cl[at]), "break_t": t.iloc[i],
                              "line": f"{tf}·{lid}" if lid else "",
                              "x0": g[0], "y0": g[1], "x1": g[2], "y1": g[3],
-                             "born_t": g[4], "touches": g[5]})
+                             "born_t": g[4], "touches": g[5], "last_touch_t": g[6]})
 
     out = pd.DataFrame(rows, columns=["t", "side", "tf", "reason", "price", "break_t",
-                                      "line", "x0", "y0", "x1", "y1", "born_t", "touches"])
+                                      "line", "x0", "y0", "x1", "y1", "born_t", "touches",
+                                      "last_touch_t"])
     if not len(out):
         return out
     # WARM-UP REJECTIONS ARE NOT MISSED TRADES. The frame starts at WARMUP_START so the lines and
