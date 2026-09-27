@@ -236,7 +236,12 @@ def add_fvgs(df: pd.DataFrame, *, prefix: str = "fvg", mitigation: str = "ce",
         a = _atr(out, period=atr_period).to_numpy(np.float64)
 
     if n < 3:
-        gaps = pd.DataFrame(columns=["kind", "born_i", "top", "bot", "touch_i", "ce_i", "full_i"])
+        # THE SAME COLUMNS AS A NON-EMPTY TABLE. A quiet frame with no gaps is normal (a short
+        # window, a strict size gate), and a consumer that reads `end_reason` must not KeyError on
+        # it -- the empty table used to stop at full_i and carry none of the derived columns.
+        gaps = pd.DataFrame(columns=["kind", "born_i", "top", "bot", "touch_i", "ce_i", "full_i",
+                                     "side", "mid", "size", "size_atr", "dead_i", "end_i",
+                                     "end_reason", "id"])
         return _attach(out, gaps, prefix, n, np.zeros((2, n), np.int32),
                        *(np.full((2, n), np.nan) for _ in range(5)))
 
@@ -287,6 +292,25 @@ def add_fvgs(df: pd.DataFrame, *, prefix: str = "fvg", mitigation: str = "ce",
     gaps["size"] = gaps["top"] - gaps["bot"]
     gaps["size_atr"] = gaps["size"] / a[born]
     gaps["dead_i"] = dead
+    # WHERE THE GAP STOPPED BEING LIVE -- for either reason. `dead_i` records MITIGATION only, and
+    # stays exactly that. But `_live_state` also retires a gap once it outlives max_age_bars,
+    # unfilled, and that retirement left no trace in the table: dead_i = -1 reads as "still open".
+    # So the chart drew every aged-out gap to the right edge and labelled it open, while the counts
+    # the veto actually reads had dropped it long before -- 75 of the 80 "open" 5m gaps in a
+    # 20-day window were nothing of the kind, and they were most of the clutter.
+    #
+    #   filled   mitigated at dead_i; the box ends there
+    #   expired  never filled, retired at born + max_age + 1 -- the first bar _live_state skips it
+    #   open     still live when the data ends; the only kind that may run to the right edge
+    M = int(max_age_bars)
+    end = np.asarray(dead, np.int64).copy()
+    why = np.where(end >= 0, "filled", "open").astype(object)
+    if M > 0:
+        exp = (end < 0) & (born + M + 1 <= n - 1)
+        end[exp] = born[exp] + M + 1
+        why[exp] = "expired"
+    gaps["end_i"] = end
+    gaps["end_reason"] = why
     # A STABLE NAME per gap, for the same reason trendline_table has one: the chart's hover, the
     # dropdown that isolates it and the trade that was vetoed by it must all call it the same
     # thing, so they derive the name from here rather than each inventing its own. FB/FS rather
@@ -300,7 +324,7 @@ def add_fvgs(df: pd.DataFrame, *, prefix: str = "fvg", mitigation: str = "ce",
         # pass put together.
         ti = pd.DatetimeIndex(out[time_col])
         gaps["born_t"] = ti.take(born)
-        for col in ("touch_i", "ce_i", "full_i", "dead_i"):
+        for col in ("touch_i", "ce_i", "full_i", "dead_i", "end_i"):
             v = gaps[col].to_numpy(np.int64)
             gaps[col.replace("_i", "_t")] = pd.Series(ti.take(np.clip(v, 0, n - 1))).where(v >= 0)
     return _attach(out, gaps, prefix, n, *st)

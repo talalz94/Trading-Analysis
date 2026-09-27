@@ -70,12 +70,16 @@ class FvgLab:
         rows = []
         for tf, t in self.gaps.items():
             if not len(t):
-                rows.append(dict(tf=tf, gaps=0, open=0, median_size_atr=np.nan,
+                rows.append(dict(tf=tf, gaps=0, open=0, expired=0, median_size_atr=np.nan,
                                  median_bars_to_fill=np.nan))
                 continue
             filled = t["dead_i"] >= 0
+            why = t["end_reason"] if "end_reason" in t.columns else pd.Series("open", t.index)
             rows.append(dict(
-                tf=tf, gaps=len(t), open=int((~filled).sum()),
+                # "open" meant "never filled", which silently included every gap that had simply
+                # grown too old to count. They are different things and now two columns.
+                tf=tf, gaps=len(t), open=int((why == "open").sum()),
+                expired=int((why == "expired").sum()),
                 median_size_atr=round(float(t["size_atr"].median()), 2),
                 median_bars_to_fill=float((t.loc[filled, "dead_i"]
                                            - t.loc[filled, "born_i"]).median())))
