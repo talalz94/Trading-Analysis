@@ -1848,3 +1848,44 @@ Two traps in the measurement worth keeping:
 - **The shift null must keep the level's birth and size.** A shifted FVG band that already surrounds
   price at birth has no approach side and is not a test; it is skipped, as a real one would be.
 
+### Exit rules: moved target and FVG exit (2026-09-27)
+
+Asked for two rules from one screenshot (nb21 #04, 0.1R short of 3R, then stopped). Built into the
+ENGINE, because both are per-trade: a target that moves is that trade's own state, and "a gap near
+THIS trade's target" depends on its own stop. Neither can be a global signal array.
+
+- `tp_move_*` (BacktestConfig): once per trade, on the bar's CLOSE, after every exit, applied from
+  the NEXT bar. A bar that reached the target zone and gave it back has unknown intrabar order, so
+  it may not also fill the new target -- the test's bar 2 would have, at 97.4 against 98.2.
+  Rungs that close nothing (breakeven moves) are not moved: they are stop rules. Already past the
+  new target -> closed at that close.
+- `tp_ref_*_col` (BacktestConfig): a second target per trade, read ONCE at the entry bar. When one
+  bar reaches it and a ladder level, the NEARER one fills first -- price cannot reach the far one
+  without passing the near one. The stop still wins a bar that hits both under stop_first.
+- The FVG level: `fvg_on_grid` places every timeframe's gaps on the base grid (live from the third
+  candle's CLOSE, mitigation re-checked on the base bars, expiry in the gap's own bars), and
+  `strategies.fvg_target` picks, per bar, the gap a trade opened there would aim at. It uses the
+  lab's own `fvg_kwargs`, so the gap a trade exits on is one the chart draws.
+- Off is byte-identical (golden tests) and adds no trade columns. With either on, trades gain
+  `target_moved_*` / `ref_target`, and the chart draws a moved target as a STEP and the FVG level as
+  a second segment -- inside the existing target trace, because every picker addresses a trade's
+  traces by the fixed TRADE_TRACES count.
+
+`FvgLab.retrade(**exit_settings)` re-runs only the sim (EXIT_KEYS), proved equal to a full rebuild;
+`run_arms(CFG)` uses it when every COMPARE arm touches exit settings only -- 4 arms in 6 s, not 24.
+
+**Found on the way: `run_grid` had been broken since e61d7ab.** It built the kernel's arguments by
+hand and fell behind when the secondary-exit arguments were added: every sweep died on "expected 70
+arguments, got 59", and no test ran it. It now goes through `invoke_kernel` like `run_backtest`,
+and `test_the_sweep_runs_again` runs it.
+
+**The test harness** (`experiments/exit_rules_search.py`) builds 4h from 1h (the 4h cache starts
+2025-08) and switches drawing-only settings off; both were proved to change no trade on notebook
+21's window. The 2022Q1 warm-up needed 1h bars from 2021-08, which the loader FETCHED from Binance's
+public API into the cache (~2,400 bars) -- normal incremental behaviour, noted because it happened.
+
+Verdict in docs/WHAT_WORKS.md: no arm beats noise, and the strategy loses 0.157R per trade after
+costs over 1,194 trades. The lesson worth keeping: **a rule drawn around one trade always fixes that
+trade.** Notebook 21's window made both look like +3R to +5R improvements; four and a half years
+said the aggressive versions cost 30R forward.
+

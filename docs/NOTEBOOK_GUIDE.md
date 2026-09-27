@@ -35,6 +35,11 @@ and eventually edit by accident. Orchestration goes in `quant/research/`.
 | is a **value you might change** | `notebooks/nb<N>_config.py` |
 | is **prose** explaining what to look at | a markdown cell |
 
+**An A/B is a setting too.** Which comparisons a notebook shows is a `COMPARE` dict in its config
+(`{"move target": dict(USE_TP_MOVE=True), ...}`); the cell is just `run_arms(CFG).table()`. Each arm
+changes ONLY what it names. When every arm touches exit settings only, the lab is built once and
+re-traded per arm (`FvgLab.retrade`), so a four-arm table costs one load, not four.
+
 `quant/research/` is the only one of these that is new and the only one whose boundary is easy to
 get wrong. It **calls** indicators, scenarios and viz; it never contains strategy logic, indicator
 maths, drawing, or a default for any setting a config owns. A default stated in two places is the
