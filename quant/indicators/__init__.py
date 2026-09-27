@@ -21,7 +21,7 @@ from .levels import (add_prev_day_levels, add_round_levels, add_session_levels,
                      add_volume_features, add_vwap, add_week_levels, level_events)
 from .momentum import add_squeeze_momentum, add_wavetrend, add_ema_gradient
 from .trendlines import add_trendlines, trendline_table
-from .fvg import add_fvgs, fvg_count_cols, fvg_table, mtf_fvgs, MITIGATION_MODES
+from .fvg import add_fvgs, fvg_count_cols, fvg_table, fvg_on_grid, mtf_fvgs, MITIGATION_MODES
 
 __all__ = [
     "ema", "sma", "add_emas", "add_mtf_emas", "add_smas",
@@ -37,7 +37,7 @@ __all__ = [
     "SR_LEVELS", "add_trend_structure", "add_zigzag_structure",
     "add_squeeze_momentum", "add_wavetrend", "add_ema_gradient",
     "add_trendlines", "trendline_table",
-    "add_fvgs", "fvg_table", "mtf_fvgs", "fvg_count_cols", "MITIGATION_MODES",
+    "add_fvgs", "fvg_table", "fvg_on_grid", "mtf_fvgs", "fvg_count_cols", "MITIGATION_MODES",
     "add_prev_day_levels", "add_week_levels", "add_session_levels", "add_vwap",
     "add_volume_features", "add_round_levels", "level_events",
 ]

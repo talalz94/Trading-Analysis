@@ -11,6 +11,7 @@ from .supertrend import SupertrendFlip
 from .mtf import MtfTrend
 from .key_level import KeyLevelBounce
 from .builder import RuleStrategy, Rule
+from .fvg_target import fvg_target, FVG_TARGET_AT
 from .fvg_veto import (build_fvg_rules, describe_fvg_rules, fvg_blocks, fvg_clear,
                        fvg_layers, fvg_rule_cond, parse_fvg_rule, VETO_MODES)
 from .indicators import (Ind, MA, EMA, SMA, RSI, ATR, HeikinAshi, Swings, SRZones)
@@ -29,6 +30,7 @@ REGISTRY: dict[str, type[Strategy]] = {
 }
 
 __all__ = [
+    "fvg_target", "FVG_TARGET_AT",
     "fvg_blocks", "fvg_clear", "fvg_layers", "VETO_MODES",
     "parse_fvg_rule", "fvg_rule_cond", "build_fvg_rules", "describe_fvg_rules",
     "Strategy", "EmaRibbon", "EmaCross", "RsiReversal", "MacdTrend", "HeikinAshiTrend",

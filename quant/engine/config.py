@@ -161,6 +161,20 @@ class BacktestConfig:
                         signals, so a trade closing for a real reason on the same bar keeps it.
     allow_rule_close    If False, strategy exit signals don't close (only SL/TP/trailing do).
     intrabar_priority   'stop_first' | 'take_profit_first' when a bar hits both SL and TP.
+
+    ── Exit add-ons (all off by default; off is byte-identical) ───────────────
+    tp_ref_long_col     A SECOND TARGET per trade, read from this column AT THE ENTRY BAR -- a level
+    tp_ref_short_col    that differs per trade (a gap near the target, a zone), which the R-multiple
+                        ladder cannot express. Whichever of it and the ladder price reaches first
+                        closes the position; reason 'ref_target'. NaN or a level on the losing side
+                        of the entry = no second target for that trade.
+    tp_move_to          MOVE THE TARGET CLOSER, once per trade, to this fraction of its original
+                        distance (0.6 = a 3R target becomes 1.8R). 0 = off. Triggered by either:
+    tp_move_near        ...a NEAR MISS: the best price since entry got this fraction of the way to
+    tp_move_back        the target, and the close has since given back this fraction of it;
+    tp_move_after       ...or a LONG WAIT: this many bars held (0 = no time trigger).
+                        Judged on the bar's close and applied from the next bar. Already past the
+                        new target -> closed at that close. Reason 'tp_moved' either way.
     """
     initial_cash: float = 10_000.0
     cash_per_trade: Optional[float] = None
@@ -212,6 +226,14 @@ class BacktestConfig:
     max_bars_in_trade: int = 0        # time stop: bars held before a forced close; 0 = off
     allow_rule_close: bool = True
     intrabar_priority: str = "stop_first"   # stop_first | take_profit_first
+
+    # --- exit add-ons (off = byte-identical) ---
+    tp_ref_long_col: Optional[str] = None    # second target per trade, read at entry
+    tp_ref_short_col: Optional[str] = None
+    tp_move_to: float = 0.0          # move the target to this fraction of its distance; 0 = off
+    tp_move_near: float = 0.0        # near miss: best price reached this fraction of the way...
+    tp_move_back: float = 0.0        # ...and the close gave back this fraction since
+    tp_move_after: int = 0           # or: this many bars held
 
     def resolved_cash_per_trade(self) -> float:
         if self.cash_per_trade is not None:
@@ -274,4 +296,9 @@ class BacktestConfig:
             max_bars_in_trade=int(self.max_bars_in_trade),
             allow_rule_close=1 if self.allow_rule_close else 0,
             intrabar_stop_first=1 if self.intrabar_priority == "stop_first" else 0,
+            tp_ref_on=1 if (self.tp_ref_long_col or self.tp_ref_short_col) else 0,
+            tp_move_to=float(self.tp_move_to),
+            tp_move_near=float(self.tp_move_near),
+            tp_move_back=float(self.tp_move_back),
+            tp_move_after=int(self.tp_move_after),
         )

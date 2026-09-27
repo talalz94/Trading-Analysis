@@ -167,6 +167,24 @@ def studies_figure(df: pd.DataFrame, *, time_col: str = "t",
     return fig, d
 
 
+def _target_path(r, x0, x1, rr, ref_label):
+    """A trade's target as segments of (x, y, one label per point): the original level, stepping
+    to where it was MOVED if the tp-move rule moved it, plus the second target the trade carried."""
+    lab = f"{rr:g}R" if rr else ""
+    out = []
+    tm = getattr(r, "target_moved_time", None)
+    nt = getattr(r, "target_moved_to", np.nan)
+    if tm is not None and pd.notna(tm) and nt == nt:
+        out.append(([x0, tm, tm, x1], [r.target, r.target, nt, nt],
+                    [lab, lab, "moved to", "moved to"]))
+    else:
+        out.append(([x0, x1], [r.target, r.target], [lab, lab]))
+    rt = getattr(r, "ref_target", np.nan)
+    if rt == rt:
+        out.append(([x0, x1], [rt, rt], [ref_label, ref_label]))
+    return out
+
+
 # Trade-annotation colours for the scenario chart
 _EXIT_STYLE = {
     "take_profit": ("#2e7d32", "star", "TP"),
@@ -470,6 +488,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    mtf_emas=None, ema_frames=None, emas_on: bool = True,
                    legend_instances=None, trades=None, trade_tp_rr=None,
                    chart_tf=None, max_trade_picker: int = 40,
+                   ref_target_label: str = "second target",
                    fvgs: bool = False, fvg_kwargs=None, fvg_frames=None, tf_fvgs=None,
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
                    fvg_show=("bull", "bear"),
@@ -1455,8 +1474,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         # did it get in", "how much was risked", "what was it aiming at", "how did it end". Each
         # trade's stop and target run from its entry to its exit, so the box you see IS the trade.
         tq = trades.copy()
-        for c in ("entry_time", "exit_time"):
-            tq[c] = pd.to_datetime(tq[c])
+        for c in ("entry_time", "exit_time", "target_moved_time"):
+            if c in tq.columns:
+                tq[c] = pd.to_datetime(tq[c])
         risk = (tq["entry_price"] - tq["stop_price"]).abs()
         with np.errstate(invalid="ignore", divide="ignore"):
             tq["R"] = np.where(risk > 0, tq["pnl"] / (risk * tq["qty"]), np.nan)
@@ -1480,13 +1500,15 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             ecd += [[r.tid, r.side, r.cause]] * 3
             scd += [[r.tid, r.side, r.cause]] * 3
             if trade_tp_rr:
-                gx += [x0, x1, None]; gy += [r.target, r.target, None]
-                gcd += [[r.tid, r.side, r.cause]] * 3
+                for sx_, sy_, lab_ in _target_path(r, x0, x1, trade_tp_rr, ref_target_label):
+                    gx += sx_ + [None]; gy += sy_ + [None]
+                    gcd += [[r.tid, r.side, r.cause, v] for v in lab_ + [""]]
 
         for X, Y, CD, nm, what, colr, dash, wid, grp in (
                 (ex, ey, ecd, "trade entry level", "entry", "#90a4ae", "solid", 1.0, "trades"),
                 (sx, sy, scd, "trade stop", "STOP", "#ef5350", "dot", 1.2, "trade_stop"),
-                (gx, gy, gcd, "trade target", "TARGET", "#26a69a", "dot", 1.2, "trade_target")):
+                (gx, gy, gcd, "trade target", "TARGET %{customdata[3]}", "#26a69a", "dot", 1.2,
+                 "trade_target")):
             if X:
                 fig.add_trace(go.Scattergl(
                     x=X, y=Y, mode="lines", name=nm, legendgroup=grp,
@@ -1556,15 +1578,25 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             # one trace meant one colour for all of them, so a losing trade showed two red lines
             # and no way to tell the stop from the entry.
             for yv, nm, colr2, dash in ((r.entry_price, "entry", "#90a4ae", "solid"),
-                                        (r.stop_price, "STOP (set at entry)", "#ef5350", "dot"),
-                                        (getattr(r, "target", np.nan),
-                                         f"TARGET {trade_tp_rr}R" if trade_tp_rr else "target",
-                                         "#26a69a", "dot")):
+                                        (r.stop_price, "STOP (set at entry)", "#ef5350", "dot")):
                 fig.add_trace(go.Scattergl(
                     x=[x0, x1] if yv == yv else [], y=[yv, yv] if yv == yv else [],
                     mode="lines", visible=False, showlegend=False,
                     line=dict(color=colr2, width=1.6, dash=dash),
                     hovertemplate=f"<b>{r.tid}</b> {nm} {yv:,.2f}<extra></extra>"))
+            # THE TARGET, as the trade actually carried it: a step where it was MOVED closer, and
+            # the FVG exit level beside it when the trade had one. Still ONE trace, because every
+            # picker addresses a trade's traces by a fixed count (TRADE_TRACES).
+            tx, ty, tt = [], [], []
+            yv = getattr(r, "target", np.nan)
+            if yv == yv:
+                for sx_, sy_, lab_ in _target_path(r, x0, x1, trade_tp_rr, ref_target_label):
+                    tx += sx_ + [None]; ty += sy_ + [None]
+                    tt += [f"{a} {v:,.2f}" for a, v in zip(lab_, sy_)] + [""]
+            fig.add_trace(go.Scattergl(
+                x=tx, y=ty, text=tt, mode="lines", visible=False, showlegend=False,
+                line=dict(color="#26a69a", width=1.6, dash="dot"),
+                hovertemplate=f"<b>{r.tid}</b> TARGET %{{text}}<extra></extra>"))
 
             _why = str(r.close_reason)
             if _walked:
