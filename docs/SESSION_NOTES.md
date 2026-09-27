@@ -1889,3 +1889,29 @@ costs over 1,194 trades. The lesson worth keeping: **a rule drawn around one tra
 trade.** Notebook 21's window made both look like +3R to +5R improvements; four and a half years
 said the aggressive versions cost 30R forward.
 
+### Strategies as files, notebooks as views (2026-09-27)
+
+Asked for a structure that scales: every idea had become a new numbered notebook with a copied
+config, and the copy tests kept breaking on the owner's own edits (FVG_MAX_AGE_BARS in 21 was the
+latest). Now: `notebooks/strategies/<name>.py` (what is traded), `lab_config.py` + `lab.ipynb` (one
+strategy on one window) and `evaluate_config.py` + `evaluate.ipynb` (the verdict over 19 quarters).
+Details in docs/NOTEBOOK_GUIDE.md "Start here".
+
+Decisions worth knowing:
+- The split is by WHO READS A SETTING: the strategy file holds everything the sim or the loader
+  needs to produce trades (including gap detection, since the veto and FVG exit read gaps); the
+  view holds the window and everything only the chart reads. Proved exact on the first file:
+  `tl_break_confirm.py` + `lab_config.py` reproduce `nb21_config.py` value for value.
+- `COMPARE` lives in the strategy, not the view: the same arms are the lab's table on a window and
+  the evaluation's table over the quarters. The first file adds `no confirmation`, the question
+  notebook 21 was built around -- over 19 quarters it is noise too (t 1.12; +45R train, -10R
+  forward).
+- `RETRADE_KEYS` widened from the four exit toggles to every setting the loader does not read
+  (confirmation, stops, targets, costs, veto). The guard is a test that PARSES the loader's source
+  for `c.X` / `_get(c, "X")` and fails on any overlap -- a list kept correct by memory would not
+  stay correct.
+- `experiments/evaluate.py` owns the quarter/window/4h helpers and `exit_rules_search` imports them;
+  after the refactor it reproduced its recorded CSV exactly.
+- Drawing-only settings default OFF in the evaluation window (`_WINDOW_ONLY`), and a test checks the
+  evaluation's window reproduces the lab's trades on the lab's window.
+

@@ -7,6 +7,40 @@ Everything else lives in the library, where it is imported, tested and versioned
 
 ---
 
+## Start here: strategies are files, notebooks are views (2026-09-27)
+
+```
+notebooks/strategies/<name>.py   WHAT is traded -- entries, exits, costs, the gaps the rules read,
+                                 and COMPARE: the questions this strategy is asking
+notebooks/lab_config.py          WHICH strategy, WHEN (the window), HOW it is drawn
+notebooks/lab.ipynb              that strategy on that window: trades, its COMPARE arms, the chart
+notebooks/evaluate_config.py     WHICH strategy, and which quarters train and judge it
+notebooks/evaluate.ipynb         the strategy and its COMPARE arms over 19 quarters: the verdict
+```
+
+**A new idea is a toggle in a strategy file plus an arm in its `COMPARE`. A new strategy is a copied
+strategy file. Neither is a new notebook.** The lab shows the idea on a window; evaluate says
+whether it is real -- about a minute, and the answer to every idea so far has come from there, not
+from the window.
+
+Why: notebooks 18 -> 19 -> 20 -> 21 were each a copy with one change, each config a few hundred
+lines, each held equal to its parent by a test -- and those tests broke whenever the owner edited
+their own settings. The layout separates what those files mixed.
+
+- **Each setting has exactly one home.** `quant.research.workspace` merges a strategy with a view
+  config and REFUSES a setting found in both. `tests/test_workspace.py` holds strategy files to
+  trading settings only and the view configs to none.
+- **Files are executed fresh** (`runpy`), not imported: an edited strategy is read on the next call,
+  with no kernel restart or `importlib.reload`.
+- **Arms that change trading settings only re-trade** the lab already built
+  (`FvgLab.retrade`, `RETRADE_KEYS`) -- confirmations, stops, targets, costs, exits. A test parses
+  the loader and fails if it ever reads one of them.
+- Notebooks 18-21 and their `nb<N>_config.py` are untouched and still work; they are the history.
+  The first strategy file, `tl_break_confirm.py`, is notebook 21's settings value for value, plus
+  a `no confirmation` arm so the lab asks the question 21 was built for.
+
+---
+
 ## The two rules
 
 **1. A notebook cell may never ASSIGN a setting.**
@@ -143,6 +177,9 @@ library is a screenshot of something that no longer happens.
 
 | notebook | config | what it is for |
 |---|---|---|
+| **`lab`** | `lab_config.py` + `strategies/*.py` | **start here** -- any strategy on any window |
+| **`evaluate`** | `evaluate_config.py` + `strategies/*.py` | **is it real** -- a strategy and its arms over 19 quarters |
+| `21_break_confirmation` | `nb21_config.py` | the 1h break confirmation + the two exit rules' A/B (now `strategies/tl_break_confirm.py`) |
 | `20_rewind` | `nb20_config.py` | 19's chart + the point-in-time tool; its config is a tested copy of 19's |
 | `19_fvg_viewer` | `nb19_config.py` | fair value gaps from several timeframes + the FVG veto, run with and without |
 | `18_trendline_trading_sim` | `nb18_config.py` | multi-timeframe trendline breaks, traded |

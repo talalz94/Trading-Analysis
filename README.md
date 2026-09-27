@@ -164,6 +164,17 @@ quant report   --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy supertren
 ```
 
 ### Notebooks
+**Start here.** Strategies are files in [`notebooks/strategies/`](notebooks/strategies/); two
+notebooks look at them:
+- [`notebooks/lab.ipynb`](notebooks/lab.ipynb) — the strategy named in `lab_config.py` on one window:
+  its trades, its `COMPARE` arms side by side, and the chart.
+- [`notebooks/evaluate.ipynb`](notebooks/evaluate.ipynb) — the strategy named in `evaluate_config.py`
+  and its arms over 19 quarters, chosen on train and judged on forward. Run this before believing a
+  window.
+
+A new idea is a toggle in a strategy file plus an arm in its `COMPARE`; a new strategy is a copied
+file. See [`docs/NOTEBOOK_GUIDE.md`](docs/NOTEBOOK_GUIDE.md). The numbered notebooks are the history:
+
 - [`notebooks/01_research_cycle.ipynb`](notebooks/01_research_cycle.ipynb) — full cycle: ticker+source →
   timeframe/dates → indicators → strategy (built-in **or** custom open/close rules) → SL/TP/cost/
   leverage config → simulate + stats → stat plots → interactive price+trades chart (toggle via

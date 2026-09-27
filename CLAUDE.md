@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **592 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **604 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -567,6 +567,11 @@ quant/
 │   │                  #     the three rows the layer buttons already use, and the top margin grows
 │   │                  #     66px to keep them off the centred title. All of it gated on there
 │   │                  #     BEING missed setups: notebooks 18-20 keep their exact layout
+│   ├── workspace.py   #   STRATEGIES AS FILES, NOTEBOOKS AS VIEWS. lab_config() / evaluate_config()
+│   │                  #     merge notebooks/strategies/<STRATEGY>.py (WHAT is traded) with a view
+│   │                  #     config (WHICH strategy, WHEN, HOW drawn) and REFUSE a setting found in
+│   │                  #     both -- each value has one home. Files are run fresh with runpy, so an
+│   │                  #     edit is read on the next call; list_strategies(), load_strategy()
 │   ├── variant.py     #   variant(CFG, **overrides) -> the same settings with one thing
 │   │                  #     changed, DEEP-copied. Every A/B a notebook wants is "the same
 │   │                  #     study with one difference"; a shallow copy lets a dict setting be
@@ -589,6 +594,14 @@ quant/
 
 experiments/             # INFERENCE layer — find best settings for an idea (SEPARATE from core)
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
+├── evaluate.py          # EVALUATE ANY STRATEGY FILE: the strategy as set, at zero cost, and every
+│                        #   arm of its COMPARE, per quarter over TRAIN + FORWARD (~1 min for 19).
+│                        #   .baseline() / .by_quarter() / .arms() / .verdict(): train picks, forward
+│                        #   judges, rank_corr says whether the ranking survived, t and fwd_trim3
+│                        #   guard against noise and one-trade results. Arms of RETRADE_KEYS only
+│                        #   re-trade the quarter's lab; an arm that changes nothing is skipped.
+│                        #   Owns quarters/quarter_window/window_cfg/frames_4h_from_1h, which
+│                        #   exit_rules_search imports (it reproduced its results exactly after)
 ├── sr_zone_search.py     # WHICH S/R SETTINGS GIVE LEVELS PRICE RESPECTS, per timeframe. 288
 │                        #   settings x 5m/15m/1h/4h x BTC's 9 windows, selected on 2022H1-2024H1 and
 │                        #   reported on 2024H2-2026H1. A TEST is price returning to a live zone after
@@ -623,7 +636,13 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the user. The
+notebooks/               # START HERE (2026-09-27): lab.ipynb + lab_config.py look at a strategy on a
+                         #   window; evaluate.ipynb + evaluate_config.py judge it over 19 quarters;
+                         #   strategies/<name>.py hold WHAT is traded (tl_break_confirm.py = nb21's
+                         #   settings value for value, + a `no confirmation` arm). A new idea is a
+                         #   toggle + a COMPARE arm in a strategy file, never a new notebook. See
+                         #   docs/NOTEBOOK_GUIDE.md "Start here". Everything below is the history.
+                         # nb18_config.py = notebook 18's SETTINGS, owned by the user. The
                          #   notebook is regenerated from a script; the script used to hardcode
                          #   every value, so adding one setting silently re-imposed the others
                          #   (8a8b8de changed TF/LINE_TFS/WARMUP_START unasked). The notebook now
@@ -844,6 +863,9 @@ cfg = BacktestConfig(initial_cash=10_000, fee_bps=8, slippage_bps=1.5, spread=0.
 res = EmaRibbon(fast=50, slow=200, confirm_n=5).backtest(df, cfg)
 print(res.stats)
 ```
+- **Research workflow: `notebooks/lab.ipynb` (one strategy, one window) and
+  `notebooks/evaluate.ipynb` (the same strategy and its arms over 19 quarters).** Strategies are
+  files in `notebooks/strategies/`; which one each notebook shows is `STRATEGY` in its config.
 - Notebooks: `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
   `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `06_ema_breakout_candles_demo`
   (candle chart + HA toggle) · `07_rule_builder` (declarative
@@ -873,7 +895,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back). **592 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back), `test_workspace.py` (strategies as files: a strategy file states only trading settings and the view configs none, a setting in both files is refused, an edited file is read fresh, the lab and evaluate notebooks state and define nothing, the loader never reads a setting re-trade may change -- parsed from its source -- the evaluation sees exactly the lab's trades, and an arm that changes nothing is skipped). **604 total.**
 
 ## 12. Known limitations / honest caveats
 
@@ -905,6 +927,9 @@ stop-out; (if needed) per-strategy fused-numba signal generation for extreme swe
 - Put experiment-specific logic in `experiments/`, never in `quant/` core.
 - Update this file + README + docs when architecture changes. Commit in logical units; push only
   when asked (remote `origin` → GitHub `main`).
+- **A new idea goes into a STRATEGY FILE, not a new notebook**: a toggle in
+  `notebooks/strategies/<name>.py` and an arm in its `COMPARE`, shown by `lab.ipynb` and judged by
+  `evaluate.ipynb`. Run the evaluation before believing a window.
 - **Read [`docs/NOTEBOOK_GUIDE.md`](docs/NOTEBOOK_GUIDE.md) before touching a notebook or a
   config.** Two rules it enforces with tests: a cell may never ASSIGN a setting, and a cell may
   never DEFINE a function — orchestration belongs in `quant/research/`. It carries the table of
