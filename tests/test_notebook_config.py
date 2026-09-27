@@ -336,8 +336,14 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     exec(compile(CFG21.read_text(encoding="utf-8"), str(CFG21), "exec"), b)
     ka = {k: v for k, v in a.items() if k.isupper()}
     kb = {k: v for k, v in b.items() if k.isupper()}
+    # 21's own additions: the confirmation's switches, the missed-setup layer, the S/R knob, and
+    # the two optional exits with the A/B that compares them (all OFF in the settings themselves)
     assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
-                                 "SHOW_REJECTED", "SR_SENSITIVITY"}, sorted(set(kb) - set(ka))
+                                 "SHOW_REJECTED", "SR_SENSITIVITY",
+                                 "USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT",
+                                 "COMPARE"}, sorted(set(kb) - set(ka))
+    assert kb["USE_TP_MOVE"] is False and kb["USE_FVG_EXIT"] is False, (
+        "the exits are A/B arms; switched on in the settings they would change 21's trades")
     # THE WINDOW IS NOT A RULE. What 21 must share with 20 is WHAT gets traded, so that the
     # confirmation is the only difference in the strategy. WHEN is the user's to set per notebook,
     # and the A/B that matters runs inside 21 via variant(), where both arms share 21's own window.
@@ -349,7 +355,12 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     # in these notebooks, so this cannot touch the comparison 21 exists to make.
     knob = {"ZONES_LEFT", "ZONES_RIGHT", "SR_CLUSTER_PCT", "SR_MIN_TOUCHES"}
     assert not (knob & set(kb)), "21 must not pin a value the tuned table owns"
-    drifted = sorted(k for k in ka if k not in when | knob and repr(ka[k]) != repr(kb.get(k)))
+    # AND VALUES THE USER CHANGED THEMSELVES in 21, which is theirs to do -- this test guards
+    # against a BUILD SCRIPT or an assistant drifting 21 away from 20, not against its owner.
+    # 2026-09-27: FVG_MAX_AGE_BARS 500 -> 1000 (gaps only; the veto that reads them is off).
+    user = {"FVG_MAX_AGE_BARS"}
+    drifted = sorted(k for k in ka if k not in when | knob | user
+                     and repr(ka[k]) != repr(kb.get(k)))
     assert drifted == ["TL_CONFIRM_N", "TRENDLINE"], (
         f"only the confirmation and the line's break rule may differ, got {drifted}")
     assert kb["TL_CONFIRM_N"], "notebook 21 is pointless with the confirmation off"
