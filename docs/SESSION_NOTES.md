@@ -1915,3 +1915,27 @@ Decisions worth knowing:
 - Drawing-only settings default OFF in the evaluation window (`_WINDOW_ONLY`), and a test checks the
   evaluation's window reproduces the lab's trades on the lab's window.
 
+### Notebook 21: config re-arranged, exit tags on the chart, and "when does it work" (2026-09-27)
+
+The user preferred to stay on notebook 21 rather than the lab/evaluate layout (which stays in the
+repo, unused for now). `nb21_config.py` was re-arranged into §1 market & dates, §2 entry, §3 exit
+with the two exit strategies as named blocks, §4 money, §5 A/B, §6 gaps, §7 S/R, §8 chart --
+backup in notebooks/backups/2026-09-27_pre_nb21_restructure/, every value proved unchanged except
+`tag=` added to TP_MOVE / FVG_EXIT and a new EXIT_LABELS.
+
+EXIT TAGS: `quant/research/exit_labels.py` gives each trade `exit_tag` (TP, SL, BE, TP·MOVED,
+TP·FVG, open) and `exit_why`, a sentence recomputed from the trade and the bars with the engine's
+own definitions -- which trigger moved the target and from where to where, or which timeframe's gap
+filled and how far short of the target. `pattern_figure(exit_labels=True)` writes the tag on the
+exit marker and the sentence in every hover. Two things worth knowing:
+- **The tag is drawn with `texttemplate="%{customdata[3]}"`, never a `text` array.** Rewind drops
+  markers after its cut and filters customdata with them, but not `text`; and the exits trace is NOT
+  in time order (longs and shorts run separately and can overlap -- #05 exits after #06), so a cut
+  removes points from the middle and a text array would slide every later label onto the wrong
+  trade. Checked by driving the real rewind in the browser: cut at Jun 14 12:00, #05 dropped from
+  the middle, #06 still reads SL.
+- The labeller must be handed the SAME rule settings the run used; a test that labelled with a
+  different `after_bars` reported a time trigger the sim never had.
+
+The regime study and its trap (ranking by R ranks losers by stop width) are in docs/WHAT_WORKS.md.
+

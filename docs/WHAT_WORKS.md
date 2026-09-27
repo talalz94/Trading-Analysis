@@ -189,6 +189,41 @@ rule can repair that; the lever is the entry, or the cost per R.
 Both rules stay in the engine, off by default, because they are correct tools and cheap to re-test
 on a different entry. Neither should be switched on on this evidence.
 
+### When does it work? Market conditions at entry (2026-09-27) — nothing predicts; stop width sets the cost
+
+`experiments/regime_study.py`: every one of the 1,194 trades, 16 conditions read at its entry bar
+(volatility level and rank, a recent vol shock, Kaufman efficiency, 1h choppiness, RSI 5m/1h,
+momentum into the break, 1h/4h trend bias and slope, stretch from the entry EMA, range position,
+stop width, relative volume, side, trigger timeframe, session), judged train 2022Q1-2024Q2 ->
+forward 2024Q3-2026Q3, counting a relationship only if p < 0.05 in BOTH halves with the same sign.
+
+| question | features that hold in both halves | all features together (forward AUC) |
+|---|---|---|
+| what separates winners from losers | **0 of 15** (chance ~0.02) | **0.48** [0.43, 0.53] |
+| when does moving the target help | 0 of 15 | 0.47 [0.40, 0.55] |
+| when does the FVG exit help | 0 of 15 | 0.51 [0.45, 0.58] |
+
+The model fits the train half at AUC 0.93-0.99 and is a coin flip forward: it memorised. Session,
+trigger timeframe and side move the averages in one half and not the other (Asia vs the rest:
+p 0.21 train, 0.33 forward). **Nothing in the market at entry says whether this strategy wins, or
+which exit to use** — the same answer the hybrid-strategy search gave on the entry families.
+
+**The trap the first pass fell into.** Scored on R, 11 of 15 features "held" with Spearman up to
+0.54. It was costs: 73% of trades lose -1R MINUS costs, and costs are a fixed % of price, so a tight
+stop makes the same fee a bigger slice of R; ranking by R ranked the losers by stop width. Scored on
+win/loss and on zero-cost R, every one of them vanished. **Never rank trades by R to find
+predictors — rank by outcome, and read costs separately.**
+
+**The one lever: stop width in price terms.** Costs take 0.43R from a trade in the quietest third
+of markets and 0.10R in the most volatile (Spearman -0.92). Skipping entries whose stop is tighter
+than 0.76% of price (the train tercile) leaves the gross result unchanged (+0.006 -> -0.029 train,
++0.180 -> +0.214 forward) and cuts costs from ~0.24R to ~0.14R a trade: net -0.235 -> -0.168R train,
+-0.069 -> +0.062R forward, better in **15 of 19 quarters (7 of 9 forward)**. It is cost management,
+not an edge — train is still negative — but it is consistent, and it is the only thing here that is.
+
+Also measured: 34% of losers were +1R before they turned, but breakeven at 1R LOSES 24.8R forward
+(1.5R: +27.6 train, -12.2 forward). The winners pull back through +1R too.
+
 ---
 
 ## The one-paragraph answer

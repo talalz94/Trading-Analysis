@@ -168,8 +168,9 @@ class Evaluation:
         rc = a.attrs.get("rank_corr", np.nan)
         best = a["t"].abs().max()
         lines = [f"{len(a)} arms over {len(self.train) + len(self.forward)} quarters.",
-                 f"train -> forward rank correlation: {rc:+.2f}"
-                 + ("  (the train ranking did not survive)" if not rc > 0.3 else ""),
+                 ("train -> forward rank correlation: n/a (needs 3 or more arms)" if rc != rc
+                  else f"train -> forward rank correlation: {rc:+.2f}"
+                  + ("  (the train ranking did not survive)" if not rc > 0.3 else "")),
                  f"largest |t|: {best:.2f}" + ("  -- below 2.5, nothing here beats noise"
                                                if best < 2.5 else "  -- worth a closer look")]
         if self.same_as_set:
