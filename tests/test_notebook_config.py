@@ -341,7 +341,7 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
                                  "SHOW_REJECTED", "SR_SENSITIVITY",
                                  "USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT",
-                                 "COMPARE"}, sorted(set(kb) - set(ka))
+                                 "COMPARE", "EXIT_LABELS"}, sorted(set(kb) - set(ka))
     assert kb["USE_TP_MOVE"] is False and kb["USE_FVG_EXIT"] is False, (
         "the exits are A/B arms; switched on in the settings they would change 21's trades")
     # THE WINDOW IS NOT A RULE. What 21 must share with 20 is WHAT gets traded, so that the

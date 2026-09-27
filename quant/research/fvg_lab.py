@@ -188,6 +188,7 @@ class FvgLab:
             max_shapes_per_tf=_get(c, "MAX_SHAPES_TF", 12),
             max_trade_picker=_get(c, "MAX_TRADE_PICKER", 40),
             trades=self.trades, trade_tp_rr=c.TP_RR, ref_target_label="FVG exit",
+            exit_labels=_get(c, "EXIT_LABELS", False),
             start_visible=_get(c, "START_VISIBLE", ("trades", "fvg_bull", "fvg_bear")),
             height=_get(c, "HEIGHT", 900),
             rewind=_get(c, "REWIND", False),
@@ -354,6 +355,8 @@ def _trade(c, base) -> FvgLab:
     sides = [s for s, on in (("long", _get(c, "TRADE_LONG", True)),
                              ("short", _get(c, "TRADE_SHORT", True))) if on]
 
+    gap_pick = {}                          # side -> the gap each entry bar's FVG exit chose
+
     def _frame_for(side):
         """D, plus this side's FVG-exit column when that rule is on, and the config to match."""
         cfg = {**c.COSTS, **exit_cfg}
@@ -362,9 +365,11 @@ def _trade(c, base) -> FvgLab:
         # the stop method's OWN reference column, so the R the gap is measured in is the trade's
         ref = resolve_stop("high_of_n@v1").prepare(D, {**params, "_side": side})["stop_extreme_n"]
         col = f"fvg_exit_{side}"
-        lv = fvg_target(D, exit_gaps, side=side, stop_ref=ref.to_numpy(np.float64),
-                        stop_buffer_pct=c.STOP_BUFFER_PCT, tp_rr=c.TP_RR,
-                        near_r=float(fx.get("near_r", 1.0)), at=fx.get("at", "ce"))
+        lv, gap_pick[side] = fvg_target(D, exit_gaps, side=side,
+                                        stop_ref=ref.to_numpy(np.float64),
+                                        stop_buffer_pct=c.STOP_BUFFER_PCT, tp_rr=c.TP_RR,
+                                        near_r=float(fx.get("near_r", 1.0)),
+                                        at=fx.get("at", "ce"), return_gap=True)
         cfg[f"tp_ref_{side}_col"] = col
         return D.assign(**{col: lv}), cfg
 
@@ -385,6 +390,10 @@ def _trade(c, base) -> FvgLab:
         t["tid"] = [f"#{i + 1:02d}" for i in range(len(t))]
         # the engine's generic "second target" IS the FVG exit here -- say so in the table
         t["close_reason"] = t["close_reason"].replace({"ref_target": "fvg_exit"})
+        if _get(c, "EXIT_LABELS", False):
+            # a tag for the chart and a sentence for the hover, from the rules' own settings
+            from .exit_labels import label_exits
+            t = label_exits(t, D, c, exit_gaps, gap_pick)
         return t
 
     everything = _run(False)

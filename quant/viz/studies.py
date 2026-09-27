@@ -488,7 +488,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    mtf_emas=None, ema_frames=None, emas_on: bool = True,
                    legend_instances=None, trades=None, trade_tp_rr=None,
                    chart_tf=None, max_trade_picker: int = 40,
-                   ref_target_label: str = "second target",
+                   ref_target_label: str = "second target", exit_labels: bool = False,
                    fvgs: bool = False, fvg_kwargs=None, fvg_frames=None, tf_fvgs=None,
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
                    fvg_show=("bull", "bear"),
@@ -1520,13 +1520,17 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                     else "legendonly"))
 
         _extra = [c for c in ("trigger",) if c in tq.columns]
+        # EXIT LABELS: a short tag drawn on every exit marker and a sentence in every hover, when
+        # asked for AND the trades carry them (quant.research.exit_labels). Off, nothing changes.
+        _lab = bool(exit_labels) and "exit_tag" in tq.columns
+        _why_col = tq["exit_why"] if _lab else tq["close_reason"]
         for side, sym, colr in (("long", "triangle-up", "#26a69a"),
                                 ("short", "triangle-down", "#ef5350")):
             g = tq[tq["side"] == side]
             if not len(g):
                 continue
             cd = np.column_stack([g["R"].to_numpy(), g["pnl"].to_numpy(),
-                                  g["close_reason"].to_numpy(),
+                                  _why_col.loc[g.index].to_numpy(),
                                   g["cause"].to_numpy(), g["tid"].to_numpy()])
             fig.add_trace(go.Scattergl(
                 x=g["entry_time"], y=g["entry_price"], mode="markers",
@@ -1543,17 +1547,27 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         done = tq[tq["exit_time"].notna()]
         if len(done):
             win = done["pnl"] > 0
+            _cd = [_why_col.loc[done.index].to_numpy(), done["R"].to_numpy(), done["tid"].to_numpy()]
+            _txt = {}
+            if _lab:
+                # THE TAG IS READ FROM customdata, never from `text`: rewind drops the markers after
+                # its cut and filters customdata with them, but leaves `text` alone -- a text array
+                # would slide every label onto the wrong trade after the first rewind
+                _cd.append(done["exit_tag"].to_numpy())
+                _txt = dict(texttemplate="%{customdata[3]}", textposition="top center",
+                            textfont=dict(size=10, color=list(np.where(win, "#26a69a",
+                                                                       "#ef5350"))))
             fig.add_trace(go.Scattergl(
-                x=done["exit_time"], y=done["exit_price"], mode="markers",
+                x=done["exit_time"], y=done["exit_price"],
+                mode="markers+text" if _lab else "markers",
                 name=f"exits ({int(win.sum())}W / {int((~win).sum())}L)", legendgroup="trades",
                 marker=dict(symbol="x", size=9,
                             color=np.where(win, "#26a69a", "#ef5350"),
                             line=dict(width=1.4)),
-                customdata=np.column_stack([done["close_reason"].to_numpy(),
-                                            done["R"].to_numpy(), done["tid"].to_numpy()]),
+                customdata=np.column_stack(_cd),
                 visible=True if "trades" in start_visible else "legendonly",
                 hovertemplate=("<b>%{customdata[2]}</b> exit %{y:.2f}<br>%{customdata[0]}"
-                               "<br>%{customdata[1]:.2f}R<extra></extra>")))
+                               "<br>%{customdata[1]:.2f}R<extra></extra>"), **_txt))
 
         # ONE TRACE PAIR PER TRADE, hidden, so a single trade can be pulled out of the pile along
         # with the line that caused it. The concatenated traces above are the overview; this is the
@@ -1598,8 +1612,8 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 line=dict(color="#26a69a", width=1.6, dash="dot"),
                 hovertemplate=f"<b>{r.tid}</b> TARGET %{{text}}<extra></extra>"))
 
-            _why = str(r.close_reason)
-            if _walked:
+            _why = str(r.exit_why) if _lab else str(r.close_reason)
+            if _walked and not _lab:
                 _why += " — but the stop had walked to ~breakeven, so the exit is at entry"
             fig.add_trace(go.Scattergl(
                 x=[x0, x1], y=[r.entry_price, r.exit_price], mode="markers+lines",

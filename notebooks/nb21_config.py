@@ -1,59 +1,52 @@
 """
-NOTEBOOK 21 — 1H BREAK CONFIRMATION.  THIS FILE IS YOURS.
+NOTEBOOK 21 — TRENDLINE BREAKS, CONFIRMED.  THIS FILE IS YOURS.
 
-Notebook 20's settings with one strategy turned on: a 1h trendline break must be CONFIRMED by a
-later candle before the trade is taken, and the setup is cancelled if price closes back over the
-candle that fired it. Everything else is identical to 20, so the confirmation is the only variable.
+Short a break of a fitted support line (long: resistance) from 5m, 15m or 1h. A 15m or 1h break
+must be CONFIRMED by a later candle before it trades. Two optional EXIT STRATEGIES can end a trade
+before its target; each has a TAG that the chart writes on the exit marker.
 
-  §1 what and when   §2 the trade   §3 gaps   §4 S/R   §5 chart   §6 rewind   §7 A/B
+  §1 market & dates   §2 entry   §3 exit, and the two exit strategies   §4 money   §5 A/B
+  §6 gaps   §7 support / resistance   §8 chart
 
-The rules themselves are documented in quant/scenarios/entries.py (_confirm_beyond); this file only
-says which values are in force. If Jupyter offers "File Changed", pick RELOAD.
+The rules are documented beside their code; this file only says which values are in force.
+If Jupyter offers "File Changed", pick RELOAD.
 """
 import numpy as np, pandas as pd     # noqa: F401
 
-# ── §1  WHAT AND WHEN ────────────────────────────────────────────────────────────────────────
+# ══ §1  MARKET & DATES ═══════════════════════════════════════════════════════════════════════
 SYMBOL, SOURCE = "BTCUSDT", "binance"
-TF             = "5m"                # chart + execution timeframe
-VIEW_START     = "2026-06-01"        # "2026-06-01"
-END            = "2026-06-20"        # "2026-06-10"
-WARMUP_START   = "2026-05-01"        # history for lines and gaps
-TF_WARMUP_BARS = 800                 # per extra timeframe, in its own bars
+TF             = "5m"                # chart and execution timeframe
+VIEW_START     = "2026-06-01"        # the chart starts here
+END            = "2026-06-20"        # ...and ends here
+WARMUP_START   = "2026-05-01"        # history for lines and gaps; never traded
+TF_WARMUP_BARS = 800                 # history per extra timeframe, in its own bars
 
-# ── §2  THE TRADE ────────────────────────────────────────────────────────────────────────────
+# ══ §2  ENTRY — a line breaks, the break is confirmed, the extra rules agree ═══════════════════
 # 2.1  which lines
-LINE_TFS  = ("15m", "1h")            # fitted AND traded (gap timeframes are §3)
+LINE_TFS  = ("15m", "1h")            # fitted and traded, as well as TF itself
 TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.6,
                  min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0,
-                 # a break must STICK for this many bars before the line is retired. 0 = the first
-                 # close through kills it, which throws the line away on a poke nothing confirmed.
-                 # A close back on the original side resets the count. max_distance_atr still
-                 # retires a line price has simply walked away from.
-                 break_sustain_bars=1)
+                 break_sustain_bars=1)   # closes beyond before a line retires; 0 = the first one
 
-# 2.2  the break — each is a run of n chart candles ending at the entry, measured against the LINE
-TL_CLOSE_N    = {"5m": 1, "15m": 1, "1h": 1, "*": 2}   # closes beyond it
-TL_FULL_M     = 0                    # whole candles beyond it
-TL_TOUCH_K    = 0                    # prior touches the line must have
-TL_DIR_N      = 0                    # candles of the trade's own colour
-TL_DIR_SRC    = "chart"              # "chart" | "line" — whose candles TL_DIR_N counts
-TL_DIR_FULL_N = 0                    # right colour AND wholly beyond
-TL_COMBINE    = "all"                # "all" = every enabled one | "any"
-TL_TOL_ATR    = 0.0                  # how far past counts as past, in ATR
-TL_EXTEND     = True                 # a held line keeps its slope (only acts when hold > 0)
-TL_ONCE_PER_LINE = False             # True = only the FIRST break of each line may trade
+# 2.2  the break — counted over the candles ending at the entry, against the LINE
+TL_CLOSE_N       = {"5m": 1, "15m": 1, "1h": 1, "*": 2}   # closes beyond it
+TL_FULL_M        = 0                 # whole candles beyond it
+TL_TOUCH_K       = 0                 # prior touches the line must have
+TL_DIR_N         = 0                 # candles of the trade's own colour
+TL_DIR_SRC       = "chart"           # "chart" | "line" — whose candles TL_DIR_N counts
+TL_DIR_FULL_N    = 0                 # right colour AND wholly beyond
+TL_COMBINE       = "all"             # "all" = every test above | "any"
+TL_TOL_ATR       = 0.0               # how far past counts as past, in ATR
+TL_EXTEND        = True              # a held line keeps its slope
+TL_ONCE_PER_LINE = False             # True = only a line's FIRST break may trade
 
-# 2.3  THE CONFIRMATION — measured against rs, the candle that fired, NOT against the line.
-#      THIS IS WHAT NOTEBOOK 21 IS FOR.
-TL_CONFIRM_FROM   = "first"          # which bar is rs: "first" = the bar the break STARTED on |
-                                     #   "every" = every bar the line reads broken. A 1h line reads
-                                     #   broken for a RUN of 5m bars; "every" lets the rule confirm
-                                     #   against a small chop candle instead of the real break
-TL_CONFIRM_N      = {"1h": 3, "15m": 3, "*": 0}   # candles of grace after rs, per LINE timeframe
-TL_CONFIRM_ALL    = False            # False = ONE of the n confirms | True = all n, consecutively
-TL_CONFIRM_MODE   = "close"          # "close" beyond rs | "full" = the whole candle beyond rs
+# 2.3  the confirmation — against rs, the candle that FIRED, not against the line
+TL_CONFIRM_FROM   = "first"          # rs = the bar the break started on | "every" bar it reads broken
+TL_CONFIRM_N      = {"1h": 3, "15m": 3, "*": 0}   # candles of grace after rs, per line timeframe
+TL_CONFIRM_ALL    = False            # False = ONE of them confirms | True = all of them, in a row
+TL_CONFIRM_MODE   = "close"          # "close" beyond rs | "full" = the whole candle beyond it
 TL_CONFIRM_COLOUR = True             # the confirming candle must be the trade's own colour
-TL_CONFIRM_CANCEL = True             # rs dies if a candle CLOSES BACK OVER it — a bounce voids it
+TL_CONFIRM_CANCEL = True             # a close back over rs cancels the setup
 
 # 2.4  extra rules, ANDed onto the break
 TRADE_LONG, TRADE_SHORT = True, True
@@ -63,95 +56,90 @@ ENTRY_RULES = [
 ]
 RULES_COMBINE = "all"                # "all" = every rule for that side | "any"
 
-# 2.5  the exit
-STOP_N          = 20                 # stop at the extreme of the last N bars
-STOP_BUFFER_PCT = 0.05               # pushed this % beyond it
-BE_AT_RR        = 0                  # breakeven at this R; 0 = leave the stop alone
-TP_RR           = 3.0                # target, in R
-USE_RETEST_BAIL = False              # notebook 18's post-entry bail-out
+# ══ §3  EXIT — stop, target, and two optional exit strategies ═════════════════════════════════
+# 3.1  stop and target — chart tags: TP = target reached, SL = stopped, BE = stopped at breakeven
+STOP_N          = 20                 # stop at the extreme of the last N bars...
+STOP_BUFFER_PCT = 0.05               # ...pushed this % beyond it
+TP_RR           = 3.0                # the target, in R
+BE_AT_RR        = 0                  # move the stop to entry at this R; 0 = never
+
+# 3.2  EXIT STRATEGY 1 — a near miss, or a long wait, moves the target closer
+USE_TP_MOVE = False
+TP_MOVE     = dict(tag="MOVED",      # the chart says TP·MOVED
+                   near=0.8,         # price got 80% of the way to the target...
+                   back=0.3,         # ...then a close gave back 30% of that distance
+                   after_bars=0,     # or: the trade has been open this many bars (0 = off)
+                   to=0.6)           # -> the target moves to 60% of its distance (3R -> 1.8R)
+
+# 3.3  EXIT STRATEGY 2 — close when price fills a gap sitting near the target
+USE_FVG_EXIT = False
+FVG_EXIT     = dict(tag="FVG",       # the chart says TP·FVG
+                    tfs=("15m", "1h", "4h"),   # whose gaps count, detected as §6 says
+                    near_r=1.0,      # the gap lies within this many R of the target
+                    at="ce")         # exit at its "touch" | "ce" (middle) | "full" (far edge)
+
+# 3.4  notebook 18's post-entry bail-out (off)
+USE_RETEST_BAIL = False
 SEC_TOUCH_N, SEC_WRONG_M, SEC_OPP_N = 2, 0, 1
 SEC_MIN_PCT, SEC_REPLACE_TP         = 0.20, True
 
-# 2.6  optional exits — both off = the trades above, exactly. Fractions are of the entry->target distance
-USE_TP_MOVE  = False                 # a near miss, or a long wait, moves the target closer
-TP_MOVE      = dict(near=0.8, back=0.3,    # got 80% of the way, then a close gave back 30%...
-                    after_bars=0,          # ...or held this many bars (0 = off)
-                    to=0.6)                # -> target moves to 60% of its distance (3R -> 1.8R)
-USE_FVG_EXIT = False                 # close when price fills a gap sitting near the target
-FVG_EXIT     = dict(tfs=("15m", "1h", "4h"),   # whose gaps, detected as §3 draws them
-                    near_r=1.0,            # the gap lies within this many R of the target
-                    at="ce")               # exit at its "touch" | "ce" (middle) | "full" (far edge)
-
-# 2.7  the money
+# ══ §4  MONEY ════════════════════════════════════════════════════════════════════════════════
 COSTS = dict(initial_cash=10_000, fee_bps=8, slippage_bps=1.5,
              sizing_mode="risk_pct_equity", sizing_value=1.0,
              exit_enabled=False, max_open_trades=1)
 
-# ── §3  FAIR VALUE GAPS ──────────────────────────────────────────────────────────────────────
-FVG_TFS          = ("15m", "1h", "4h")   # drawn, and allowed to veto. May be finer than TF
-FVG_MITIGATION   = "ce"              # "touch" | "ce" (midpoint) | "full" — when a gap dies
-FVG_MIN_SIZE_ATR = 0.50              # keeps the larger half; the median gap is 0.49-0.55 ATR
-FVG_MIN_DISP_ATR = 0.0               # the middle candle's body, in ATR. 0 = off
-FVG_MAX_AGE_BARS = 1000
-FVG_ATR_PERIOD   = 14
-
-FVG_DRAW   = True
-FVG_EXTEND = True                    # an unmitigated box runs to the right edge
-FVG_SHOW   = ("bull", "bear")
-
-# the veto — measured and it does not work (docs/WHAT_WORKS.md). Here to experiment with.
-USE_FVG_VETO      = False
-FVG_VETO_MODE     = "retrace"        # "retrace" (gap behind) | "barrier" (gap ahead)
-FVG_VETO_TFS      = ("1h", "4h")     # not the chart's own: 5m has ~96 gaps live at once
-FVG_VETO_MAX_AGE  = 60               # in the gap's OWN timeframe's bars
-FVG_VETO_MIN_SIZE = 0.0              # leave at 0 — these gates test only the NEAREST gap
-FVG_VETO_MAX_DIST = 3.0              # in ATR
-FVG_RULES = [                        # <opposite|same|bull|bear> [tf] [within N] [min X] [near X]
-    # "short: opposite FVG 15m+1h within 20 candles min 0.8 ATR near 3 ATR",
-]
-
-# ── §4  SUPPORT / RESISTANCE ─────────────────────────────────────────────────────────────────
-SHOW_SR_ZONES  = True                # layers start legendonly; the `S/R:` row switches them on
-SR_TFS         = ("15m", "1h", "4h") # clustered per timeframe, in its own bar space
-ZONE_LOOKBACK  = 2000                # bars of history per layer, IN ITS OWN BARS
-SR_MAX_ZONES   = 40                  # per layer
-
-# THE KNOB — tuned per timeframe by experiments/sr_zone_search.py; each layer gets its own TF's
-# settings. "tight" = fewer, sharper levels | "normal" = the best | "loose" = more context.
-# None = the pre-2026-09-27 zones exactly (backup: notebooks/backups/2026-09-27_pre_sr_tuning/).
-# To pin one value, state it and it wins over the table:  SR_CLUSTER_PCT = 0.15, ZONES_LEFT = 10,
-# ZONES_RIGHT = 10, SR_MIN_TOUCHES = 2, SR_BREAK_BARS = 4, SR_ANCHOR = True
-SR_SENSITIVITY = "normal"
-
-# ── §5  THE CHART ────────────────────────────────────────────────────────────────────────────
-EMAS     = (20, 50, 100, 200)        # of TF
-MTF_EMAS = [("1m", 20, 50, 100, 200),
-            ("15m", 20, 50, 100, 200),
-            ("1h", 20, 50, 100, 200)]
-EMAS_ON  = False                     # drawn, but off at open
-SHOW_TRENDLINES = True
-START_VISIBLE   = ("trades",)        # + "fvg_bull" / "fvg_bear" / "sr_zones"
-SHOW_REJECTED   = True               # draw the breaks that did NOT trade, one legend entry
-                                     #   per reason. Always starts OFF the chart; costs a
-                                     #   re-run of the entry conditions, so it is opt-in
-HEIGHT          = 900
-
-# dropdown caps — everything is DRAWN regardless; a plotly menu clips rather than scrolls
-MAX_FVG_PICKER   = 6                 # per timeframe per direction
-MAX_SR_PICKER    = 6                 # per timeframe
-MAX_PICKER       = 24                # pattern/trendline instances, all timeframes
-MAX_SHAPES_TF    = 12                # shapes per extra timeframe
-MAX_TRADE_PICKER = 40
-
-# ── §6  REWIND ───────────────────────────────────────────────────────────────────────────────
-REWIND = True                        # click a candle in the browser; everything clips to it
-AS_OF  = None                        # or "2026-06-05 20:00" to rebuild on truncated data
-
-# ── §7  A/B ──────────────────────────────────────────────────────────────────────────────────
-# One run per arm, each changing ONLY what it names, so the columns differ by exactly that
+# ══ §5  A/B — the notebook's comparison table; each arm changes only what it names ═════════════
 COMPARE = {
     "neither":     dict(USE_TP_MOVE=False, USE_FVG_EXIT=False),
     "move target": dict(USE_TP_MOVE=True,  USE_FVG_EXIT=False),
     "fvg exit":    dict(USE_TP_MOVE=False, USE_FVG_EXIT=True),
     "both":        dict(USE_TP_MOVE=True,  USE_FVG_EXIT=True),
 }
+
+# ══ §6  FAIR VALUE GAPS — drawn, and read by the veto and the FVG exit ═════════════════════════
+FVG_TFS          = ("15m", "1h", "4h")   # may be finer than TF
+FVG_MITIGATION   = "ce"              # "touch" | "ce" (midpoint) | "full" — when a gap dies
+FVG_MIN_SIZE_ATR = 0.50              # keeps the larger half of gaps
+FVG_MIN_DISP_ATR = 0.0               # the middle candle's body, in ATR; 0 = off
+FVG_MAX_AGE_BARS = 1000              # in each gap's own bars
+FVG_ATR_PERIOD   = 14
+FVG_DRAW         = True
+FVG_EXTEND       = True              # an unfilled box runs to the right edge
+FVG_SHOW         = ("bull", "bear")
+
+# the veto — measured, and it does not work (docs/WHAT_WORKS.md)
+USE_FVG_VETO      = False
+FVG_VETO_MODE     = "retrace"        # "retrace" (gap behind) | "barrier" (gap ahead)
+FVG_VETO_TFS      = ("1h", "4h")     # not the chart's own: 5m has ~96 gaps live at once
+FVG_VETO_MAX_AGE  = 60               # in the gap's own bars
+FVG_VETO_MIN_SIZE = 0.0
+FVG_VETO_MAX_DIST = 3.0              # in ATR
+FVG_RULES = []                       # e.g. "short: opposite FVG 15m+1h within 20 candles"
+
+# ══ §7  SUPPORT / RESISTANCE — drawn, never traded ═══════════════════════════════════════════
+SHOW_SR_ZONES  = True                # start hidden; the `S/R:` buttons show them
+SR_TFS         = ("15m", "1h", "4h")
+ZONE_LOOKBACK  = 2000                # bars of history per layer, in its own bars
+SR_MAX_ZONES   = 40                  # per layer
+SR_SENSITIVITY = "normal"            # "tight" | "normal" | "loose" | None = the pre-2026-09-27 zones
+
+# ══ §8  CHART ════════════════════════════════════════════════════════════════════════════════
+EXIT_LABELS     = True               # write TP / SL / BE / TP·MOVED / TP·FVG on every exit marker
+EMAS            = (20, 50, 100, 200) # of TF
+MTF_EMAS        = [("1m", 20, 50, 100, 200),
+                   ("15m", 20, 50, 100, 200),
+                   ("1h", 20, 50, 100, 200)]
+EMAS_ON         = False              # drawn, but hidden at open
+SHOW_TRENDLINES = True
+SHOW_REJECTED   = True               # the breaks that did NOT trade; start hidden
+START_VISIBLE   = ("trades",)        # + "fvg_bull" / "fvg_bear" / "sr_zones"
+HEIGHT          = 900
+REWIND          = True               # click a candle; everything clips to what was known there
+AS_OF           = None               # or "2026-06-05 20:00" to rebuild on data up to then
+
+# dropdown caps — everything is still drawn; a plotly menu clips rather than scrolls
+MAX_FVG_PICKER   = 6                 # per timeframe per direction
+MAX_SR_PICKER    = 6                 # per timeframe
+MAX_PICKER       = 24                # line instances, all timeframes
+MAX_SHAPES_TF    = 12                # shapes per extra timeframe
+MAX_TRADE_PICKER = 40

@@ -45,6 +45,7 @@ FVG_TARGET_AT = ("touch", "ce", "full")
 def _pick(close, stop_ref, side, buf, rr, near, at, g_from, g_to, g_kind, g_top, g_bot):
     n = close.shape[0]
     out = np.full(n, np.nan)
+    pick = np.full(n, -1, np.int64)          # which gap (row of `gaps`, in from_i order)
     want = 1 if side == -1 else -1          # a short aims at a BULLISH gap below, a long a BEARISH above
     for i in range(n):
         c = close[i]
@@ -76,6 +77,7 @@ def _pick(close, stop_ref, side, buf, rr, near, at, g_from, g_to, g_kind, g_top,
             d = (c - top) if side == -1 else (bot - c)
             if d < best_d:
                 best_d = d
+                pick[i] = g
                 if at == 0:
                     best = top if side == -1 else bot
                 elif at == 1:
@@ -83,13 +85,16 @@ def _pick(close, stop_ref, side, buf, rr, near, at, g_from, g_to, g_kind, g_top,
                 else:
                     best = bot if side == -1 else top
         out[i] = best
-    return out
+    return out, pick
 
 
 def fvg_target(df: pd.DataFrame, gaps: pd.DataFrame, *, side: str, stop_ref: np.ndarray,
                stop_buffer_pct: float, tp_rr: float, near_r: float = 1.0,
-               at: str = "ce") -> np.ndarray:
+               at: str = "ce", return_gap: bool = False):
     """Per bar, the exit level of the gap a trade opened on that bar would aim at; NaN for none.
+
+    `return_gap=True` also returns, per bar, the index LABEL in `gaps` of the gap chosen (-1 for
+    none), so a trade can say which gap -- which timeframe, which band -- it exited on.
 
     `gaps` is `quant.indicators.fvg_on_grid(df, frames, **fvg_kwargs)` on this same frame.
     `stop_ref` is the stop method's reference column (the highest high of N bars for a short),
@@ -101,11 +106,16 @@ def fvg_target(df: pd.DataFrame, gaps: pd.DataFrame, *, side: str, stop_ref: np.
         raise ValueError(f"at must be one of {FVG_TARGET_AT}, got {at!r}")
     n = len(df)
     if not len(gaps):
-        return np.full(n, np.nan)
+        empty = np.full(n, np.nan)
+        return (empty, np.full(n, -1, np.int64)) if return_gap else empty
     g = gaps.sort_values("from_i", kind="stable")
-    return _pick(df["close"].to_numpy(np.float64), np.asarray(stop_ref, np.float64),
+    lv, pos = _pick(df["close"].to_numpy(np.float64), np.asarray(stop_ref, np.float64),
                  1 if side == "long" else -1, float(stop_buffer_pct) / 100.0, float(tp_rr),
                  float(near_r), FVG_TARGET_AT.index(at),
                  g["from_i"].to_numpy(np.int64), g["to_i"].to_numpy(np.int64),
                  g["kind"].to_numpy(np.int64), g["top"].to_numpy(np.float64),
                  g["bot"].to_numpy(np.float64))
+    if not return_gap:
+        return lv
+    labels = g.index.to_numpy()
+    return lv, np.where(pos >= 0, labels[np.clip(pos, 0, None)], -1)
