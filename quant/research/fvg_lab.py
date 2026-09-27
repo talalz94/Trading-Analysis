@@ -140,9 +140,16 @@ class FvgLab:
             sr_zones=_get(c, "SHOW_SR_ZONES", False), sr_frames=self.sr_frames,
             max_sr_picker=_get(c, "MAX_SR_PICKER", 6),
             zone_lookback_bars=_get(c, "ZONE_LOOKBACK", 2000),
-            zones_left=_get(c, "ZONES_LEFT", 10), zones_right=_get(c, "ZONES_RIGHT", 10),
-            cluster_pct=_get(c, "SR_CLUSTER_PCT", 0.15),
-            min_touches=_get(c, "SR_MIN_TOUCHES", 2), max_zones=_get(c, "SR_MAX_ZONES", 40),
+            # THE KNOB, plus only the S/R settings the config actually STATES -- None for the
+            # rest, so they come from the tuned table rather than from a default written here
+            # (a default stated in two places is the 8a8b8de bug). A config that predates the
+            # knob gets "normal"; SR_SENSITIVITY = None restores the legacy zones exactly.
+            sr_sensitivity=_get(c, "SR_SENSITIVITY", "normal"),
+            zones_left=_get(c, "ZONES_LEFT", None), zones_right=_get(c, "ZONES_RIGHT", None),
+            cluster_pct=_get(c, "SR_CLUSTER_PCT", None),
+            min_touches=_get(c, "SR_MIN_TOUCHES", None),
+            sr_break_bars=_get(c, "SR_BREAK_BARS", None), sr_anchor=_get(c, "SR_ANCHOR", None),
+            max_zones=_get(c, "SR_MAX_ZONES", 40),
             max_picker_instances=_get(c, "MAX_PICKER", 24),
             max_shapes_per_tf=_get(c, "MAX_SHAPES_TF", 12),
             max_trade_picker=_get(c, "MAX_TRADE_PICKER", 40),
