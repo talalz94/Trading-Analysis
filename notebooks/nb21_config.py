@@ -5,7 +5,7 @@ Notebook 20's settings with one strategy turned on: a 1h trendline break must be
 later candle before the trade is taken, and the setup is cancelled if price closes back over the
 candle that fired it. Everything else is identical to 20, so the confirmation is the only variable.
 
-  §1 what and when   §2 the trade   §3 gaps   §4 S/R   §5 chart   §6 rewind
+  §1 what and when   §2 the trade   §3 gaps   §4 S/R   §5 chart   §6 rewind   §7 A/B
 
 The rules themselves are documented in quant/scenarios/entries.py (_confirm_beyond); this file only
 says which values are in force. If Jupyter offers "File Changed", pick RELOAD.
@@ -72,7 +72,17 @@ USE_RETEST_BAIL = False              # notebook 18's post-entry bail-out
 SEC_TOUCH_N, SEC_WRONG_M, SEC_OPP_N = 2, 0, 1
 SEC_MIN_PCT, SEC_REPLACE_TP         = 0.20, True
 
-# 2.6  the money
+# 2.6  optional exits — both off = the trades above, exactly. Fractions are of the entry->target distance
+USE_TP_MOVE  = False                 # a near miss, or a long wait, moves the target closer
+TP_MOVE      = dict(near=0.8, back=0.3,    # got 80% of the way, then a close gave back 30%...
+                    after_bars=0,          # ...or held this many bars (0 = off)
+                    to=0.6)                # -> target moves to 60% of its distance (3R -> 1.8R)
+USE_FVG_EXIT = False                 # close when price fills a gap sitting near the target
+FVG_EXIT     = dict(tfs=("15m", "1h", "4h"),   # whose gaps, detected as §3 draws them
+                    near_r=1.0,            # the gap lies within this many R of the target
+                    at="ce")               # exit at its "touch" | "ce" (middle) | "full" (far edge)
+
+# 2.7  the money
 COSTS = dict(initial_cash=10_000, fee_bps=8, slippage_bps=1.5,
              sizing_mode="risk_pct_equity", sizing_value=1.0,
              exit_enabled=False, max_open_trades=1)
@@ -82,7 +92,7 @@ FVG_TFS          = ("15m", "1h", "4h")   # drawn, and allowed to veto. May be fi
 FVG_MITIGATION   = "ce"              # "touch" | "ce" (midpoint) | "full" — when a gap dies
 FVG_MIN_SIZE_ATR = 0.50              # keeps the larger half; the median gap is 0.49-0.55 ATR
 FVG_MIN_DISP_ATR = 0.0               # the middle candle's body, in ATR. 0 = off
-FVG_MAX_AGE_BARS = 500
+FVG_MAX_AGE_BARS = 1000
 FVG_ATR_PERIOD   = 14
 
 FVG_DRAW   = True
@@ -136,3 +146,12 @@ MAX_TRADE_PICKER = 40
 # ── §6  REWIND ───────────────────────────────────────────────────────────────────────────────
 REWIND = True                        # click a candle in the browser; everything clips to it
 AS_OF  = None                        # or "2026-06-05 20:00" to rebuild on truncated data
+
+# ── §7  A/B ──────────────────────────────────────────────────────────────────────────────────
+# One run per arm, each changing ONLY what it names, so the columns differ by exactly that
+COMPARE = {
+    "neither":     dict(USE_TP_MOVE=False, USE_FVG_EXIT=False),
+    "move target": dict(USE_TP_MOVE=True,  USE_FVG_EXIT=False),
+    "fvg exit":    dict(USE_TP_MOVE=False, USE_FVG_EXIT=True),
+    "both":        dict(USE_TP_MOVE=True,  USE_FVG_EXIT=True),
+}
