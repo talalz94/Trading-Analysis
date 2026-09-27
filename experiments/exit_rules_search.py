@@ -49,9 +49,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebooks"))
 
 import quant.data as qdata                                              # noqa: E402
-from quant.data import resample_ohlcv                                   # noqa: E402
 from quant.data.timeframe import tf_frames as _tf_frames               # noqa: E402
 from quant.research import fvg_lab, variant                             # noqa: E402
+# the window and frame helpers are shared with the general evaluator, so the two cannot disagree
+from experiments.evaluate import quarter_window                         # noqa: E402
+from experiments.evaluate import frames_4h_from_1h as _frames_4h_from_1h  # noqa: E402
 
 OUT = ROOT / "experiments" / "results_exit_rules.csv"
 
@@ -61,10 +63,7 @@ FORWARD = ["2024Q3", "2024Q4", "2025Q1", "2025Q2", "2025Q3", "2025Q4", "2026Q1",
 
 
 def _bounds(q: str):
-    p = pd.Period(q, freq="Q")
-    start = p.start_time
-    end = min(p.end_time.normalize() + pd.Timedelta(days=1), pd.Timestamp("2026-08-31"))
-    return start, end
+    return quarter_window(q, "2026-08-31")
 
 
 def _arms():
@@ -80,18 +79,6 @@ def _arms():
         arms[f"fvg {'+'.join(tfs)} r{near_r} {at}"] = dict(
             USE_FVG_EXIT=True, FVG_EXIT=dict(tfs=tfs, near_r=near_r, at=at))
     return arms
-
-
-def _frames_4h_from_1h(symbol, tfs, *, view_start, end, warmup_bars=800, **kw):
-    """tf_frames, except 4h is resampled from 1h -- exact, and the 1h cache reaches 2021."""
-    tfs = tuple(dict.fromkeys(tfs))
-    out = _tf_frames(symbol, tuple(t for t in tfs if t != "4h"), view_start=view_start, end=end,
-                     warmup_bars=warmup_bars, **kw)
-    if "4h" in tfs:
-        h = _tf_frames(symbol, ("1h",), view_start=view_start, end=end,
-                       warmup_bars=warmup_bars * 4, **kw)["1h"]
-        out = {"4h": resample_ohlcv(h, "240min").reset_index(drop=True), **out}
-    return out
 
 
 def base_cfg():

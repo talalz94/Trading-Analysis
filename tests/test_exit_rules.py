@@ -306,11 +306,14 @@ def test_retrade_is_exactly_a_full_rebuild_and_refuses_anything_else():
     import nb21_config as CFG
     from quant.research import fvg_lab, variant
     lab = fvg_lab(CFG)
-    fast = lab.retrade(USE_TP_MOVE=True, USE_FVG_EXIT=True).trades
-    slow = fvg_lab(variant(CFG, USE_TP_MOVE=True, USE_FVG_EXIT=True)).trades
-    pd.testing.assert_frame_equal(fast.reset_index(drop=True), slow.reset_index(drop=True))
+    # exits, and then the wider trading settings: a confirmation switched off and a new target
+    for over in (dict(USE_TP_MOVE=True, USE_FVG_EXIT=True),
+                 dict(TL_CONFIRM_N=0, TL_CONFIRM_CANCEL=False, TP_RR=2.0)):
+        fast = lab.retrade(**over).trades
+        slow = fvg_lab(variant(CFG, **over)).trades
+        pd.testing.assert_frame_equal(fast.reset_index(drop=True), slow.reset_index(drop=True))
     with pytest.raises(KeyError):
-        lab.retrade(TP_RR=2.0)                  # changes the entries' geometry: needs a rebuild
+        lab.retrade(TRENDLINE={})               # the loader fits lines with it: needs a rebuild
 
 
 def test_notebook_21s_arms_only_touch_exit_settings():

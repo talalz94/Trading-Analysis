@@ -22,10 +22,26 @@ import numpy as np
 import pandas as pd
 
 
-# Settings read ONLY when trading, never when loading or fitting. A change to these alone can reuse
-# every frame, line and gap already built -- `FvgLab.retrade` -- which is what makes an A/B of exit
-# rules cost one sim per arm instead of a full reload.
+# The two optional exit rules' settings.
 EXIT_KEYS = frozenset({"USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT"})
+
+# EVERY setting read only when TRADING, never when loading, fitting or detecting. A change to these
+# alone can reuse every frame, line and gap already built -- `FvgLab.retrade` -- so an A/B of exits,
+# confirmations, stops or costs costs one sim per arm instead of a full reload. A setting the loader
+# reads (TRENDLINE, ENTRY_RULES for its EMAs, the FVG detection settings, the window) must never be
+# here: re-trading would silently keep the old frames. test_workspace.py parses the loader's source
+# and fails if it reads any of these.
+RETRADE_KEYS = EXIT_KEYS | frozenset({
+    "COSTS", "TRADE_LONG", "TRADE_SHORT", "RULES_COMBINE",
+    "STOP_N", "STOP_BUFFER_PCT", "BE_AT_RR", "TP_RR",
+    "USE_RETEST_BAIL", "SEC_TOUCH_N", "SEC_WRONG_M", "SEC_OPP_N", "SEC_MIN_PCT", "SEC_REPLACE_TP",
+    "TL_CLOSE_N", "TL_FULL_M", "TL_TOUCH_K", "TL_DIR_N", "TL_DIR_SRC", "TL_DIR_FULL_N",
+    "TL_COMBINE", "TL_TOL_ATR", "TL_EXTEND", "TL_ONCE_PER_LINE",
+    "TL_CONFIRM_N", "TL_CONFIRM_ALL", "TL_CONFIRM_MODE", "TL_CONFIRM_COLOUR", "TL_CONFIRM_CANCEL",
+    "TL_CONFIRM_FROM",
+    "USE_FVG_VETO", "FVG_VETO_MODE", "FVG_VETO_TFS", "FVG_VETO_MAX_AGE", "FVG_VETO_MIN_SIZE",
+    "FVG_VETO_MAX_DIST", "FVG_RULES",
+})
 
 
 def _get(cfg, name, default=None):
@@ -58,12 +74,12 @@ class FvgLab:
     _base: Dict[str, Any] = field(default_factory=dict, repr=False)   # what retrade() reuses
 
     def retrade(self, **overrides) -> "FvgLab":
-        """The same study with only EXIT settings changed (`EXIT_KEYS`), re-using every frame, line
-        and gap already built. Anything else could change what is loaded or fitted, so it refuses
-        rather than return a lab that silently still reflects the old value."""
-        bad = sorted(set(overrides) - EXIT_KEYS)
+        """The same study with only TRADING settings changed (`RETRADE_KEYS`), re-using every
+        frame, line and gap already built. Anything else could change what is loaded or fitted, so
+        it refuses rather than return a lab that silently still reflects the old value."""
+        bad = sorted(set(overrides) - RETRADE_KEYS)
         if bad:
-            raise KeyError(f"retrade() only changes {sorted(EXIT_KEYS)}; for {bad} run "
+            raise KeyError(f"retrade() cannot change {bad}: the loader reads them. Run "
                            f"fvg_lab(variant(cfg, ...)) instead")
         from .variant import variant
         return _trade(variant(self.cfg, **overrides), self._base)
