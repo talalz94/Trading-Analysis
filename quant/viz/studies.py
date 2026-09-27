@@ -458,8 +458,9 @@ def _rgba(hexc, alpha):
 
 
 def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height: int = 820,
-                   sr_zones: bool = True, zones_left: int = 10, zones_right: int = 10,
-                   cluster_pct: float = 0.15, min_touches: int = 2, max_zones: int = 40,
+                   sr_zones: bool = True, zones_left=None, zones_right=None,
+                   cluster_pct=None, min_touches=None, max_zones: int = 40,
+                   sr_sensitivity="normal", sr_break_bars=None, sr_anchor=None,
                    extend: int = 12, start_visible=(), detect_kwargs=None, tuned: bool = False,
                    per_pattern=None, trendlines: bool = False, trendline_kwargs=None,
                    emas=(20, 50, 100, 200), view_start=None, line_picker: bool = True,
@@ -493,6 +494,13 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     NOT become a trade, with the reason. One legend entry per reason, all starting `legendonly`, and
     added after the button rows so no menu payload covers them: the chart opens exactly as it does
     without them, and no existing control can disturb them.
+
+    `sr_sensitivity` is the S/R knob: "tight" | "normal" | "loose", resolved PER LAYER from the
+    tuned table in `quant.indicators.sr_params`, so a 4h layer gets 4h settings on a 5m chart.
+    "normal" is the forward-validated best (experiments/sr_zone_search.py). `None` is LEGACY
+    and reproduces the pre-2026-09-27 zones exactly. `zones_left`, `zones_right`,
+    `cluster_pct`, `min_touches`, `sr_break_bars` and `sr_anchor` override the table when
+    given, so an explicit setting is never silently replaced.
 
     `zone_lookback_bars` is how far back S/R zones are built from, counted back from the start of
     the view. Warm-up helps most indicators and HURTS this one: the tracker keeps the most-touched
@@ -1284,13 +1292,19 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         # built from a BOUNDED history ending at the view, not the whole warm-up — see the
         # docstring. The lookback is in THIS frame's bars, so a 4h layer gets 4h of depth per bar.
         z0 = max(0, lv - int(zone_lookback_bars)) if zone_lookback_bars else 0
-        zt = sr_zone_table(dl.iloc[z0:].reset_index(drop=True), left=zones_left,
-                           right=zones_right, cluster_pct=cluster_pct, max_zones=max_zones,
-                           time_col=time_col)
+        # THE KNOB, resolved for THIS layer's timeframe: a 4h layer on a 5m chart is tuned as 4h
+        from ..indicators import sr_params
+        _prm = sr_params(tf or chart_tf or '5m', sr_sensitivity, left=zones_left,
+                         right=zones_right, cluster_pct=cluster_pct, min_touches=min_touches,
+                         break_bars=sr_break_bars, anchor=sr_anchor)
+        zt = sr_zone_table(dl.iloc[z0:].reset_index(drop=True), left=_prm['left'],
+                           right=_prm['right'], cluster_pct=_prm['cluster_pct'],
+                           max_zones=max_zones, time_col=time_col,
+                           break_bars=_prm['break_bars'], anchor=_prm['anchor'])
         if len(zt):
             zt = zt.copy()
             zt[["start_i", "end_i"]] += z0
-        zt = zt[zt["touches"] >= min_touches]
+        zt = zt[zt["touches"] >= _prm['min_touches']]
         # A zone is a level price is respecting NOW. Two filters, both about relevance rather than
         # correctness: the segment has to reach the visible window at all, and its price has to be
         # near the prices on screen. Without the second, a long warm-up in a trending market fills

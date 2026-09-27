@@ -94,12 +94,21 @@ def test_rewind_keeps_every_sr_revision_instead_of_only_the_last():
     assert all(b[k] >= a[k] for k in a), "rewind lost a zone"
 
 
-def test_a_revision_stops_where_the_next_one_starts():
+@pytest.mark.parametrize("sr", [dict(sr_sensitivity=None), dict(sr_sensitivity="loose")],
+                         ids=["legacy-engine", "tuned-engine"])
+def test_a_revision_stops_where_the_next_one_starts(sr):
     """Only the last revision may run to the right edge; an earlier one ending there would draw
-    several levels for one zone across the same bars."""
+    several levels for one zone across the same bars.
+
+    Run on BOTH zone engines. The tuned "normal" draws nothing on this synthetic sine wave -- 4
+    touches inside a 0.08% band is a strict ask of smooth data -- so the test named no settings,
+    found no S/R trace and failed on an empty list when the defaults changed. The property belongs
+    to the rewind drawing, not to any one setting, so it must hold for each engine."""
     base = _ohlc()
-    fig = _fig(base, rewind=True)
-    t = [x for x in fig.data if x.name and x.name.startswith("S/R zones")][0]
+    fig = _fig(base, rewind=True, **sr)
+    found = [x for x in fig.data if x.name and x.name.startswith("S/R zones")]
+    assert found, "the fixture must draw an S/R layer or this test checks nothing"
+    t = found[0]
     xs = list(t.x)
     ends = [pd.Timestamp(str(xs[i + 1])) for i in range(0, len(xs) - 2, 3)]
     right = max(ends)

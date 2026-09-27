@@ -185,8 +185,296 @@ def _sr_scan(pivot_px, close, cluster_frac, max_zones):
     return sup, res, sup_t, res_t
 
 
+@njit(cache=True)
+def _sgn(x):
+    return 1 if x > 0.0 else (-1 if x < 0.0 else 0)
+
+
+@njit(cache=True)
+def _sr_core(pivot_px, close, cluster_frac, max_zones, break_bars, anchor):
+    """The zone engine with the two corrections the legacy scans lack. ONE implementation behind
+    both `add_sr_zones` and `sr_zone_table`, so the per-bar levels a strategy reads and the lines a
+    chart draws cannot disagree -- the legacy pair were documented as mirrors but evicted with
+    different tie-breaks, so at capacity they could hold different zones.
+
+    ANCHORED (`anchor`). A pivot joins a zone only if the zone's whole band -- min to max of every
+    pivot in it, including the new one -- stays within `cluster_frac` of price. The legacy test
+    compared against the zone's RUNNING MEAN, which moves as pivots join, so a zone could creep:
+    measured on BTC 5m at ~63k, where 0.15% is ~94 points, the strongest zones spanned 149-157.
+
+    RETIRED ON A BREAK (`break_bars` > 0). Each zone remembers which side price sat on when a pivot
+    last touched it. `break_bars` consecutive closes on the OTHER side retire it; a close back on
+    the original side resets the count, so a wick-and-reclaim does not kill a level. The legacy
+    scans never looked at price crossing a zone at all -- 48 of 54 zones on one chart were levels
+    price had broken and held beyond for an hour or more.
+
+    EVICTION, when all `max_zones` slots are live, drops the zone FARTHEST FROM PRICE. The legacy
+    scans dropped the least-touched, which protects old strong levels and kills every new one --
+    on a trending instrument the table filled with unreachable levels (BTC 4h, 2022-26: 40 live
+    zones a median 67% from price, 1 within 5%) and new zones next to price were evicted as they
+    formed. Zone ids are STABLE and unique; the legacy table reused the slot index, so an evicted
+    zone and its replacement shared an id and the chart's one-line-per-zone step dropped one.
+
+    Returns the segments (zone, start, end, price, touches, lo, hi) plus the nearest support and
+    resistance per bar with their touch counts. Strictly causal: bar i uses nothing after bar i.
+    """
+    n = close.shape[0]
+    zp = np.zeros(max_zones)
+    zt = np.zeros(max_zones, np.int64)
+    zlo = np.zeros(max_zones)
+    zhi = np.zeros(max_zones)
+    zlast = np.zeros(max_zones, np.int64)
+    zseg = np.zeros(max_zones, np.int64)
+    zid = np.zeros(max_zones, np.int64)
+    zside = np.zeros(max_zones, np.int64)
+    zcnt = np.zeros(max_zones, np.int64)
+    live = np.zeros(max_zones, np.bool_)
+    nz = 0
+    nid = 0
+    npiv = 0
+    for i in range(n):
+        if pivot_px[i] == pivot_px[i] and pivot_px[i] > 0.0:
+            npiv += 1
+    cap = 2 * npiv + max_zones + 8
+    o_zone = np.empty(cap, np.int64)
+    o_start = np.empty(cap, np.int64)
+    o_end = np.empty(cap, np.int64)
+    o_px = np.empty(cap)
+    o_t = np.empty(cap, np.int64)
+    o_lo = np.empty(cap)
+    o_hi = np.empty(cap)
+    ns = 0
+    sup = np.full(n, np.nan)
+    res = np.full(n, np.nan)
+    sup_t = np.zeros(n, np.int64)
+    res_t = np.zeros(n, np.int64)
+
+    for i in range(n):
+        c = close[i]
+        p = pivot_px[i]
+        if p == p and p > 0.0:
+            best = -1
+            best_d = 1e300
+            for z in range(nz):
+                if not live[z]:
+                    continue
+                d = abs(zp[z] - p)
+                if anchor:
+                    ok = (max(zhi[z], p) - min(zlo[z], p)) <= cluster_frac * p
+                else:
+                    ok = d <= cluster_frac * p
+                if ok and d < best_d:
+                    best_d = d
+                    best = z
+            if best >= 0:
+                z = best
+                if i - 1 >= zseg[z]:                 # the old level held THROUGH i-1
+                    o_zone[ns] = zid[z]
+                    o_start[ns] = zseg[z]
+                    o_end[ns] = i - 1
+                    o_px[ns] = zp[z]
+                    o_t[ns] = zt[z]
+                    o_lo[ns] = zlo[z]
+                    o_hi[ns] = zhi[z]
+                    ns += 1
+                zt[z] += 1
+                zp[z] += (p - zp[z]) / zt[z]
+                zlo[z] = min(zlo[z], p)
+                zhi[z] = max(zhi[z], p)
+                zlast[z] = i
+                zseg[z] = i
+                zcnt[z] = 0
+                sd = _sgn(c - zp[z])
+                if sd != 0:
+                    zside[z] = sd
+            else:
+                slot = -1
+                for z in range(nz):
+                    if not live[z]:
+                        slot = z
+                        break
+                if slot < 0 and nz < max_zones:
+                    slot = nz
+                    nz += 1
+                if slot < 0:
+                    # EVICT THE FARTHEST FROM PRICE, not the least-touched. The legacy rule kept
+                    # old heavily-touched zones and threw away every new one, so on a trending
+                    # instrument the table filled with levels nobody could reach: BTC 4h over
+                    # 2022-26 ended with 40 live zones a median 67% from price, 1 within 5%.
+                    # The chart hides distant zones anyway -- the damage was the SLOTS they held.
+                    w = 0
+                    for z in range(1, nz):
+                        if abs(zp[z] - c) > abs(zp[w] - c):
+                            w = z
+                    if i - 1 >= zseg[w]:
+                        o_zone[ns] = zid[w]
+                        o_start[ns] = zseg[w]
+                        o_end[ns] = i - 1
+                        o_px[ns] = zp[w]
+                        o_t[ns] = zt[w]
+                        o_lo[ns] = zlo[w]
+                        o_hi[ns] = zhi[w]
+                        ns += 1
+                    slot = w
+                zp[slot] = p
+                zt[slot] = 1
+                zlo[slot] = p
+                zhi[slot] = p
+                zlast[slot] = i
+                zseg[slot] = i
+                zcnt[slot] = 0
+                live[slot] = True
+                zid[slot] = nid
+                nid += 1
+                zside[slot] = _sgn(c - p)
+
+        if break_bars > 0:
+            for z in range(nz):
+                if not live[z]:
+                    continue
+                sd = _sgn(c - zp[z])
+                if zside[z] == 0:                    # formed exactly on the close: adopt a side
+                    if sd != 0:
+                        zside[z] = sd
+                    continue
+                if sd == -zside[z]:
+                    zcnt[z] += 1
+                elif sd == zside[z]:
+                    zcnt[z] = 0
+                if zcnt[z] >= break_bars:
+                    o_zone[ns] = zid[z]
+                    o_start[ns] = zseg[z]
+                    o_end[ns] = i
+                    o_px[ns] = zp[z]
+                    o_t[ns] = zt[z]
+                    o_lo[ns] = zlo[z]
+                    o_hi[ns] = zhi[z]
+                    ns += 1
+                    live[z] = False
+
+        s_px = -1.0
+        s_ct = 0
+        r_px = -1.0
+        r_ct = 0
+        for z in range(nz):
+            if not live[z]:
+                continue
+            if zp[z] <= c:
+                if s_px < 0.0 or zp[z] > s_px:
+                    s_px = zp[z]
+                    s_ct = zt[z]
+            else:
+                if r_px < 0.0 or zp[z] < r_px:
+                    r_px = zp[z]
+                    r_ct = zt[z]
+        if s_px > 0.0:
+            sup[i] = s_px
+            sup_t[i] = s_ct
+        if r_px > 0.0:
+            res[i] = r_px
+            res_t[i] = r_ct
+
+    for z in range(nz):
+        if live[z] and n - 1 >= zseg[z]:
+            o_zone[ns] = zid[z]
+            o_start[ns] = zseg[z]
+            o_end[ns] = n - 1
+            o_px[ns] = zp[z]
+            o_t[ns] = zt[z]
+            o_lo[ns] = zlo[z]
+            o_hi[ns] = zhi[z]
+            ns += 1
+    return (o_zone[:ns], o_start[:ns], o_end[:ns], o_px[:ns], o_t[:ns], o_lo[:ns], o_hi[:ns],
+            sup, res, sup_t, res_t)
+
+
+# ---- THE KNOB -----------------------------------------------------------------------------------
+# Per-timeframe presets for `sr_params(tf, sensitivity)`, chosen by experiments/sr_zone_search.py
+# (BTCUSDT, 2022-2026, the project's 9 standard windows; selected on 2022H1-2024H1, reported on
+# 2024H2-2026H1). Evidence per row: experiments/results_sr_zones_picks.csv. Verdict and caveats:
+# docs/WHAT_WORKS.md. DO NOT HAND-EDIT a value without re-running the study.
+#
+# IT IS A CLARITY DIAL, NOT A QUALITY DIAL. No setting made the LEVEL itself predictive: against
+# the same zones moved 1-3 ATR, price holds about as often (edge ~0, often negative). So each
+# level is a band of lines on screen -- tight 2-4, normal 4-8, loose 8-16 zones within 20 ATR of
+# price -- and edge only breaks ties inside a band. The old defaults drew 18.3 / 21.1 / 17.2 / 8.3
+# lines on 5m / 15m / 1h / 4h; "normal" draws about a quarter of that, with no measurable change
+# in how often price reacts at them. The ranking behind the tie-breaks is STABLE on 5m (train->
+# forward rank corr +0.81) and 15m (+0.66) and NOISE on 1h (+0.02) and 4h (+0.16): on those two,
+# any setting in a band is as good as any other. Retirement (break_bars) is chosen by the data,
+# not forced -- on 5m and 15m it measurably lowers the reaction rate (broken levels keep acting as
+# levels: role reversal), so "normal" there keeps them and gets its clarity from tighter clusters.
+SR_LEVELS = ("tight", "normal", "loose")
+SR_LEGACY = dict(left=10, right=10, cluster_pct=0.15, min_touches=2, break_bars=0, anchor=False)
+SR_TUNED: dict = {
+    "5m": {
+        "tight": dict(left=5, right=5, cluster_pct=0.25, min_touches=4, break_bars=4, anchor=True),   # 2.7 lines
+        "normal": dict(left=20, right=20, cluster_pct=0.08, min_touches=4, break_bars=0, anchor=True),   # 5.5 lines
+        "loose": dict(left=5, right=5, cluster_pct=0.4, min_touches=4, break_bars=0, anchor=True),   # 15.0 lines
+    },
+    "15m": {
+        "tight": dict(left=20, right=20, cluster_pct=0.08, min_touches=4, break_bars=0, anchor=True),   # 2.3 lines
+        "normal": dict(left=10, right=10, cluster_pct=0.08, min_touches=4, break_bars=0, anchor=True),   # 4.8 lines
+        "loose": dict(left=10, right=10, cluster_pct=0.08, min_touches=3, break_bars=0, anchor=True),   # 9.6 lines
+    },
+    "1h": {
+        "tight": dict(left=10, right=10, cluster_pct=0.08, min_touches=2, break_bars=8, anchor=True),   # 2.0 lines
+        "normal": dict(left=10, right=10, cluster_pct=0.25, min_touches=2, break_bars=8, anchor=True),   # 4.3 lines
+        "loose": dict(left=20, right=20, cluster_pct=0.15, min_touches=2, break_bars=0, anchor=True),   # 10.5 lines
+    },
+    "4h": {
+        "tight": dict(left=5, right=5, cluster_pct=0.25, min_touches=2, break_bars=4, anchor=True),   # 3.2 lines
+        "normal": dict(left=5, right=5, cluster_pct=0.25, min_touches=2, break_bars=8, anchor=True),   # 4.2 lines
+        "loose": dict(left=10, right=10, cluster_pct=0.15, min_touches=2, break_bars=0, anchor=True),   # 8.3 lines
+    },
+}
+
+
+def sr_params(tf, sensitivity="normal", **overrides) -> dict:
+    """The S/R settings for one timeframe, from the tuned table.
+
+    `sensitivity` is the knob: "tight" (fewer, sharper levels), "normal" (the forward-validated
+    best) or "loose" (more levels, more context) -- each is the best setting AT ITS CLUTTER LEVEL,
+    so turning it trades coverage for clarity rather than good settings for bad ones.
+    `sensitivity=None` is LEGACY: the pre-2026-09-27 values, no anchoring, no retirement, which
+    take the original code path and reproduce the old zones byte for byte.
+
+    A timeframe that was not tuned borrows the nearest one that was, by bar length. Any keyword in
+    `overrides` that is not None wins over the table, so an explicit setting in a config is never
+    silently replaced.
+    """
+    if sensitivity is None:
+        out = dict(SR_LEGACY)
+    else:
+        lvl = str(sensitivity).lower()
+        if lvl not in SR_LEVELS:
+            raise ValueError(f"sensitivity must be one of {SR_LEVELS} or None, got {sensitivity!r}")
+        out = dict(SR_TUNED[_nearest_tuned_tf(tf)][lvl])
+    out.update({k: v for k, v in overrides.items() if v is not None})
+    return out
+
+
+def _nearest_tuned_tf(tf) -> str:
+    """The tuned timeframe closest to `tf` in log bar length -- 30m borrows 15m or 1h, not 4h."""
+    from ..data.timeframe import tf_minutes
+    if tf in SR_TUNED:
+        return tf
+    try:
+        m = max(tf_minutes(tf), 1)
+    except Exception:
+        return "5m"
+    return min(SR_TUNED, key=lambda k: abs(np.log(tf_minutes(k)) - np.log(m)))
+
+
+def _legacy(break_bars, anchor) -> bool:
+    """The pre-2026-09-27 behaviour, kept on its ORIGINAL code path so every existing caller --
+    strategies and scenarios whose results are recorded in docs/ -- stays byte-identical."""
+    return int(break_bars or 0) <= 0 and not anchor
+
+
 def add_sr_zones(df: pd.DataFrame, left: int = 10, right: int = 10, *, cluster_pct: float = 0.15,
-                 max_zones: int = 128, prefix: str = "sr") -> pd.DataFrame:
+                 max_zones: int = 128, prefix: str = "sr", break_bars: int = 0,
+                 anchor: bool = False) -> pd.DataFrame:
     """Detect swing-based support/resistance ZONES and expose the nearest ones per bar.
 
     Swing pivots (confirmed `right` bars later, like `add_swings`) are clustered into zones when
@@ -210,7 +498,12 @@ def add_sr_zones(df: pd.DataFrame, left: int = 10, right: int = 10, *, cluster_p
     conf = ph.shift(right).combine_first(pl.shift(right))
     pivot_px = conf.to_numpy(np.float64)
     close = pd.to_numeric(out["close"], errors="coerce").to_numpy(np.float64)
-    sup, res, sup_t, res_t = _sr_scan(pivot_px, close, float(cluster_pct) / 100.0, int(max_zones))
+    if _legacy(break_bars, anchor):
+        sup, res, sup_t, res_t = _sr_scan(pivot_px, close, float(cluster_pct) / 100.0,
+                                          int(max_zones))
+    else:
+        *_, sup, res, sup_t, res_t = _sr_core(pivot_px, close, float(cluster_pct) / 100.0,
+                                              int(max_zones), int(break_bars), bool(anchor))
     out[f"{prefix}_support"] = sup
     out[f"{prefix}_resistance"] = res
     out[f"{prefix}_support_touches"] = sup_t
@@ -228,7 +521,8 @@ def _confirmed_pivots(df: pd.DataFrame, left: int, right: int) -> pd.Series:
 
 
 def sr_zone_table(df: pd.DataFrame, left: int = 10, right: int = 10, *, cluster_pct: float = 0.15,
-                  max_zones: int = 128, time_col: str = "t") -> pd.DataFrame:
+                  max_zones: int = 128, time_col: str = "t", break_bars: int = 0,
+                  anchor: bool = False) -> pd.DataFrame:
     """The causal S/R zone *timeline* — for plotting zones exactly as they evolved.
 
     Mirrors `add_sr_zones`' clustering, but instead of the nearest level per bar it returns one row
@@ -244,6 +538,18 @@ def sr_zone_table(df: pd.DataFrame, left: int = 10, right: int = 10, *, cluster_
     conf = _confirmed_pivots(df, left, right).to_numpy(np.float64)
     times = df[time_col].reset_index(drop=True) if time_col in df.columns else None
     frac = float(cluster_pct) / 100.0
+
+    if not _legacy(break_bars, anchor):
+        close = pd.to_numeric(df["close"], errors="coerce").to_numpy(np.float64)
+        zo, st, en, px, tc, lo, hi, *_ = _sr_core(conf, close, frac, int(max_zones),
+                                                  int(break_bars), bool(anchor))
+        out = pd.DataFrame({"zone": zo, "start_i": st, "end_i": en, "price": px,
+                            "touches": tc, "lo": lo, "hi": hi})
+        out = out.sort_values(["start_i", "zone"], kind="stable").reset_index(drop=True)
+        if not out.empty and times is not None:
+            out["start_t"] = times.iloc[out["start_i"].to_numpy()].to_numpy()
+            out["end_t"] = times.iloc[out["end_i"].to_numpy()].to_numpy()
+        return out
 
     zones: list[dict] = []      # {price, touches, seg_start}
     rows: list[dict] = []
