@@ -22,6 +22,12 @@ import numpy as np
 import pandas as pd
 
 
+# Settings read ONLY when trading, never when loading or fitting. A change to these alone can reuse
+# every frame, line and gap already built -- `FvgLab.retrade` -- which is what makes an A/B of exit
+# rules cost one sim per arm instead of a full reload.
+EXIT_KEYS = frozenset({"USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT"})
+
+
 def _get(cfg, name, default=None):
     """A setting off the config module, or `default` if that config predates it.
 
@@ -49,6 +55,18 @@ class FvgLab:
     all: pd.DataFrame                     # without it, always
     gaps: Dict[str, pd.DataFrame] = field(default_factory=dict)
     end: str = ""                         # the effective right edge: AS_OF when set, else END
+    _base: Dict[str, Any] = field(default_factory=dict, repr=False)   # what retrade() reuses
+
+    def retrade(self, **overrides) -> "FvgLab":
+        """The same study with only EXIT settings changed (`EXIT_KEYS`), re-using every frame, line
+        and gap already built. Anything else could change what is loaded or fitted, so it refuses
+        rather than return a lab that silently still reflects the old value."""
+        bad = sorted(set(overrides) - EXIT_KEYS)
+        if bad:
+            raise KeyError(f"retrade() only changes {sorted(EXIT_KEYS)}; for {bad} run "
+                           f"fvg_lab(variant(cfg, ...)) instead")
+        from .variant import variant
+        return _trade(variant(self.cfg, **overrides), self._base)
 
     # ---------------------------------------------------------------- what happened
     @property
@@ -153,7 +171,7 @@ class FvgLab:
             max_picker_instances=_get(c, "MAX_PICKER", 24),
             max_shapes_per_tf=_get(c, "MAX_SHAPES_TF", 12),
             max_trade_picker=_get(c, "MAX_TRADE_PICKER", 40),
-            trades=self.trades, trade_tp_rr=c.TP_RR,
+            trades=self.trades, trade_tp_rr=c.TP_RR, ref_target_label="FVG exit",
             start_visible=_get(c, "START_VISIBLE", ("trades", "fvg_bull", "fvg_bear")),
             height=_get(c, "HEIGHT", 900),
             rewind=_get(c, "REWIND", False),
@@ -178,11 +196,7 @@ def fvg_lab(cfg) -> FvgLab:
     from ..data import get_ohlcv, tf_frames
     from ..indicators import add_mtf_emas, fvg_table, mtf_fvgs
     from ..indicators.trendlines import mtf_trendlines
-    from ..scenarios import run_pieces
-    from ..scenarios.entries import trendline_trigger
-    from ..strategies import build_fvg_rules, fvg_clear
-    from ..strategies.conditions import raw
-    from ..strategies.rulespec import build_rules, required_emas
+    from ..strategies.rulespec import required_emas
     from ..viz import mtf_ema_timeframes
 
     c = cfg
@@ -237,6 +251,31 @@ def fvg_lab(cfg) -> FvgLab:
     for col in [x for x in fv.columns if "fvg_" in x]:
         D[col] = fv[col].to_numpy()
 
+    gaps = {c.TF: fvg_table(df, **fvg_kwargs)}
+    for tf, f in gap_frames.items():
+        gaps[tf] = fvg_table(f.reset_index(drop=True), **fvg_kwargs)
+
+    base = dict(df=df, D=D, line_frames=line_frames, gap_frames=gap_frames, sr_frames=sr_frames,
+                ema_frames=ema_frames, fvg_kwargs=fvg_kwargs, gaps=gaps, end=end, src=src,
+                warm=warm)
+    return _trade(c, base)
+
+
+def _trade(c, base) -> FvgLab:
+    """Everything after loading: the entry conditions, the exits, the sim. Reads the config for the
+    trading settings only, so `retrade` can call it again with different exits."""
+    from ..data import tf_frames
+    from ..indicators import fvg_on_grid
+    from ..scenarios import resolve_stop, run_pieces
+    from ..scenarios.entries import trendline_trigger
+    from ..strategies import build_fvg_rules, fvg_clear, fvg_target
+    from ..strategies.conditions import raw
+    from ..strategies.rulespec import build_rules
+
+    df, D = base["df"], base["D"]
+    line_frames, gap_frames = base["line_frames"], base["gap_frames"]
+    fvg_kwargs, end, src, warm = base["fvg_kwargs"], base["end"], base["src"], base["warm"]
+
     tf_names = {"": c.TF, **{f"{k}__": k for k in line_frames}}
     params = dict(
         tl_prefixes=tuple(tf_names), tl_tf_names=tf_names,
@@ -255,6 +294,26 @@ def fvg_lab(cfg) -> FvgLab:
         sec_touch_n=c.SEC_TOUCH_N, sec_wrong_m=c.SEC_WRONG_M, sec_opp_n=c.SEC_OPP_N,
         sec_min_pct=c.SEC_MIN_PCT, sec_replace_tp=c.SEC_REPLACE_TP)
     secondary = "entry_retest_bail@v1" if _get(c, "USE_RETEST_BAIL", False) else None
+
+    # ---- THE TWO OPTIONAL EXIT RULES. Both off (the default for a config that predates them) runs
+    # the engine's original path, so the trades are exactly the ones before these existed.
+    exit_cfg = {}
+    if _get(c, "USE_TP_MOVE", False):
+        m = c.TP_MOVE
+        exit_cfg.update(tp_move_to=float(m["to"]), tp_move_near=float(m.get("near") or 0.0),
+                        tp_move_back=float(m.get("back") or 0.0),
+                        tp_move_after=int(m.get("after_bars") or 0))
+    exit_gaps, fx = None, _get(c, "FVG_EXIT", None) or {}
+    if _get(c, "USE_FVG_EXIT", False):
+        # THE SAME GAPS THE CHART DRAWS: same frames where they exist, same detection settings
+        # (mitigation, size gate, max age), so the gap a trade exits on is one you can see.
+        tfs = tuple(fx.get("tfs") or ())
+        frames = {k: (df if k == c.TF else gap_frames.get(k, line_frames.get(k))) for k in tfs}
+        need = tuple(k for k, f in frames.items() if f is None)
+        if need:
+            frames.update(tf_frames(c.SYMBOL, need, view_start=c.VIEW_START, end=end,
+                                    warmup_bars=warm, source=src))
+        exit_gaps = fvg_on_grid(D, frames, **fvg_kwargs)
 
     # the warm-up feeds the lines, the gaps and the stop lookback; it is not traded
     vs = pd.Timestamp(c.VIEW_START, tz="UTC")
@@ -279,10 +338,27 @@ def fvg_lab(cfg) -> FvgLab:
     sides = [s for s, on in (("long", _get(c, "TRADE_LONG", True)),
                              ("short", _get(c, "TRADE_SHORT", True))) if on]
 
+    def _frame_for(side):
+        """D, plus this side's FVG-exit column when that rule is on, and the config to match."""
+        cfg = {**c.COSTS, **exit_cfg}
+        if exit_gaps is None:
+            return D, cfg
+        # the stop method's OWN reference column, so the R the gap is measured in is the trade's
+        ref = resolve_stop("high_of_n@v1").prepare(D, {**params, "_side": side})["stop_extreme_n"]
+        col = f"fvg_exit_{side}"
+        lv = fvg_target(D, exit_gaps, side=side, stop_ref=ref.to_numpy(np.float64),
+                        stop_buffer_pct=c.STOP_BUFFER_PCT, tp_rr=c.TP_RR,
+                        near_r=float(fx.get("near_r", 1.0)), at=fx.get("at", "ce"))
+        cfg[f"tp_ref_{side}_col"] = col
+        return D.assign(**{col: lv}), cfg
+
     def _run(veto):
-        runs = {s: run_pieces(D, f"mtf_trendline_{s}@v1", "high_of_n@v1", "be_ladder@v1",
-                              secondary=secondary, params=params, cfg=c.COSTS,
-                              entry_filter=_filter(s, veto)) for s in sides}
+        runs = {}
+        for s in sides:
+            Ds, cfg_s = _frame_for(s)
+            runs[s] = run_pieces(Ds, f"mtf_trendline_{s}@v1", "high_of_n@v1", "be_ladder@v1",
+                                 secondary=secondary, params=params, cfg=cfg_s,
+                                 entry_filter=_filter(s, veto))
         parts = [trendline_trigger(r.df, r.trades, params, prefix_names=tf_names)
                  for r in runs.values()]
         t = (pd.concat(parts, ignore_index=True).sort_values("entry_time")
@@ -291,17 +367,15 @@ def fvg_lab(cfg) -> FvgLab:
         t["R"] = t["pnl"] / (risk * t["qty"])
         t["risk_%"] = 100 * risk / t["entry_price"]
         t["tid"] = [f"#{i + 1:02d}" for i in range(len(t))]
+        # the engine's generic "second target" IS the FVG exit here -- say so in the table
+        t["close_reason"] = t["close_reason"].replace({"ref_target": "fvg_exit"})
         return t
 
     everything = _run(False)
     filtered = _run(True) if _get(c, "USE_FVG_VETO", False) else everything
     assert not len(filtered) or filtered["entry_time"].min() >= vs, "a trade started in the warm-up"
 
-    gaps = {c.TF: fvg_table(df, **fvg_kwargs)}
-    for tf, f in gap_frames.items():
-        gaps[tf] = fvg_table(f.reset_index(drop=True), **fvg_kwargs)
-
     return FvgLab(cfg=c, df=df, D=D, line_frames=line_frames, gap_frames=gap_frames,
-                  sr_frames=sr_frames, ema_frames=ema_frames, end=str(end),
+                  sr_frames=base["sr_frames"], ema_frames=base["ema_frames"], end=str(end),
                   fvg_kwargs=fvg_kwargs, params=params, trades=filtered, all=everything,
-                  gaps=gaps)
+                  gaps=base["gaps"], _base=base)

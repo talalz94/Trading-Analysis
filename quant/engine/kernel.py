@@ -45,6 +45,8 @@ R_FORCED = 3
 R_MARGIN = 4
 R_ALT_EXIT = 5
 R_TIME = 6
+R_TP_MOVED = 7     # closed on a target that had been MOVED CLOSER (tp_move_*)
+R_REF_TARGET = 8   # closed on the per-trade level read from a column at entry (tp_ref_*)
 
 _TINY = 1e-12
 
@@ -164,6 +166,7 @@ def run_kernel(
     per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
     leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
     sl_ref_long, sl_ref_short,
+    tp_ref_long, tp_ref_short,
     exit_arm_long, exit_arm_short, exit_alt_long, exit_alt_short, alt_exit_enabled, alt_replace_tp,
     alt_arm_on_tp, arm_touch_n, arm_wrong_m, alt_min_pct, session_id,
     tp_modes, tp_values, tp_close_pcts, tp_move_modes, tp_move_values, n_tp,
@@ -175,6 +178,7 @@ def run_kernel(
     margin_enabled, leverage, contract_size, stop_out_level,
     spread, commission_per_lot,
     allow_rule_close, intrabar_stop_first, daily_loss_limit, max_bars_in_trade,
+    tp_ref_on=0, tp_move_to=0.0, tp_move_near=0.0, tp_move_back=0.0, tp_move_after=0,
 ):
     # Per-rule ("leg") exits: when n_legs > 1 each open trade remembers which rule opened it
     # (o_leg) and closes on THAT rule's exit column (exit_legs_*[leg, i]). When n_legs == 1 the
@@ -201,6 +205,21 @@ def run_kernel(
     # closed at that bar's close (reason `time_stop`). It is checked after the stop/TP and signal
     # exits, so a trade that would have closed for a real reason on the same bar keeps that reason.
     # At 0 the whole block is skipped - byte-identical to before.
+    #
+    # `tp_ref_on` == 1 gives each trade a SECOND TARGET read from `tp_ref_long/short` AT ITS ENTRY
+    # BAR -- a level that differs per trade and so cannot be a ladder rung (those are R multiples).
+    # The first of the two that price reaches closes the whole position (reason `ref_target`). A
+    # level on the wrong side of the entry, or NaN, means no second target for that trade.
+    #
+    # `tp_move_to` > 0 MOVES THE TARGET CLOSER, once per trade, to that fraction of its original
+    # distance. Two triggers, either enough: a NEAR MISS (the best price since entry reached
+    # `tp_move_near` of the way to the target AND the close has since given back `tp_move_back` of
+    # that distance) or a LONG WAIT (`tp_move_after` bars held). Evaluated on the bar's CLOSE, after
+    # every exit, and applied from the NEXT bar -- intrabar order is unknown, so a bar that both
+    # reached and gave back cannot also fill the new target. If price already sits beyond the new
+    # target, the trade closes at that close. Either way the reason is `tp_moved`, and a target that
+    # later fills after being moved is `tp_moved` too, so the rule's trades can be told apart.
+    # Rungs that close nothing (breakeven moves) are left where they are. 0 skips it all.
     #
     # `daily_loss_limit` > 0 stops NEW entries for the rest of a session once that session's realised
     # loss reaches the limit (a fraction of the equity the session opened with). `session_id` labels
@@ -239,7 +258,13 @@ def run_kernel(
     o_armed = np.zeros(mo, np.int8)     # secondary exit armed for this trade (alt_exit_enabled)
     o_touch = np.zeros(mo, np.int64)    # bars since entry that traded back through the entry price
     o_wrong = np.zeros(mo, np.int64)    # candles formed wholly on the losing side of the entry
+    o_best = np.zeros(mo, np.float64)   # best price since entry (tp_move_*)
+    o_moved = np.zeros(mo, np.int8)     # target already moved closer (tp_move_*)
+    o_ref = np.full(mo, np.nan)         # this trade's second target (tp_ref_*)
     o_cnt = 0
+    t_move_i = np.full(n, -1, np.int64)   # bar the target was moved on, -1 = never
+    t_move_px = np.full(n, np.nan)        # where it was moved to
+    t_ref = np.full(n, np.nan)            # the second target the trade carried
 
     equity_curve = np.empty(n, np.float64)
     pos_count = np.zeros(n, np.int64)
@@ -375,6 +400,7 @@ def run_kernel(
                     n_tp_eff = 0
 
                 tp_any = False
+                near_tp = np.inf         # distance to the nearest ladder level this bar reaches
                 for kk in range(n_tp_eff):
                     if (o_tp_done[j] >> kk) & 1:
                         continue
@@ -383,11 +409,39 @@ def run_kernel(
                         continue
                     if (hi >= tpx) if side == 1 else (lo <= tpx):
                         tp_any = True
-                        break
+                        if tp_ref_on == 0:
+                            break
+                        if abs(tpx - o_entry_px[j]) < near_tp:
+                            near_tp = abs(tpx - o_entry_px[j])
+
+                # the SECOND TARGET. When a bar reaches it and a ladder level together, whichever
+                # is NEARER the entry was reached first -- price cannot get to the far one without
+                # passing the near one -- so the ladder only goes first if it is closer.
+                ref_hit = False
+                ref_first = False
+                if tp_ref_on == 1:
+                    rx = o_ref[j]
+                    if rx == rx and ((hi >= rx) if side == 1 else (lo <= rx)):
+                        ref_hit = True
+                        tp_any = True
+                        ref_first = abs(rx - o_entry_px[j]) <= near_tp
 
                 closed = False
 
-                if sl_hit and ((not tp_any) or intrabar_stop_first == 1):
+                if ref_first and not (sl_hit and intrabar_stop_first == 1):
+                    q = o_qty[j]
+                    exit_px = _fill_px(o_ref[j], side, slip, spread, 0)
+                    gross = side * (exit_px - o_entry_px[j]) * q
+                    ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
+                    cash += gross - ef
+                    t_gross[k] += gross
+                    t_exit_fee[k] += ef
+                    t_exit_i[k] = i
+                    t_exit_px[k] = exit_px
+                    t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                    t_reason[k] = R_REF_TARGET
+                    closed = True
+                elif sl_hit and ((not tp_any) or intrabar_stop_first == 1):
                     q = o_qty[j]
                     exit_px = _fill_px(stop, side, slip, spread, 0)
                     gross = side * (exit_px - o_entry_px[j]) * q
@@ -454,9 +508,24 @@ def run_kernel(
                             t_exit_i[k] = i
                             t_exit_px[k] = exit_px
                             t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
-                            t_reason[k] = R_TAKE_PROFIT
+                            t_reason[k] = R_TP_MOVED if o_moved[j] == 1 else R_TAKE_PROFIT
                             closed = True
                             break
+
+                    # the second target, when the ladder was nearer but did not close everything
+                    if (not closed) and ref_hit and o_qty[j] > _TINY:
+                        q = o_qty[j]
+                        exit_px = _fill_px(o_ref[j], side, slip, spread, 0)
+                        gross = side * (exit_px - o_entry_px[j]) * q
+                        ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
+                        cash += gross - ef
+                        t_gross[k] += gross
+                        t_exit_fee[k] += ef
+                        t_exit_i[k] = i
+                        t_exit_px[k] = exit_px
+                        t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                        t_reason[k] = R_REF_TARGET
+                        closed = True
 
                     # take_profit_first: re-check stop after TP/stop-move
                     if (not closed) and sl_hit and intrabar_stop_first == 0:
@@ -490,6 +559,9 @@ def run_kernel(
                     o_armed[w] = o_armed[j]
                     o_touch[w] = o_touch[j]
                     o_wrong[w] = o_wrong[j]
+                    o_best[w] = o_best[j]
+                    o_moved[w] = o_moved[j]
+                    o_ref[w] = o_ref[j]
                     w += 1
             o_cnt = w
 
@@ -546,6 +618,9 @@ def run_kernel(
                     o_armed[w] = o_armed[j]
                     o_touch[w] = o_touch[j]
                     o_wrong[w] = o_wrong[j]
+                    o_best[w] = o_best[j]
+                    o_moved[w] = o_moved[j]
+                    o_ref[w] = o_ref[j]
                     w += 1
             o_cnt = w
 
@@ -581,6 +656,79 @@ def run_kernel(
                     o_armed[w] = o_armed[j]
                     o_touch[w] = o_touch[j]
                     o_wrong[w] = o_wrong[j]
+                    o_best[w] = o_best[j]
+                    o_moved[w] = o_moved[j]
+                    o_ref[w] = o_ref[j]
+                    w += 1
+            o_cnt = w
+
+        # 3c) MOVE THE TARGET CLOSER -- on the close, for trades opened on an earlier bar
+        if tp_move_to > 0.0:
+            w = 0
+            for j in range(o_cnt):
+                side = o_side[j]
+                k = o_tr[j]
+                epx = o_entry_px[j]
+                if (hi > o_best[j]) if side == 1 else (lo < o_best[j]):
+                    o_best[j] = hi if side == 1 else lo
+                shut = False
+                if o_moved[j] == 0:
+                    dist = 0.0                  # the FARTHEST level that still closes something
+                    for kk in range(n_tp):
+                        if ((o_tp_done[j] >> kk) & 1) or tp_close_pcts[kk] <= 0.0:
+                            continue
+                        tpx = o_tp_px[j, kk]
+                        if tpx == tpx and abs(tpx - epx) > dist:
+                            dist = abs(tpx - epx)
+                    if dist > 0.0:
+                        best = side * (o_best[j] - epx) / dist
+                        now = side * (px - epx) / dist
+                        go = False
+                        if tp_move_near > 0.0 and best >= tp_move_near and \
+                                best - now >= tp_move_back:
+                            go = True
+                        if tp_move_after > 0 and i - t_entry_i[k] >= tp_move_after:
+                            go = True
+                        if go:
+                            o_moved[j] = 1
+                            t_move_i[k] = i
+                            for kk in range(n_tp):
+                                if ((o_tp_done[j] >> kk) & 1) or tp_close_pcts[kk] <= 0.0:
+                                    continue
+                                tpx = o_tp_px[j, kk]
+                                if tpx == tpx:
+                                    o_tp_px[j, kk] = epx + side * tp_move_to * abs(tpx - epx)
+                                    t_move_px[k] = o_tp_px[j, kk]
+                            if now >= tp_move_to:   # already past the new target: take it now
+                                q = o_qty[j]
+                                exit_px = _fill_px(px, side, slip, spread, 0)
+                                gross = side * (exit_px - epx) * q
+                                ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
+                                cash += gross - ef
+                                t_gross[k] += gross
+                                t_exit_fee[k] += ef
+                                t_exit_i[k] = i
+                                t_exit_px[k] = exit_px
+                                t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                                t_reason[k] = R_TP_MOVED
+                                shut = True
+                if not shut:
+                    o_tr[w] = o_tr[j]
+                    o_side[w] = o_side[j]
+                    o_entry_px[w] = o_entry_px[j]
+                    o_qty0[w] = o_qty0[j]
+                    o_qty[w] = o_qty[j]
+                    o_stop[w] = o_stop[j]
+                    o_extreme[w] = o_extreme[j]
+                    o_tp_done[w] = o_tp_done[j]
+                    o_tp_px[w, :] = o_tp_px[j, :]
+                    o_leg[w] = o_leg[j]
+                    o_armed[w] = o_armed[j]
+                    o_touch[w] = o_touch[j]
+                    o_wrong[w] = o_wrong[j]
+                    o_best[w] = o_best[j]
+                    o_moved[w] = o_moved[j]
+                    o_ref[w] = o_ref[j]
                     w += 1
             o_cnt = w
 
@@ -687,6 +835,15 @@ def run_kernel(
                         o_armed[o_cnt] = 0
                         o_touch[o_cnt] = 0
                         o_wrong[o_cnt] = 0
+                        o_best[o_cnt] = entry_px
+                        o_moved[o_cnt] = 0
+                        o_ref[o_cnt] = np.nan
+                        if tp_ref_on == 1:
+                            rx = tp_ref_long[i] if side == 1 else tp_ref_short[i]
+                            # only a level on the PROFIT side is a target
+                            if rx == rx and side * (rx - entry_px) > 0.0:
+                                o_ref[o_cnt] = rx
+                                t_ref[k] = rx
                         if exit_enabled == 1:
                             for kk in range(n_tp):
                                 o_tp_px[o_cnt, kk] = _calc_tp(entry_px, stop, side,
@@ -729,4 +886,5 @@ def run_kernel(
         t_gross[:n_tr], t_entry_fee[:n_tr], t_exit_fee[:n_tr],
         t_pnl[:n_tr], t_reason[:n_tr],
         equity_curve, pos_count, cash, t_stop[:n_tr],
+        t_move_i[:n_tr], t_move_px[:n_tr], t_ref[:n_tr],
     )

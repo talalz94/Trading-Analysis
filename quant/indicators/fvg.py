@@ -406,3 +406,90 @@ def fvg_count_cols(df: pd.DataFrame, side: str, *, prefix: str = "fvg") -> List[
             return 10 ** 9
 
     return cols + sorted(extra, key=_key, reverse=True)   # coarsest first: structure before detail
+
+
+# ---------------------------------------------------------------------------------------------
+# gaps from every timeframe, placed on ONE grid
+# ---------------------------------------------------------------------------------------------
+@njit(cache=True)
+def _live_until(from_i, kind, level, exp_i, high, low):
+    """First base bar at or after `from_i` whose range reaches `level` (from above for a bullish
+    gap, from below for a bearish one), capped at `exp_i`. That bar is the first on which the gap
+    is NOT live at the close."""
+    n = high.shape[0]
+    out = np.empty(from_i.shape[0], np.int64)
+    for g in range(from_i.shape[0]):
+        end = min(n, exp_i[g])
+        stop = end
+        for j in range(from_i[g], end):
+            if (low[j] <= level[g]) if kind[g] > 0 else (high[j] >= level[g]):
+                stop = j
+                break
+        out[g] = stop
+    return out
+
+
+def fvg_on_grid(base_df: pd.DataFrame, frames: Dict[str, pd.DataFrame], *,
+                time_col: str = "t", **kwargs) -> pd.DataFrame:
+    """Every gap from every frame in `frames`, with the span it is LIVE on the base frame's grid.
+
+    One row per gap: `tf`, `kind` (+1 bullish, -1 bearish), `top`, `bot`, `mid`, `from_i` (the
+    first base bar that may see it) and `to_i` (the first base bar that may NOT -- live on bars
+    `from_i <= i < to_i`, judged at each bar's close).
+
+    `from_i` is the base bar starting when the gap's THIRD candle has CLOSED, the same +1 bar shift
+    `mtf_fvgs` applies, so a 4h gap is invisible for the four hours its last candle is still forming.
+    Mitigation is re-checked on the BASE bars rather than read off the gap's own frame: a 4h gap
+    filled at 13:20 is dead from the 13:20 bar, where its own frame could only say "some time in the
+    12:00 bar". Expiry keeps the frame's meaning -- `max_age_bars` of THAT timeframe's bars. A gap
+    already dead on its own frame before the base frame begins is dropped.
+
+    `kwargs` are `add_fvgs`'s, and should be the ones the chart uses, so the gaps a rule acts on are
+    the gaps you see.
+    """
+    from ..data.timeframe import bar_interval
+
+    mode = kwargs.get("mitigation", "ce")
+    max_age = int(kwargs.get("max_age_bars", 500) or 0)
+    bt = pd.to_datetime(base_df[time_col]).reset_index(drop=True)
+    bt_ns = bt.astype("int64").to_numpy() if bt.dt.tz is None else \
+        bt.dt.tz_convert("UTC").dt.tz_localize(None).astype("int64").to_numpy()
+    high = base_df["high"].to_numpy(np.float64)
+    low = base_df["low"].to_numpy(np.float64)
+    cols = ["tf", "kind", "top", "bot", "mid", "from_i", "to_i", "born_t", "size_atr"]
+    parts = []
+    for tf, f in frames.items():
+        f = f.reset_index(drop=True)
+        g = fvg_table(f, time_col=time_col, **kwargs)
+        if not len(g):
+            continue
+        ft = pd.to_datetime(f[time_col])
+        ft = ft.dt.tz_convert("UTC").dt.tz_localize(None) if ft.dt.tz is not None else ft
+        dur = bar_interval(f, time_col=time_col)
+        born_t = ft.iloc[g["born_i"].to_numpy()].reset_index(drop=True)
+        avail = (born_t + dur).astype("int64").to_numpy()
+        from_i = np.searchsorted(bt_ns, avail, side="left").astype(np.int64)
+        if max_age > 0:
+            exp_t = (born_t + dur * (max_age + 1)).astype("int64").to_numpy()
+            exp_i = np.searchsorted(bt_ns, exp_t, side="left").astype(np.int64)
+        else:
+            exp_i = np.full(len(g), len(bt_ns), np.int64)
+        kind = g["kind"].to_numpy(np.int64)
+        top, bot = g["top"].to_numpy(np.float64), g["bot"].to_numpy(np.float64)
+        mid = 0.5 * (top + bot)
+        level = {"touch": np.where(kind > 0, top, bot), "ce": mid,
+                 "full": np.where(kind > 0, bot, top)}[mode]
+        # dead on its own frame before the base frame even starts -> never live here
+        dead = g["dead_i"].to_numpy(np.int64)
+        dead_t = np.where(dead >= 0, ft.iloc[np.clip(dead, 0, len(ft) - 1)].astype("int64")
+                          .to_numpy(), np.iinfo(np.int64).max)
+        keep = (dead_t >= bt_ns[0]) & (from_i < len(bt_ns))
+        to_i = _live_until(from_i[keep], kind[keep], level[keep], exp_i[keep], high, low)
+        parts.append(pd.DataFrame({"tf": tf, "kind": kind[keep], "top": top[keep],
+                                   "bot": bot[keep], "mid": mid[keep], "from_i": from_i[keep],
+                                   "to_i": to_i, "born_t": born_t[keep].to_numpy(),
+                                   "size_atr": g["size_atr"].to_numpy()[keep]}))
+    if not parts:
+        return pd.DataFrame({c: [] for c in cols})
+    out = pd.concat(parts, ignore_index=True)
+    return out[out["to_i"] > out["from_i"]].sort_values("from_i").reset_index(drop=True)

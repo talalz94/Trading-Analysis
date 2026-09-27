@@ -24,7 +24,7 @@ import pandas as pd
 
 from ..analytics.fast import fast_stats, periods_per_year
 from ..engine import BacktestConfig
-from ..engine.kernel import run_kernel
+from ..engine.run import invoke_kernel
 from ..engine.run import _ref_arr
 from ..logging_utils import get_logger, maybe_tqdm
 from ..strategies.base import Strategy
@@ -87,15 +87,10 @@ def run_grid(
     ppy = periods_per_year(prepared[time_col])
     ic = float(cfg.initial_cash)
 
-    # Hoist cfg-derived kernel args OUT of the per-combo loop (cfg is fixed across a sweep) —
-    # avoids reallocating the ref arrays + rebuilding the arg tuple for every combo.
-    n_tp, tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values = cfg.tp_arrays()
-    sl_ref_long = _ref_arr(prepared, cfg.sl_ref_long_col, n)
-    sl_ref_short = _ref_arr(prepared, cfg.sl_ref_short_col, n)
-    ka = cfg.scalar_args()
-    # sweeps use plain single-exit strategies -> single leg + cfg stop (no per-leg exits/stops)
-    zero_leg = np.zeros(n, np.int64)
-    z1 = np.zeros(1, np.int64); z1f = np.zeros(1, np.float64); z1ref = np.zeros((1, 1), np.float64)
+    # ONE PATH TO THE KERNEL. This used to hand-build the kernel's argument list to save a few
+    # allocations per combo, and so it silently fell behind when the secondary-exit arguments were
+    # added (e61d7ab): every sweep died on "expected 70 arguments, got 59" and no test noticed.
+    # invoke_kernel is what run_backtest uses, so a kernel change can no longer break one of them.
 
     _log.info("sweep: %d combos | n_jobs=%d | bars=%d", len(combos), n_jobs, n)
 
@@ -103,11 +98,8 @@ def run_grid(
         # Fast path: kernel + array-native stats, no per-combo DataFrame construction.
         signals = strategy_cls(**combo).signals(prepared)
         el, xl, es, xs = signals.as_u8(n)
-        out = run_kernel(open_, high, low, close, el, xl, es, xs,
-                         zero_leg, zero_leg, xl.reshape(1, n), xs.reshape(1, n), 1,
-                         0, z1, z1f, z1f, z1f, z1, z1f, z1ref, z1ref,
-                         sl_ref_long, sl_ref_short,
-                         tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp, **ka)
+        out = invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg, df=prepared,
+                            signals=signals)
         stats = fast_stats(out[0], out[9], out[11],
                           initial_cash=ic, final_cash=out[13], ppy=ppy)
         if keep_stats is not None:

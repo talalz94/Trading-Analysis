@@ -15,7 +15,8 @@ from .kernel import run_kernel
 _log = get_logger("quant.engine")
 
 REASON_NAMES = {0: "signal", 1: "stop_loss", 2: "take_profit", 3: "forced_close_end",
-                4: "margin_call", 5: "alt_exit", 6: "time_stop"}
+                4: "margin_call", 5: "alt_exit", 6: "time_stop", 7: "tp_moved",
+                8: "ref_target"}
 
 
 def _ref_arr(df, col, n):
@@ -120,6 +121,8 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
     n_tp, tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values = cfg.tp_arrays()
     sl_ref_long = _ref_arr(df, cfg.sl_ref_long_col, n)
     sl_ref_short = _ref_arr(df, cfg.sl_ref_short_col, n)
+    tp_ref_long = _ref_arr(df, cfg.tp_ref_long_col, n)
+    tp_ref_short = _ref_arr(df, cfg.tp_ref_short_col, n)
     ell_i, els_i, exit_legs_long, exit_legs_short, n_legs = _leg_args(signals, xl, xs, n)
     (per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
      leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short) = _leg_stop_args(
@@ -133,6 +136,7 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
         per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
         leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
         sl_ref_long, sl_ref_short,
+        tp_ref_long, tp_ref_short,
         arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp, arm_touch, arm_wrong, alt_min, sess,
         tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp,
         **cfg.scalar_args(),
@@ -172,7 +176,8 @@ def run_backtest(
     t0 = time.perf_counter()
     (t_side, t_entry_i, t_exit_i, t_entry_px, t_exit_px, t_qty,
      t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason,
-     equity_curve, pos_count, final_cash, t_stop) = invoke_kernel(
+     equity_curve, pos_count, final_cash, t_stop,
+     t_move_i, t_move_px, t_ref) = invoke_kernel(
         open_, high, low, close, el, xl, es, xs, cfg, df=df, signals=signals
     )
     elapsed = time.perf_counter() - t0
@@ -184,6 +189,17 @@ def run_backtest(
         t_series, t_side, t_entry_i, t_exit_i, t_entry_px, t_exit_px,
         t_qty, t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason, t_stop,
     )
+    # THE ADD-ONS' OWN COLUMNS, only when one is on -- a default run keeps its exact column set.
+    # A moved target is otherwise invisible after the fact: a trade stopped out AFTER its target
+    # moved looks identical to one whose target never did.
+    if float(cfg.tp_move_to) > 0.0 and len(trades):
+        mi = np.asarray(t_move_i)
+        trades["target_moved_i"] = mi
+        trades["target_moved_time"] = pd.Series(
+            t_series.iloc[np.clip(mi, 0, n - 1)].to_numpy()).where(mi >= 0).to_numpy()
+        trades["target_moved_to"] = t_move_px
+    if (cfg.tp_ref_long_col or cfg.tp_ref_short_col) and len(trades):
+        trades["ref_target"] = t_ref
 
     eq = pd.DataFrame({"equity": equity_curve, "open_trades": pos_count})
     eq.insert(0, "t", t_series)   # direct Series assign preserves tz and is fast
