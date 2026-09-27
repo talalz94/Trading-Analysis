@@ -322,3 +322,56 @@ def test_notebook_21s_arms_only_touch_exit_settings():
     from quant.research.fvg_lab import EXIT_KEYS
     cfg = runpy.run_path(str(NB / "nb21_config.py"))
     assert cfg["COMPARE"] and all(set(v) <= EXIT_KEYS for v in cfg["COMPARE"].values())
+
+
+# ---------------------------------------------------------------- the exit tags on the chart
+def _labelled(rows, move=None, **cfg_kw):
+    """Run, then label with the SAME rule settings the run used -- as fvg_lab does."""
+    from types import SimpleNamespace
+    from quant.research.exit_labels import label_exits
+    d = _df(rows)
+    t = run_backtest(d, _short_at(len(d)), BacktestConfig(**BASE, **cfg_kw)).trades
+    cfg = SimpleNamespace(TP_RR=3.0, TP_MOVE=dict(tag="MOVED", **(move or {})),
+                          FVG_EXIT=dict(tag="FVG"))
+    return label_exits(t, d, cfg).iloc[0]
+
+
+def test_a_moved_target_says_which_trigger_moved_it_and_where_to():
+    r = _labelled(NEAR_MISS, dict(near=0.9, back=0.4, after_bars=0, to=0.6),
+                  tp_move_to=0.6, tp_move_near=0.9, tp_move_back=0.4)
+    assert r.exit_tag == "TP·MOVED"
+    # best 97.2 = 93% of the 3-point target; the bar-2 close of 98.7 gave back 50%; 3R -> 1.8R
+    assert "near miss, got 93% of the way, then a close gave back 50%" in r.exit_why
+    assert "3R -> 1.8R" in r.exit_why and "held" not in r.exit_why
+
+
+def test_a_time_triggered_move_says_so_and_a_plain_target_says_TP():
+    rows = [(100, 100, 100, 100), (100, 100.1, 99.0, 99.0), (99.0, 99.2, 98.0, 98.2),
+            (98.2, 101.5, 98.1, 101.2)]
+    r = _labelled(rows, dict(near=0, back=0, after_bars=2, to=0.5),
+                  tp_move_to=0.5, tp_move_after=2)
+    assert r.exit_tag == "TP·MOVED" and "held 2 bars" in r.exit_why
+    assert "already past it" in r.exit_why            # closed on the move bar itself
+    plain = _labelled([(100, 100, 100, 100), (100, 100.1, 96.9, 97.0)])
+    assert plain.exit_tag == "TP" and plain.exit_why == "TP: reached the 3R target"
+
+
+def test_labels_are_drawn_only_when_asked_and_read_from_customdata():
+    """Off, the chart is exactly what it was (notebooks 18-20). On, the tag comes from customdata:
+    rewind filters customdata with the markers it drops, and would leave a `text` array behind --
+    sliding every later label onto the wrong trade, since exits are NOT in time order."""
+    from quant.research.exit_labels import label_exits
+    from quant.viz.studies import pattern_figure
+    from types import SimpleNamespace
+    d = pd.concat([_df([(100, 100.2, 99.8, 100)] * 60), _df(NEAR_MISS)], ignore_index=True)
+    d["t"] = d["open_time"] = pd.date_range("2026-01-01", periods=len(d), freq="5min", tz="UTC")
+    t = run_backtest(d, _short_at(len(d), 60), BacktestConfig(**BASE)).trades
+    t = label_exits(t, d, SimpleNamespace(TP_RR=3.0))
+    kw = dict(patterns=[], sr_zones=False, emas=(), trendlines=False, trades=t, trade_tp_rr=3.0)
+    ex_off = [x for x in pattern_figure(d, **kw).data if str(x.name).startswith("exits")][0]
+    ex_on = [x for x in pattern_figure(d, exit_labels=True, **kw).data
+             if str(x.name).startswith("exits")][0]
+    assert ex_off.mode == "markers" and ex_off.texttemplate is None
+    assert ex_on.mode == "markers+text" and ex_on.texttemplate == "%{customdata[3]}"
+    assert ex_on.text is None, "labels in `text` would detach from their trades on rewind"
+    assert list(ex_on.customdata[:, 3]) == ["SL"]
