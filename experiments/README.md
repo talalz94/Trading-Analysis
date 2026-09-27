@@ -23,6 +23,7 @@ python -m experiments.sr_zone_search   # S/R zone settings per timeframe (~8 min
                                        #   presets it picks ARE quant.indicators.SR_TUNED --
                                        #   a test fails if the two drift apart
 python -m experiments.sr_zone_search --picks-only   # re-select from the saved results
+python -m experiments.level_age_study   # do OLD S/R zones / FVGs hold better? (~10 s) -- no
 ```
 Or from Python / a notebook:
 ```python
