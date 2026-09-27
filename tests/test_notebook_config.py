@@ -337,13 +337,19 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     ka = {k: v for k, v in a.items() if k.isupper()}
     kb = {k: v for k, v in b.items() if k.isupper()}
     assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
-                                 "SHOW_REJECTED"}, sorted(set(kb) - set(ka))
+                                 "SHOW_REJECTED", "SR_SENSITIVITY"}, sorted(set(kb) - set(ka))
     # THE WINDOW IS NOT A RULE. What 21 must share with 20 is WHAT gets traded, so that the
     # confirmation is the only difference in the strategy. WHEN is the user's to set per notebook,
     # and the A/B that matters runs inside 21 via variant(), where both arms share 21's own window.
     # Pinning END here failed the moment the user widened 21's window, which is not a drift.
     when = {"VIEW_START", "END", "WARMUP_START", "AS_OF"}
-    drifted = sorted(k for k in ka if k not in when and repr(ka[k]) != repr(kb.get(k)))
+    # AND THE S/R VALUES THE KNOB NOW OWNS. 21 states SR_SENSITIVITY instead of these four, because
+    # an explicit value wins over the tuned table -- keeping them would have pinned 21 to the old
+    # zones. They are in notebooks/backups/2026-09-27_pre_sr_tuning/. S/R is drawn, never traded,
+    # in these notebooks, so this cannot touch the comparison 21 exists to make.
+    knob = {"ZONES_LEFT", "ZONES_RIGHT", "SR_CLUSTER_PCT", "SR_MIN_TOUCHES"}
+    assert not (knob & set(kb)), "21 must not pin a value the tuned table owns"
+    drifted = sorted(k for k in ka if k not in when | knob and repr(ka[k]) != repr(kb.get(k)))
     assert drifted == ["TL_CONFIRM_N", "TRENDLINE"], (
         f"only the confirmation and the line's break rule may differ, got {drifted}")
     assert kb["TL_CONFIRM_N"], "notebook 21 is pointless with the confirmation off"
