@@ -433,3 +433,68 @@ def test_a_bad_gap_sentence_says_what_is_wrong_with_it(bad, why):
 
     with pytest.raises(ValueError, match=why):
         parse_fvg_rule(bad)
+
+
+# ---------------------------------------------------------------------------
+# a gap that is never filled still STOPS -- it expires
+# ---------------------------------------------------------------------------
+def _gap_then_walk_away(n=100, at=30):
+    """A bearish gap (band 100-105) formed AFTER the ATR has warmed up, then price falls away and
+    never comes back. Formed at bar 2 the size gate drops it -- ATR is still NaN there -- and the
+    test would pass by finding no gap at all."""
+    o = np.full(n, 90.0); h = np.full(n, 91.0); lo = np.full(n, 89.0); c = np.full(n, 90.0)
+    o[:at], h[:at], lo[:at], c[:at] = 107.0, 109.0, 105.5, 107.0   # a stable warm-up range
+    o[at], h[at], lo[at], c[at] = 107.0, 108.0, 105.0, 106.0       # low 105
+    o[at+1], h[at+1], lo[at+1], c[at+1] = 106.0, 106.5, 98.0, 99.0  # the displacement
+    o[at+2], h[at+2], lo[at+2], c[at+2] = 99.0, 100.0, 95.0, 96.0   # high 100 < 105 -> gap
+    t = pd.date_range("2026-01-01", periods=n, freq="5min", tz="UTC")
+    return pd.DataFrame({"t": t, "open_time": t, "open": o, "high": h, "low": lo, "close": c,
+                         "volume": 1.0})
+
+
+def test_an_unfilled_gap_expires_instead_of_staying_open_forever():
+    """The bug the user found on the chart: a thick box running the full width of the plot.
+
+    `_live_state` retires a gap once it outlives max_age_bars, unfilled -- but that retirement left
+    no trace in the table: `dead_i` records MITIGATION only, so an aged-out gap read -1, which
+    everything downstream took to mean "still open". The chart drew it to the right edge and the
+    census counted it open, while the counts the veto reads had dropped it long before. On a 20-day
+    window, 75 of the 80 "open" 5m gaps were nothing of the kind.
+    """
+    from quant.indicators.fvg import add_fvgs, fvg_table
+
+    df = _gap_then_walk_away()
+    g = fvg_table(add_fvgs(df, max_age_bars=20, min_size_atr=0.0, mitigation="ce"))
+    bear = g[g["kind"] < 0]
+    assert len(bear), "the fixture must produce the gap"
+    r = bear.iloc[0]
+    assert int(r.dead_i) == -1, "it was never filled, and dead_i must keep meaning exactly that"
+    assert r.end_reason == "expired", "never filled and too old to count is not 'open'"
+    assert int(r.end_i) == int(r.born_i) + 21, "it ends on the FIRST bar the live counts skip it"
+
+    # the same gap with no age limit genuinely is still open at the end of the data
+    g0 = fvg_table(add_fvgs(df, max_age_bars=0, min_size_atr=0.0, mitigation="ce"))
+    r0 = g0[g0["kind"] < 0].iloc[0]
+    assert r0.end_reason == "open" and int(r0.end_i) == -1
+
+
+def test_the_expiry_bar_is_where_the_live_counts_stop_seeing_the_gap():
+    """The table and the per-bar columns are two views of one fact, so they must agree to the bar.
+    The whole bug was that they did not: the counts had retired the gap, the table had not."""
+    from quant.indicators.fvg import add_fvgs, fvg_table
+
+    for age in (20, 7, 0):                       # expiry, a tighter expiry, and none at all
+        df = add_fvgs(_gap_then_walk_away(), max_age_bars=age, min_size_atr=0.0,
+                      mitigation="ce")
+        g = fvg_table(df)
+        for kind, col in ((-1, "fvg_bear_n"), (+1, "fvg_bull_n")):
+            sub = g[g["kind"] == kind]
+            born = sub["born_i"].to_numpy(int)
+            end = sub["end_i"].to_numpy(int)
+            want = np.array([int(((born <= i) & ((end < 0) | (i < end))).sum())
+                             for i in range(len(df))])
+            got = df[col].to_numpy()
+            bad = np.flatnonzero(want != got)
+            assert not len(bad), (
+                f"max_age={age} {col}: the table's [born, end) disagrees with the live count on "
+                f"{len(bad)} bars, first at {bad[0] if len(bad) else None}")

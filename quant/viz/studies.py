@@ -1127,8 +1127,10 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         # a gap that both formed AND died inside the warm-up is history: it taught the detector
         # something, but it is not on the window you asked to look at. One that formed there and is
         # still open is very much live, so it stays.
-        dead_i = gt["dead_i"].to_numpy(np.int64)
-        gt = gt[(gt["born_i"].to_numpy(np.int64) >= vl) | (dead_i < 0) | (dead_i >= vl)]
+        # `end_i`, not `dead_i`: a gap that EXPIRED before the window opens is not on screen at
+        # all, and keying off mitigation alone kept every one of them
+        _end = (gt["end_i"] if "end_i" in gt.columns else gt["dead_i"]).to_numpy(np.int64)
+        gt = gt[(gt["born_i"].to_numpy(np.int64) >= vl) | (_end < 0) | (_end >= vl)]
         if not len(gt):
             return 0
         alpha_l = None if (alpha is None or alpha >= 1.0) else alpha
@@ -1172,8 +1174,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 # reached 131 days back and autoscale rescaled the chart to all of it.
                 if left is not None and x0 < left:
                     x0 = left
-                if r.dead_i >= 0:
-                    x1 = tl_[int(r.dead_i)] + step
+                _e = int(getattr(r, "end_i", r.dead_i))
+                if _e >= 0:
+                    # filled OR expired -- either way this is the bar it stopped being live, which
+                    # is the bar the counts and the veto stop seeing it
+                    x1 = tl_[_e] + step
                 else:
                     x1 = right if (fvg_extend and right is not None) else x0 + bar * 3
                 if x1 is None or x1 <= x0:
@@ -1181,10 +1186,14 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                 xs += [x0, x1, x1, x0, x0, None]
                 ys += [r.bot, r.bot, r.top, r.top, r.bot, None]
                 tag = "\u00b7".join((tf_nm, str(r.id)))   # `5m\u00b7FB12`, like `5m\u00b7S7`
-                if r.dead_i < 0:
+                _why = str(getattr(r, "end_reason", "filled" if r.dead_i >= 0 else "open"))
+                if _e < 0:
                     st = "still open"
+                elif _why == "expired":
+                    st = "expired %s — never filled, too old to count" % pd.to_datetime(
+                        str(tl_[_e])).strftime("%b-%d %H:%M")
                 else:
-                    st = "filled %s" % pd.to_datetime(str(tl_[int(r.dead_i)])).strftime("%b-%d %H:%M")
+                    st = "filled %s" % pd.to_datetime(str(tl_[_e])).strftime("%b-%d %H:%M")
                 txt = (f"<b>{tag}</b>  {side}ish FVG<br>"
                        f"{r.bot:,.2f} - {r.top:,.2f}  ({r.size_atr:.2f} ATR)<br>{st}")
                 hx.append(x0 + (x1 - x0) / 2)
@@ -1200,7 +1209,9 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             _mine.append(len(fig.data) + 1)
             fig.add_trace(go.Scattergl(
                 x=xs, y=ys, fill="toself", mode="lines",
-                name="%s (%d, %d open)" % (label, len(sub), int((sub["dead_i"] < 0).sum())),
+                name="%s (%d, %d open)" % (label, len(sub),
+                                           int(((sub["end_i"] if "end_i" in sub.columns
+                                                 else sub["dead_i"]) < 0).sum())),
                 legendgroup=lgp + base_label, visible=vis, opacity=alpha_l, meta="fvg",
                 line=dict(color=colr, width=max(0.5, round(width - 1.8, 2))),
                 fillcolor=_rgba(colr, 0.13), hoverinfo="skip"))
