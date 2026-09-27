@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **574 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **592 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -147,6 +147,11 @@ quant/
 │   │                    #     chart drew it to the right edge as 'still open' -- 75 of 80 'open' 5m
 │   │                    #     gaps on a 20-day window had expired. NO EDGE as a trade filter -- see
 │   │                    #     docs/WHAT_WORKS.md
+│   │                    #     fvg_on_grid(base, frames, **fvg_kwargs) = every timeframe's gaps with
+│   │                    #     the span they are LIVE on the base grid: from the third candle's
+│   │                    #     CLOSE, mitigation re-checked on the BASE bars (a 4h gap filled at
+│   │                    #     13:20 is dead from 13:20, not "some time in the 12:00 bar"), expiry
+│   │                    #     in the gap's own bars. What the FVG exit reads
 │   ├── trendlines.py    #   STANDALONE TRENDLINES — add_trendlines() fits the live support and
 │   │                    #     resistance line bar by bar (same RANSAC + envelope, same causality:
 │   │                    #     published only from the bar its last pivot CONFIRMED) and flags
@@ -256,6 +261,12 @@ quant/
 │   │                    #     price AGAINST the trade, so for a SHORT it is a BEARISH gap above,
 │   │                    #     not a bullish one. describe_fvg_rules() prints the resolved direction
 │   │                    #     per side rather than leaving it to a docstring
+│   ├── fvg_target.py    #   fvg_target(df, gaps, side, stop_ref, stop_buffer_pct, tp_rr, near_r, at)
+│   │                    #     -> per bar, the exit level of the live gap a trade opened THERE would
+│   │                    #     aim at: for a short a BULLISH gap below the entry within near_r R of
+│   │                    #     its target (nearest the entry wins), at its touch / ce / full. A
+│   │                    #     column, not a signal, because the target is R multiples of THAT
+│   │                    #     trade's stop; the engine reads it once at entry (tp_ref_*_col)
 │   ├── builder.py       #   RuleStrategy + Rule: declarative entry->exit(->stop) rules with `once`
 │   │                    #     (one per episode), `rearm`, `after` sequencing, per-rule exits+stops
 │   └── ema_ribbon, rsi, macd, heikin_ashi, supertrend, mtf, key_level  (+ REGISTRY)
@@ -530,6 +541,13 @@ quant/
 │                        #     actually used. Slower than the browser tool and not clickable,
 │                        #     but nothing is filtered and it works inline.
 │                        #     .trades/.all/.blocked/.gaps/.end/.rejected/.census()/.summary()/.figure()
+│                        #     .retrade(**exit_settings) re-runs ONLY the sim for a change to
+│                        #     EXIT_KEYS (USE_TP_MOVE/TP_MOVE/USE_FVG_EXIT/FVG_EXIT), reusing every
+│                        #     frame, line and gap -- proved equal to a full rebuild; anything else
+│                        #     raises, since it could change what is loaded or fitted.
+│                        #     USE_TP_MOVE -> BacktestConfig.tp_move_*; USE_FVG_EXIT -> fvg_on_grid +
+│                        #     fvg_target on the lab's own gap frames -> tp_ref_*_col, and the
+│                        #     trades table calls that exit `fvg_exit`
 │   ├── rejected.py    #   rejected_setups(lab) -> every trendline break that did NOT trade,
 │   │                  #     labelled: entry rule / cancelled / not confirmed / already open.
 │   │                  #     A filter is only judgeable against what it REMOVED, and the chart
@@ -557,8 +575,15 @@ quant/
 │   └── compare.py     #   compare_runs() one row per arm, trade_diff() one row per entry time
 │                      #     across both -- a filter can only REMOVE or DELAY, so totals alone
 │                      #     cannot separate "removed losers" from "removed trades at random"
+│                      #     run_arms(CFG) -> Arms: one run per arm of the config's COMPARE, each
+│                      #     changing ONLY what it names; .table() adds exit-reason counts, .diff()
+│                      #     is one row per entry with each arm's R and exit. Loads ONCE and
+│                      #     re-trades when every arm touches exit settings only
 ├── optimize/
-│   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky)
+│   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky).
+│   │                    #     Goes through invoke_kernel -- it used to hand-build the kernel's
+│   │                    #     arguments and was BROKEN from e61d7ab to 2026-09-27 without a test
+│   │                    #     noticing; test_exit_rules.py now runs it
 │   └── search.py        #   optuna_search (optional; Bayesian)
 └── reporting/report.py  #   summary / print_summary / to_html (standalone offline report)
 
@@ -587,6 +612,11 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 │                        #   R falls even when it does nothing) with the top winner trimmed, and
 │                        #   the chance baseline printed. Answer: 0 clear all 6, 4 clear >=4 where
 │                        #   chance predicts 8.2. Below chance -- see docs/WHAT_WORKS.md
+├── exit_rules_search.py  # the two optional exits on notebook 21's EXACT settings: 19 quarters
+│                        #   2022Q1-2026Q3, 26 pre-registered arms, train/forward. None beats noise
+│                        #   (max t 1.31; train->forward rank corr -0.50 -- the best on train were
+│                        #   the worst forward). And the strategy itself: 1,194 trades, -0.157R
+│                        #   per trade after costs, +0.08R at zero cost. See docs/WHAT_WORKS.md
 ├── trendline_wait_search.py  # how many candles to wait before trading a break, PER TIMEFRAME:
 │                        #   6 windows over 5.5 months, scored by WINDOWS POSITIVE not total R,
 │                        #   with the chance baseline printed beside it
@@ -619,6 +649,10 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   values, because an explicit value WINS over the tuned table.
                          #   nb18-20 still state them, so they keep their left/right/cluster/
                          #   min_touches and take only break_bars + anchoring from the table
+                         #   EXITS: USE_TP_MOVE / TP_MOVE and USE_FVG_EXIT / FVG_EXIT, both OFF
+                         #   (a test holds them off), and COMPARE = the A/B arms the notebook
+                         #   tabulates with run_arms. The copy-of-20 test exempts values the USER
+                         #   changed in 21 (FVG_MAX_AGE_BARS 500 -> 1000), by name
                          # 20_rewind + nb20_config.py = notebook 19's chart plus the REWIND
                          #   tool. The config is a verified COPY of 19's (a test fails if any
                          #   value drifts) plus REWIND and AS_OF, so the point-in-time view is
@@ -718,8 +752,18 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
   — because a global array cannot name a per-trade level. `alt_min_pct` is how far price must have
   moved your way before the secondary may close, since "any favourable move" routinely exits for
   less than the round trip. All three default to 0 and the block is skipped — byte-identical.
+- **Moved target (`tp_move_to` / `_near` / `_back` / `_after`)**: once per trade, the target moves to
+  `tp_move_to` of its distance after a NEAR MISS (best price reached `near` of the way, then a close
+  gave `back` of it back) or a LONG WAIT (`after` bars). Judged on the close, applied from the NEXT
+  bar (intrabar order is unknown); rungs that close nothing are left alone; already past the new
+  target -> closed at that close. Reason `tp_moved`. `0` = off, byte-identical.
+- **Second target per trade (`tp_ref_long_col` / `tp_ref_short_col`)**: a level read ONCE at the
+  entry bar (NaN or on the losing side = none); the nearer of it and the ladder fills first, the
+  stop still wins a bar that hits both. Reason `ref_target`. Unset = off, byte-identical. With
+  either on, trades gain `target_moved_i/_time/_to` / `ref_target`, and the chart draws them inside
+  the trade's existing target trace. Neither beats noise on notebook 21 -- see docs/WHAT_WORKS.md.
 - Close-reason codes: `signal`, `stop_loss`, `take_profit`, `forced_close_end`, `margin_call`,
-  `alt_exit` (closed by the secondary rule), `time_stop`.
+  `alt_exit` (closed by the secondary rule), `time_stop`, `tp_moved`, `ref_target`.
 
 `SimResult` = `trades` (DataFrame; incl. per-trade `stop_price`), `equity_curve`
 (t/equity/open_trades/drawdown), `stats` (dict),
@@ -829,7 +873,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value). **574 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back). **592 total.**
 
 ## 12. Known limitations / honest caveats
 

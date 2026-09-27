@@ -149,6 +149,46 @@ The S/R tuning study ran on UNBOUNDED history, so its line counts assume no look
 
 ---
 
+## EXIT RULES (2026-09-27) — neither beats noise; the strategy they were tried on loses to costs
+
+Two rules, both proposed from ONE trade (notebook 21's #04: 0.1R short of a 3R target, then
+stopped out):
+
+- **move the target** (`USE_TP_MOVE`) — after a near miss (the best price got `near` of the way,
+  then a close gave `back` of it back) or a long wait (`after_bars`), the target moves to `to` of
+  its distance;
+- **FVG exit** (`USE_FVG_EXIT`) — a live gap sitting within `near_r` R of the target when the trade
+  opens; price filling it closes the trade.
+
+`experiments/exit_rules_search.py`: notebook 21's exact settings over 19 quarters, 2022Q1-2026Q3
+(1,194 trades), 26 arms fixed before the run, selected on 2022Q1-2024Q2 and judged on
+2024Q3-2026Q3, scored as total R minus the baseline's, per quarter.
+
+| | |
+|---|---|
+| arms beating the baseline in every quarter | 0 of 26 |
+| train -> forward rank correlation of the arms | **-0.50** — the best on train were the worst forward |
+| largest quarterly t-statistic, any arm | 1.31, with 26 tried |
+| best train arm (near 0.6, back 0.4, to 0.4) | +39.2R train -> **-29.7R forward** |
+| arms positive in BOTH halves | 6 of 26 — chance predicts 6.5 |
+
+The arms that do no harm are the gentlest (near 0.9; a gap exited at its far edge), and they are
+the ones closest to doing nothing. **Why the idea fails:** the near miss it is built for is real,
+but a pullback that goes on to the full target is MORE common. The gentlest version fired 59 times
+in 1,194 trades — 23 of those would have stopped out, 35 still reached the full 3R. Aggressive
+versions cut far more winners than they rescue.
+
+**The larger finding is the strategy itself.** Notebook 21's settings lose over four and a half
+years: 1,194 trades, **-0.157R per trade**, 26.8% win, 17 of 19 quarters negative. The same trades at
+ZERO cost make **+0.08R per trade**, so costs (8 bps fee + 1.5 bps slippage per side, against a
+median stop 0.94% from entry) take ~0.24R from every trade — three times the gross result. That
++0.08R has not been tested against the `time_entry` metronome, so it is not evidence of an edge
+either. The window the notebook shows (+4R on 8 trades) is a good stretch of a losing rule. No exit
+rule can repair that; the lever is the entry, or the cost per R.
+
+Both rules stay in the engine, off by default, because they are correct tools and cheap to re-test
+on a different entry. Neither should be switched on on this evidence.
+
 ---
 
 ## The one-paragraph answer
