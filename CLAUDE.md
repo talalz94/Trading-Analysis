@@ -575,6 +575,13 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 │                        #   information. Hence SR_TUNED is a CLARITY dial chosen by lines on screen
 │                        #   (tight 2-4 / normal 4-8 / loose 8-16); --picks-only re-selects from the
 │                        #   saved results. See docs/WHAT_WORKS.md
+├── level_age_study.py    # do OLD levels hold better? Every S/R and FVG test tagged with the
+│                        #   level's age in days, each bucket read against the shift null, train vs
+│                        #   forward. No: old and young both sit at ~0 vs a level moved 1-3 ATR, and
+│                        #   old cells flip sign between halves. 94% of FVG first returns come within
+│                        #   a day. So FVG_MAX_AGE_BARS / ZONE_LOOKBACK are CLARITY settings -- and
+│                        #   neither was measured before this (500 = a scan-speed bound, 2000 = a
+│                        #   workaround for the legacy eviction bug)
 ├── fvg_veto_search.py    # does an unfilled FVG behind a break say skip it? 24 settings x 6
 │                        #   windows, scored by R PER TRADE (a veto only removes trades, so total
 │                        #   R falls even when it does nothing) with the top winner trimmed, and

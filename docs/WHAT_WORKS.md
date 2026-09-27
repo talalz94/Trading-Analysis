@@ -114,6 +114,39 @@ standard error being ~0.02).
   instrument old strong levels held every slot. BTC 4h, 2022-26, ended with 40 live zones a median
   67% from price and 1 within 5%. The corrected engine drops the zone farthest from price.
 
+### Does an OLD level matter more? (2026-09-27) — no, and no less either
+
+`experiments/level_age_study.py` tags every test with the level's age in days and reads each age
+bucket against the same shift null. Same yardstick, same train/forward split. Pooled across
+timeframes:
+
+| forward edge vs the level moved 1-3 ATR | young (<30 days) | old (>30 days) |
+|---|---|---|
+| S/R, `normal` presets | +0.002 (n 13,970) | -0.017 (n 1,152, se 0.020) |
+| S/R, retirement OFF | +0.002 (n 14,943) | -0.003 (n 3,654, se 0.011) |
+| FVG, first return | -0.002 (n 23,655) | +0.037 (n 188, se 0.041) |
+
+Every old-level cell flips sign between train and forward (S/R +0.042 -> -0.017; FVG -0.103 ->
++0.037). **An old level holds exactly as often as a young one, and neither beats a price 1-3 ATR
+away** — on 4h that is $2-5k at BTC 86k. Price does come back to old areas; the old LINE is not
+what it reacts to. The age limits are therefore a CLARITY choice, never an edge one: keeping old
+levels does not hurt reaction and does not help it.
+
+How often price returns to an old gap at all: **94% of first returns into an FVG happen within a
+day of its birth**, 1.8% after a week. The S/R zones never reach a year old, even with retirement
+off — the 40-zone cap evicts the farthest first.
+
+The limits these replace were never measured: `FVG_MAX_AGE_BARS = 500` was a speed bound on the
+mitigation scan, and `ZONE_LOOKBACK = 2000` was a workaround for the legacy eviction bug above.
+Both are counted in each layer's OWN bars, so the same number means very different ages:
+
+| | 5m | 15m | 1h | 4h |
+|---|---|---|---|---|
+| 500 bars | 1.7 d | 5.2 d | 21 d | 83 d |
+| 2000 bars | 6.9 d | 21 d | 83 d | 333 d |
+
+The S/R tuning study ran on UNBOUNDED history, so its line counts assume no lookback cut.
+
 ---
 
 ---

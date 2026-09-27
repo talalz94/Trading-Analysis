@@ -1827,3 +1827,24 @@ Two measurement lessons worth keeping:
 place of its four S/R values and gets the full preset. Notebooks 18-20 still state
 `ZONES_LEFT` etc., so they keep those and take only `break_bars` and anchoring from the table —
 their files were not edited. Backups: `notebooks/backups/2026-09-27_pre_sr_tuning/`.
+
+### Level age (2026-09-27) — the two age limits had never been measured
+
+Asked whether `FVG_MAX_AGE_BARS` and `ZONE_LOOKBACK` were tested: they were not.
+`max_age_bars=500` was chosen when the FVG detector was built, to bound the per-gap mitigation scan
+(0 = no limit is exact but O(bars) per unfilled gap); `fvg_veto_search` varied only the VETO's age
+(20/60), never the detector's. `zone_lookback_bars=2000` (7543d20) fixed "1 of 40 zones near price" —
+a symptom of the legacy least-touched eviction, which the S/R study later fixed at the root. Its
+reason is gone; the setting stayed because it is the user's.
+
+`experiments/level_age_study.py` measured age directly (verdict in docs/WHAT_WORKS.md): no age
+effect either way. The user's example — BTC back at 86k months later — is real price behaviour, but
+the evidence says price reacts to the AREA, and a line placed $2-5k away does as well. Keeping old
+levels is harmless; it just adds lines.
+
+Two traps in the measurement worth keeping:
+- **Age counts from the zone's FIRST pivot**, not from when it earned enough touches to be drawn.
+  The segment table's first KEPT row is the latter, so birth is taken from the unfiltered segments.
+- **The shift null must keep the level's birth and size.** A shifted FVG band that already surrounds
+  price at birth has no approach side and is not a test; it is skipped, as a real one would be.
+
