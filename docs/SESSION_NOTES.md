@@ -1771,3 +1771,59 @@ The id is now held for the trigger's own window **plus** the wait. The LEVEL hol
 not extended — that would let the break itself fire later, which is a different change.
 
 On this window (8 trades, so read nothing into it): `n=2` → 6 trades, `n=3` and `n=5` → 7.
+
+## An unfilled FVG expired in the counts but ran forever on the chart
+
+A thick bearish box ran the full width of the chart through price that had plainly traded
+through it. It had not been filled — it had EXPIRED, and nothing recorded that. `_live_state`
+retires a gap once it outlives `max_age_bars`, but `dead_i` records only mitigation, so an aged-out
+gap kept `dead_i = -1` and every consumer read "still open": the chart drew it to the right edge,
+the census counted it open, while the counts the veto reads had dropped it days earlier. On a
+20-day window 75 of the 80 "open" 5m gaps had expired. `end_i` / `end_reason`
+(filled | expired | open) are now the one source of truth; the 12 per-bar columns the veto reads
+were proved byte-identical against the old code. The empty-table branch also lacked every derived
+column, so a quiet frame would have raised on `end_reason`.
+
+The test is an INVARIANT, not a case: for every gap on every bar, the table's [born, end) must
+equal the live count. Its first fixture put the gap at bar 2, where ATR is still NaN, so the size
+gate dropped it and the test passed on an empty table — the recurring trap in this project.
+
+## S/R zones: three corrections, a study, and a clarity knob
+
+**The corrections** (one engine, `_sr_core`, behind both `add_sr_zones` and `sr_zone_table`):
+1. **Anchored clustering.** Pivots joined a zone if within `cluster_pct` of its RUNNING MEAN,
+   which moves as pivots join — zones crept to 0.257% against a 0.15% setting. Now the whole band
+   (min-max of the pivots) must fit.
+2. **Break retirement.** Crossing a zone did nothing; 48 of 54 zones on one chart had been broken
+   and held beyond. `break_bars` consecutive closes on the far side retire it; a close back RESETS
+   the count, so a wick-and-reclaim does not kill a level.
+3. **Farthest-from-price eviction.** Found by the study, not the chart: the legacy rule dropped the
+   least-touched zone, so old strong levels held every slot and each new zone near price was
+   evicted as it formed. BTC 4h ended 2022-26 with 40 zones a median 67% from price, 1 within 5%.
+
+Also found while reading the legacy code, and fixed on the new path: the two "mirror" functions
+evicted with DIFFERENT tie-breaks, and `sr_zone_table` used the SLOT index as the zone id, so an
+evicted zone and its replacement shared an id and the chart's one-line-per-zone step dropped one.
+
+**Legacy is preserved on its original code path** and reached by `SR_SENSITIVITY = None`. That was
+proved byte-identical against the actual pre-change code, run in a temporary git worktree —
+asserting it would not have been enough. `add_sr_zones` defaults to legacy too, because the
+scenarios that read it (`level_event`, `zone_top`) have results recorded in docs/.
+
+**The study** (`experiments/sr_zone_search.py`) and its verdict are in docs/WHAT_WORKS.md. The short
+version: zones beat shuffled bars but not the same zones moved 1-3 ATR, so they mark AREAS. That
+turned the knob from a quality dial into a CLARITY dial, and the first selection rule — argmax of
+train edge — had to go: it chose a 15m setting that drew 0.5 lines and lost forward.
+
+Two measurement lessons worth keeping:
+- **Clutter must be measured as what is DRAWN.** The first metric counted every live zone,
+  including ones 25% from price that no chart shows; it now counts zones within 20 ATR.
+- **Distinct zones are not lines on screen.** On notebook 21 the 4h layer went from 9 zones to 18
+  and looked like a regression — but with retirement each is short-lived, and lines visible at any
+  moment went 5.1 -> 1.2. Across all layers: ~52 -> ~7.
+
+**Precedence, and what that means per notebook.** An explicit setting always wins over the table
+(`sr_params(tf, level, **overrides)`, None = not stated). Notebook 21 states `SR_SENSITIVITY` in
+place of its four S/R values and gets the full preset. Notebooks 18-20 still state
+`ZONES_LEFT` etc., so they keep those and take only `break_bars` and anchoring from the table —
+their files were not edited. Backups: `notebooks/backups/2026-09-27_pre_sr_tuning/`.

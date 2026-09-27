@@ -44,7 +44,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **557 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **574 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -140,7 +140,12 @@ quant/
 │   │                    #     a 1h count can ride onto a 5m grid. mtf_fvgs() merges layers with
 │   │                    #     the usual shift_bars=1; fvg_table() is one row per gap for drawing.
 │   │                    #     Cost: 230k 1m bars -> 58,776 gaps in 270 ms (mitigation is a numba
-│   │                    #     scan bounded by max_age_bars). NO EDGE as a trade filter -- see
+│   │                    #     scan bounded by max_age_bars). end_i + end_reason (filled | expired |
+│   │                    #     open) record where a gap STOPPED BEING LIVE for either reason; dead_i
+│   │                    #     still means mitigation only. Before this an unfilled gap that outlived
+│   │                    #     max_age_bars was retired from the counts but kept dead_i = -1, so the
+│   │                    #     chart drew it to the right edge as 'still open' -- 75 of 80 'open' 5m
+│   │                    #     gaps on a 20-day window had expired. NO EDGE as a trade filter -- see
 │   │                    #     docs/WHAT_WORKS.md
 │   ├── trendlines.py    #   STANDALONE TRENDLINES — add_trendlines() fits the live support and
 │   │                    #     resistance line bar by bar (same RANSAC + envelope, same causality:
@@ -171,6 +176,25 @@ quant/
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
 │                        #     add_zigzag_structure (ATR-adaptive swings; ~1/3 the lag — preferred),
 │                        #     add_sr_zones (nearest S/R per bar) + sr_zone_table (causal S/R zone timeline for plotting)
+│                        #     BOTH ARE ONE ENGINE (_sr_core) since 2026-09-27, with THREE CORRECTIONS the legacy
+│                        #     scans lacked -- each found on a real chart, each opt-in by keyword so strategies and
+│                        #     scenarios whose results are recorded in docs/ stay byte-identical on the ORIGINAL path:
+│                        #       anchor=True   a zone's whole band (min-max of its pivots) must fit cluster_pct.
+│                        #                     The legacy test compared against the RUNNING MEAN, which moves as
+│                        #                     pivots join, so zones crept: BTC 5m at 63k, 0.15% = 94 pts, zones
+│                        #                     spanned 149-157
+│                        #       break_bars=N  N consecutive closes on the far side RETIRE the zone; a close back
+│                        #                     resets the count. Legacy never looked at crossings: 48 of 54 zones on
+│                        #                     one chart had been broken and held beyond
+│                        #       eviction      drops the zone FARTHEST FROM PRICE, not the least-touched. Legacy kept
+│                        #                     old strong levels and evicted each new one as it formed: BTC 4h
+│                        #                     2022-26 ended with 40 zones a median 67% from price, 1 within 5%
+│                        #     Also fixed on the new path: stable zone ids (legacy reused the SLOT index, so an evicted
+│                        #     zone and its replacement shared an id and the chart dropped one) and ONE eviction rule
+│                        #     (the legacy 'mirrors' used different tie-breaks). sr_params(tf, sensitivity) is THE
+│                        #     KNOB: tight|normal|loose per timeframe from SR_TUNED, filled by
+│                        #     experiments/sr_zone_search.py; None = legacy, byte-identical to the pre-change code
+│                        #     (proved against it in a worktree); an explicit value always wins over the table
 │                        #     zigzag also exposes zz_last_high/zz_last_low (running confirmed pivots -> BOS)
 ├── signals/
 │   ├── primitives.py    #   numpy-native bool predicates (cross_up, last_all_above, consecutive_*,
@@ -540,6 +564,17 @@ quant/
 
 experiments/             # INFERENCE layer — find best settings for an idea (SEPARATE from core)
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
+├── sr_zone_search.py     # WHICH S/R SETTINGS GIVE LEVELS PRICE RESPECTS, per timeframe. 288
+│                        #   settings x 5m/15m/1h/4h x BTC's 9 windows, selected on 2022H1-2024H1 and
+│                        #   reported on 2024H2-2026H1. A TEST is price returning to a live zone after
+│                        #   moving 1 ATR away; HOLD if it closes 1 ATR back on the approach side
+│                        #   first. Read against TWO nulls: shuffled bars (the mandated one) and the
+│                        #   SAME zones shifted 1-3 ATR. Verdict: beats shuffle robustly on 5m (67
+│                        #   survivors vs 0.55, rank corr +0.81) but NOT the shift null -- a nearby
+│                        #   price holds as well, so zones mark AREAS and the exact line carries no
+│                        #   information. Hence SR_TUNED is a CLARITY dial chosen by lines on screen
+│                        #   (tight 2-4 / normal 4-8 / loose 8-16); --picks-only re-selects from the
+│                        #   saved results. See docs/WHAT_WORKS.md
 ├── fvg_veto_search.py    # does an unfilled FVG behind a break say skip it? 24 settings x 6
 │                        #   windows, scored by R PER TRADE (a veto only removes trades, so total
 │                        #   R falls even when it does nothing) with the top winner trimmed, and
@@ -562,6 +597,10 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   back, which is how EMAS_ON vanished and the notebook died on a
                          #   NameError. So cell 2 carries SETTING_DEFAULTS: a setting the
                          #   config predates falls back and prints the line to paste in.
+                         # backups/2026-09-27_pre_sr_tuning/ = every config as it stood before
+                         #   the S/R study, with a README on restoring the old zones (which
+                         #   needs no file: SR_SENSITIVITY = None is byte-identical to them,
+                         #   proved against the pre-change code in a git worktree)
                          # 21_break_confirmation + nb21_config.py = a 1h trendline break must
                          #   be CONFIRMED by a later candle before it is traded, and the setup
                          #   is CANCELLED if price closes back over rs. 20's settings with one
@@ -569,6 +608,10 @@ notebooks/               # nb18_config.py = notebook 18's SETTINGS, owned by the
                          #   variant(), so the rule is the only variable. Its config is the
                          #   SHORT kind: 124 lines to 20's 333, because a settings file is a
                          #   control panel and the rules are documented beside the code
+                         #   S/R: SR_SENSITIVITY = "normal" replaces the four explicit S/R
+                         #   values, because an explicit value WINS over the tuned table.
+                         #   nb18-20 still state them, so they keep their left/right/cluster/
+                         #   min_touches and take only break_bars + anchoring from the table
                          # 20_rewind + nb20_config.py = notebook 19's chart plus the REWIND
                          #   tool. The config is a verified COPY of 19's (a test fails if any
                          #   value drifts) plus REWIND and AS_OF, so the point-in-time view is
@@ -779,7 +822,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting). **557 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value). **574 total.**
 
 ## 12. Known limitations / honest caveats
 

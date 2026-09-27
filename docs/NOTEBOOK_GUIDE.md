@@ -81,6 +81,14 @@ changed = [k for k in a if k.isupper() and k in b and repr(a[k]) != repr(b[k])]
 assert not changed, changed
 ```
 
+### Before a change that alters what an existing notebook shows
+
+Copy every affected config into `notebooks/backups/<date>_<reason>/` with a README naming the
+values in force, the code commit, and how to get the old behaviour back — and commit the backup
+BEFORE the change. If the old behaviour is reachable by a setting (as `SR_SENSITIVITY = None` is),
+prove it against the old code rather than asserting it: a temporary `git worktree` at the
+pre-change commit makes that a two-minute check.
+
 ### The stale-buffer trap
 
 A setting appended to a config is **invisible to an editor tab that was already open**. Saving that
