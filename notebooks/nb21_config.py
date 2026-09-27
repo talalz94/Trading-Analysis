@@ -15,8 +15,8 @@ import numpy as np, pandas as pd     # noqa: F401
 # ── §1  WHAT AND WHEN ────────────────────────────────────────────────────────────────────────
 SYMBOL, SOURCE = "BTCUSDT", "binance"
 TF             = "5m"                # chart + execution timeframe
-VIEW_START     = "2026-06-01"
-END            = "2026-06-10"
+VIEW_START     = "2026-06-01"        # "2026-06-01"
+END            = "2026-06-20"        # "2026-06-10"
 WARMUP_START   = "2026-05-01"        # history for lines and gaps
 TF_WARMUP_BARS = 800                 # per extra timeframe, in its own bars
 
@@ -104,11 +104,14 @@ FVG_RULES = [                        # <opposite|same|bull|bear> [tf] [within N]
 SHOW_SR_ZONES  = True                # layers start legendonly; the `S/R:` row switches them on
 SR_TFS         = ("15m", "1h", "4h") # clustered per timeframe, in its own bar space
 ZONE_LOOKBACK  = 2000                # bars of history per layer, IN ITS OWN BARS
-ZONES_LEFT     = 10                  # bars either side a pivot needs to confirm
-ZONES_RIGHT    = 10
-SR_CLUSTER_PCT = 0.15                # two pivots this close are one zone
-SR_MIN_TOUCHES = 2
 SR_MAX_ZONES   = 40                  # per layer
+
+# THE KNOB — tuned per timeframe by experiments/sr_zone_search.py; each layer gets its own TF's
+# settings. "tight" = fewer, sharper levels | "normal" = the best | "loose" = more context.
+# None = the pre-2026-09-27 zones exactly (backup: notebooks/backups/2026-09-27_pre_sr_tuning/).
+# To pin one value, state it and it wins over the table:  SR_CLUSTER_PCT = 0.15, ZONES_LEFT = 10,
+# ZONES_RIGHT = 10, SR_MIN_TOUCHES = 2, SR_BREAK_BARS = 4, SR_ANCHOR = True
+SR_SENSITIVITY = "normal"
 
 # ── §5  THE CHART ────────────────────────────────────────────────────────────────────────────
 EMAS     = (20, 50, 100, 200)        # of TF
