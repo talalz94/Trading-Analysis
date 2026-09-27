@@ -19,6 +19,10 @@ self-contained folder under `experiments/results/<name>/`:
 python -m experiments.ema_mtf          # best multi-timeframe EMA combination
 python -m experiments.session_timing   # best market session / time of day
 python -m experiments.exit_design      # best stop-loss % and take-profit R
+python -m experiments.sr_zone_search   # S/R zone settings per timeframe (~8 min); the
+                                       #   presets it picks ARE quant.indicators.SR_TUNED --
+                                       #   a test fails if the two drift apart
+python -m experiments.sr_zone_search --picks-only   # re-select from the saved results
 ```
 Or from Python / a notebook:
 ```python

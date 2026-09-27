@@ -79,3 +79,26 @@ sig = Signals(entry_long=entry, exit_long=exit_)
 Add a numpy-native function to `quant/signals/primitives.py` (use the `_arr` resolver and the
 `_roll_all` cumulative-sum window helper for O(n) rolling conditions), export it in
 `quant/signals/__init__.py`, and add a unit test in `tests/test_signals.py`.
+
+## Support / resistance zones
+
+`add_sr_zones` (nearest zone per bar, for strategies) and `sr_zone_table` (the zone timeline, for
+charts) share one engine. Both default to the LEGACY behaviour so recorded research is unchanged;
+the corrections are opt-in:
+
+```python
+from quant.indicators import sr_params, sr_zone_table, add_sr_zones
+
+p = sr_params("1h", "normal")        # tight | normal | loose | None (legacy)
+zt = sr_zone_table(df_1h, p["left"], p["right"], cluster_pct=p["cluster_pct"],
+                   break_bars=p["break_bars"], anchor=p["anchor"])
+zt = zt[zt.touches >= p["min_touches"]]
+```
+
+- `anchor=True` — a zone's band may not exceed `cluster_pct` (the legacy one crept).
+- `break_bars=N` — N closes beyond retire a zone; a close back resets the count.
+- The new path evicts the zone farthest from price and gives every zone a unique id.
+
+**What the zones are good for:** they mark AREAS where price turns. Against the same zones moved
+1-3 ATR they carry no information (docs/WHAT_WORKS.md), so do not treat the line as a precise level.
+The presets choose how MANY lines you see, not how good they are.

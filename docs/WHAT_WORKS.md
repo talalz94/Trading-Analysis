@@ -61,6 +61,61 @@ which is why including the chart's own timeframe turns any gap veto into a const
 filter — it blocked all 8 trades. Any rule built on FVGs has to start by getting the population
 down: `min_size_atr >= 0.5` (above the median) and coarser timeframes only.
 
+## S/R ZONES (2026-09-27) — they mark areas, not levels; tuned for clarity, not edge
+
+`experiments/sr_zone_search.py`: 288 settings (pivot width, cluster %, min touches, break
+retirement, anchoring) x 5m / 15m / 1h / 4h x BTCUSDT's 9 standard windows, 2022-2026. Selected
+on 2022H1-2024H1, **reported on 2024H2-2026H1**, which the selection never saw.
+
+A **test** is price returning to a live zone after moving at least 1 ATR away; it **holds** if it
+closes 1 ATR back on the side it came from before closing 1 ATR through. The hold rate means
+nothing alone — any level in a driftless market holds about half the time — so it is read
+against two nulls:
+
+| | 5m | 15m | 1h | 4h |
+|---|---|---|---|---|
+| train -> forward rank correlation | **+0.81** | **+0.66** | +0.02 | +0.16 |
+| settings beating **shuffled bars** in every window | **67** of 282 | **22** of 247 | 0 of 138 | 0 of 23 |
+| ...expected by chance | 0.55 | 0.48 | 0.27 | 0.04 |
+| mean forward edge vs the **same zones moved 1-3 ATR** | **-0.015** | **-0.022** | **-0.012** | -0.009 |
+
+**Against shuffled bars the detector finds something real on 5m and 15m** — far more survivors
+than chance and a ranking that holds up out of sample. **Against the shift null it finds nothing:**
+a price 1-3 ATR from the zone holds as often as, or slightly more often than, the zone itself. The
+likely reading is that real BTC has short-term mean reversion that shuffled bars lack, and any
+nearby level captures it. **A zone marks an area where price turns; the exact line carries no
+information.** Do not trade the line as a precise level.
+
+**What that did to the tuning.** Ranking every setting on edge picked degenerate ones — 15m's
+"best" drew 0.5 lines and went negative forward. So `SR_SENSITIVITY` is a **clarity dial**: each
+level is a band of lines on screen (tight 2-4, normal 4-8, loose 8-16 within 20 ATR of price) and
+edge only breaks ties inside it. On 1h and 4h the tie-break is noise (rank corr +0.02 / +0.16):
+any setting in a band is as good as any other there.
+
+| lines drawn near price | 5m | 15m | 1h | 4h |
+|---|---|---|---|---|
+| old defaults | 18.3 | 21.1 | 17.2 | 8.3 |
+| `normal` | **5.5** | **4.8** | **4.3** | **4.2** |
+
+On notebook 21's chart that is **~52 S/R lines on screen at any moment down to ~7**, with no
+measurable change in how often price reacts at them (every forward edge within +-0.03, a hold-rate
+standard error being ~0.02).
+
+**Three things measured along the way:**
+- **Anchoring** (a zone may not be wider than `cluster_pct`) moves edge by +-0.003 on every
+  timeframe — noise. It is a correctness fix at no cost, and every preset uses it.
+- **Retiring broken zones costs reaction on 5m and 15m** (forward edge +0.017 with no retirement
+  against -0.008 to -0.020 with it on 5m; +0.013 against -0.019 to -0.036 on 15m). Broken levels
+  keep acting as levels — role reversal. So the table does not force retirement there; `normal`
+  gets its clarity from tighter clusters instead. `SR_BREAK_BARS = 4` forces it, at that measured
+  cost. On 1h and 4h it runs the other way (+0.029 and +0.073 at `break_bars = 8`), which is why
+  their presets do retire — but those two rankings are noise, so read that as "no harm" at most.
+- **The legacy eviction rule was wrong**: it dropped the least-touched zone, so on a trending
+  instrument old strong levels held every slot. BTC 4h, 2022-26, ended with 40 live zones a median
+  67% from price and 1 within 5%. The corrected engine drops the zone farthest from price.
+
+---
+
 ---
 
 ## The one-paragraph answer
@@ -119,6 +174,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Candlestick patterns** (62, incl. every classic reversal) | x no directional edge | Hit rate **50.1-50.5%**, NEGATIVE excess over a null that preserves their exact candle shapes and destroys only the order. Several INVERT (`three_inside_down` -0.57, `hanging_man` -0.42). Only `marubozu_bull` is consistent, and it is a momentum bar |
 | **Chart patterns as a directional trade** (19: double/triple tops, H&S, wedges, triangles, flags) | x **settled: no directional edge** | Re-measured on the causal detector against a shuffled null that the metric handles correctly (null scores +0.011, 51.0% of cells positive). Median hit rate **0.480 real vs 0.500 null** — real data is WORSE than shuffled — and the real hit rate exceeds 50% in **1 of 9** windows. Paired per window, **0 of 13** patterns beat their own null in >=8 of 9 (chance 0.3). `chart_short_rr8` fell from 8 of 9 windows to **5 of 9**, matching the metronome; trim-top-K takes every configuration to about -1.0 after 5 trades; no bootstrap lower bound is positive in any window. The monotonic target ladder is gone |
 | **Trendline breaks** (support/resistance, 144 settings x 3 TFs x 2 instruments x 9 windows) | x no directional edge | Hit rate above 0.50 in only **36% of 102 cells** — *below* the 50% chance rate — with a median of exactly **0.5000**. 56 of 102 cells beat their shuffled null (55%, chance 50%); positive AND consistent in >=8 of 9 windows: **2, against a chance expectation of 2.0**. Worst on 5m (22.5% of cells above a coin flip). The multi-timeframe test is **INCONCLUSIVE, not negative** — a higher-timeframe line is live on only 3-22% of bars, so classifying lower-timeframe breaks by it produced 5 classified events against 1,705 unclassified |
+| **S/R zones as precise levels** (288 settings x 4 TFs x 9 windows) | ✗ no level-specific edge | Beat shuffled bars on 5m (67 survivors vs 0.55) but NOT the same zones moved 1-3 ATR (mean forward edge -0.015 5m, -0.022 15m): a nearby price holds as well. Zones mark areas. Retiring broken zones measurably LOWERS reaction on 5m/15m (role reversal) |
 | **Consecutive-loss lockouts / daily loss caps** | ✗ ruled out analytically | Trade outcomes are **independent** (all autocorrelations inside ±0.027, `P(loss\|prev loss) − P(loss)` ≤ 0.011 and sign-flipping). Caps made expectancy *worse*: −0.023 → −0.057 |
 
 ## ~ What genuinely helps, but is not an edge
