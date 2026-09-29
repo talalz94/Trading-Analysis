@@ -47,6 +47,7 @@ R_ALT_EXIT = 5
 R_TIME = 6
 R_TP_MOVED = 7     # closed on a target that had been MOVED CLOSER (tp_move_*)
 R_REF_TARGET = 8   # closed on the per-trade level read from a column at entry (tp_ref_*)
+R_TP_DECAY = 9     # closed on a target that had SHRUNK with time (rule_decay_*)
 
 _TINY = 1e-12
 
@@ -167,6 +168,7 @@ def run_kernel(
     leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
     sl_ref_long, sl_ref_short,
     tp_ref_long, tp_ref_short,
+    rule_decay_every, rule_decay_cut, rule_close_after, rule_smove_after, rule_smove_by,
     exit_arm_long, exit_arm_short, exit_alt_long, exit_alt_short, alt_exit_enabled, alt_replace_tp,
     alt_arm_on_tp, arm_touch_n, arm_wrong_m, alt_min_pct, session_id,
     tp_modes, tp_values, tp_close_pcts, tp_move_modes, tp_move_values, n_tp,
@@ -179,6 +181,7 @@ def run_kernel(
     spread, commission_per_lot,
     allow_rule_close, intrabar_stop_first, daily_loss_limit, max_bars_in_trade,
     tp_ref_on=0, tp_move_to=0.0, tp_move_near=0.0, tp_move_back=0.0, tp_move_after=0,
+    rule_decay_on=0, rule_close_on=0, rule_smove_on=0, rule_smove_if_profit=1,
 ):
     # Per-rule ("leg") exits: when n_legs > 1 each open trade remembers which rule opened it
     # (o_leg) and closes on THAT rule's exit column (exit_legs_*[leg, i]). When n_legs == 1 the
@@ -220,6 +223,24 @@ def run_kernel(
     # target, the trade closes at that close. Either way the reason is `tp_moved`, and a target that
     # later fills after being moved is `tp_moved` too, so the rule's trades can be told apart.
     # Rungs that close nothing (breakeven moves) are left where they are. 0 skips it all.
+    #
+    # PER-TRADE TIME RULES, each read from its array AT THE TRADE'S ENTRY BAR (<= 0 or NaN = off for
+    # that trade), so one run can hold a different setting per trade -- e.g. by the timeframe of the
+    # line that fired it. All judged on the bar's close, applied from the next bar:
+    #   rule_close_after  bars held -> closed at that close, whatever it is doing (reason time_stop)
+    #   rule_decay_every / rule_decay_cut  every that many bars held, the target loses that fraction
+    #                     of its ORIGINAL distance (0.02 a day for 5 days = 10% closer), never past
+    #                     entry. Already past the new target -> closed at that close (tp_decayed)
+    #   rule_smove_after / rule_smove_by  after that many bars the stop moves that fraction of the
+    #                     original risk toward profit (1.0 = breakeven), once, and never backwards.
+    #                     With rule_smove_if_profit it waits for the first close in profit. A stop
+    #                     already beyond the close closes the trade there (stop_loss).
+    # A moved target (tp_move_*) and a decayed one combine as the CLOSER of the two. Each flag at 0
+    # skips its work entirely.
+    #
+    # Stop moves are recorded per trade in t_stop_by: 1 = a ladder rung moved it (breakeven, or the
+    # `risk_pct` rungs that express "at N% of the way, move the stop M% of the risk"), 2 = the time
+    # rule. It is output only; it changes no fill.
     #
     # `daily_loss_limit` > 0 stops NEW entries for the rest of a session once that session's realised
     # loss reaches the limit (a fraction of the equity the session opened with). `session_id` labels
@@ -265,6 +286,17 @@ def run_kernel(
     t_move_i = np.full(n, -1, np.int64)   # bar the target was moved on, -1 = never
     t_move_px = np.full(n, np.nan)        # where it was moved to
     t_ref = np.full(n, np.nan)            # the second target the trade carried
+    # per-TRADE state, indexed by trade number k (never compacted, so no slot bookkeeping)
+    t_dec_every = np.zeros(n, np.int64)
+    t_dec_cut = np.zeros(n, np.float64)
+    t_close_after = np.zeros(n, np.int64)
+    t_sm_after = np.zeros(n, np.int64)
+    t_sm_by = np.zeros(n, np.float64)
+    t_sm_done = np.zeros(n, np.int8)
+    t_fd = np.ones(n, np.float64)         # target factor from decay (1 = untouched)
+    t_fm = np.ones(n, np.float64)         # target factor from tp_move
+    t_tp_orig = np.full((n, tp_modes.shape[0]), np.nan)   # each ladder level as set at entry
+    t_stop_by = np.zeros(n, np.int8)      # 1 = a ladder rung moved the stop, 2 = the time rule
 
     equity_curve = np.empty(n, np.float64)
     pos_count = np.zeros(n, np.int64)
@@ -493,22 +525,35 @@ def run_kernel(
                                 newstop = o_entry_px[j]
                             elif mvmode == 2:
                                 newstop = o_entry_px[j] * (1.0 + side * tp_move_values[kk] / 100.0)
+                            elif mvmode == 4:
+                                # risk_pct: move the stop this % of the ORIGINAL risk toward profit
+                                rk = abs(o_entry_px[j] - t_stop[k])
+                                newstop = o_entry_px[j] - side * rk * (1.0 - tp_move_values[kk] / 100.0)
                             else:
                                 newstop = o_entry_px[j] + side * tp_move_values[kk]
                             if np.isnan(o_stop[j]):
                                 o_stop[j] = newstop
+                                t_stop_by[k] = 1
                             elif side == 1:
                                 if newstop > o_stop[j]:
                                     o_stop[j] = newstop
+                                    t_stop_by[k] = 1
                             else:
                                 if newstop < o_stop[j]:
                                     o_stop[j] = newstop
+                                    t_stop_by[k] = 1
 
                         if qc > _TINY and o_qty[j] <= _TINY:
                             t_exit_i[k] = i
                             t_exit_px[k] = exit_px
                             t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
-                            t_reason[k] = R_TP_MOVED if o_moved[j] == 1 else R_TAKE_PROFIT
+                            # the reason names whichever change put the target where it filled
+                            if t_fd[k] < t_fm[k]:
+                                t_reason[k] = R_TP_DECAY
+                            elif o_moved[j] == 1:
+                                t_reason[k] = R_TP_MOVED
+                            else:
+                                t_reason[k] = R_TAKE_PROFIT
                             closed = True
                             break
 
@@ -692,14 +737,19 @@ def run_kernel(
                         if go:
                             o_moved[j] = 1
                             t_move_i[k] = i
+                            t_fm[k] = tp_move_to
+                            f = tp_move_to if tp_move_to < t_fd[k] else t_fd[k]
+                            far = 0.0
                             for kk in range(n_tp):
                                 if ((o_tp_done[j] >> kk) & 1) or tp_close_pcts[kk] <= 0.0:
                                     continue
-                                tpx = o_tp_px[j, kk]
-                                if tpx == tpx:
-                                    o_tp_px[j, kk] = epx + side * tp_move_to * abs(tpx - epx)
+                                tpo = t_tp_orig[k, kk]
+                                if tpo == tpo:
+                                    o_tp_px[j, kk] = epx + side * f * abs(tpo - epx)
                                     t_move_px[k] = o_tp_px[j, kk]
-                            if now >= tp_move_to:   # already past the new target: take it now
+                                    if abs(tpo - epx) > far:
+                                        far = abs(tpo - epx)
+                            if side * (px - epx) >= f * far:   # already past it: take it now
                                 q = o_qty[j]
                                 exit_px = _fill_px(px, side, slip, spread, 0)
                                 gross = side * (exit_px - epx) * q
@@ -713,6 +763,82 @@ def run_kernel(
                                 t_reason[k] = R_TP_MOVED
                                 shut = True
                 if not shut:
+                    o_tr[w] = o_tr[j]
+                    o_side[w] = o_side[j]
+                    o_entry_px[w] = o_entry_px[j]
+                    o_qty0[w] = o_qty0[j]
+                    o_qty[w] = o_qty[j]
+                    o_stop[w] = o_stop[j]
+                    o_extreme[w] = o_extreme[j]
+                    o_tp_done[w] = o_tp_done[j]
+                    o_tp_px[w, :] = o_tp_px[j, :]
+                    o_leg[w] = o_leg[j]
+                    o_armed[w] = o_armed[j]
+                    o_touch[w] = o_touch[j]
+                    o_wrong[w] = o_wrong[j]
+                    o_best[w] = o_best[j]
+                    o_moved[w] = o_moved[j]
+                    o_ref[w] = o_ref[j]
+                    w += 1
+            o_cnt = w
+
+        # 3d) PER-TRADE TIME RULES -- hard close, target decay, stop move by time
+        if rule_close_on == 1 or rule_decay_on == 1 or rule_smove_on == 1:
+            w = 0
+            for j in range(o_cnt):
+                side = o_side[j]
+                k = o_tr[j]
+                epx = o_entry_px[j]
+                held = i - t_entry_i[k]
+                shut = False
+                why = R_TIME
+                if t_close_after[k] > 0 and held >= t_close_after[k]:
+                    shut = True
+                if (not shut) and t_dec_every[k] > 0:
+                    fd = 1.0 - t_dec_cut[k] * (held // t_dec_every[k])
+                    if fd < 0.0:
+                        fd = 0.0
+                    if fd < t_fd[k]:
+                        t_fd[k] = fd
+                        f = fd if fd < t_fm[k] else t_fm[k]
+                        for kk in range(n_tp):
+                            if ((o_tp_done[j] >> kk) & 1) or tp_close_pcts[kk] <= 0.0:
+                                continue
+                            tpo = t_tp_orig[k, kk]
+                            if tpo == tpo:
+                                lvl = epx + side * f * abs(tpo - epx)
+                                o_tp_px[j, kk] = lvl
+                                if side * (px - lvl) >= 0.0:
+                                    shut = True
+                                    why = R_TP_DECAY
+                if (not shut) and t_sm_after[k] > 0 and t_sm_done[k] == 0 and \
+                        held >= t_sm_after[k]:
+                    if rule_smove_if_profit == 0 or side * (px - epx) > 0.0:
+                        t_sm_done[k] = 1
+                        rk = abs(epx - t_stop[k])
+                        if rk > 0.0:
+                            ns = epx - side * rk * (1.0 - t_sm_by[k])
+                            better = np.isnan(o_stop[j]) or \
+                                ((ns > o_stop[j]) if side == 1 else (ns < o_stop[j]))
+                            if better:
+                                o_stop[j] = ns
+                                t_stop_by[k] = 2
+                                if side * (px - ns) <= 0.0:   # already through it: out at the close
+                                    shut = True
+                                    why = R_STOP
+                if shut:
+                    q = o_qty[j]
+                    exit_px = _fill_px(px, side, slip, spread, 0)
+                    gross = side * (exit_px - epx) * q
+                    ef = _costs(exit_px, q, fee, commission_per_lot, contract_size)
+                    cash += gross - ef
+                    t_gross[k] += gross
+                    t_exit_fee[k] += ef
+                    t_exit_i[k] = i
+                    t_exit_px[k] = exit_px
+                    t_pnl[k] = t_gross[k] - t_entry_fee[k] - t_exit_fee[k]
+                    t_reason[k] = why
+                else:
                     o_tr[w] = o_tr[j]
                     o_side[w] = o_side[j]
                     o_entry_px[w] = o_entry_px[j]
@@ -851,6 +977,22 @@ def run_kernel(
                         else:
                             for kk in range(o_tp_px.shape[1]):
                                 o_tp_px[o_cnt, kk] = np.nan
+                        for kk in range(o_tp_px.shape[1]):
+                            t_tp_orig[k, kk] = o_tp_px[o_cnt, kk]
+                        if rule_decay_on == 1:
+                            ev, cu = rule_decay_every[i], rule_decay_cut[i]
+                            if ev == ev and cu == cu and ev >= 1.0 and cu > 0.0:
+                                t_dec_every[k] = int(ev)
+                                t_dec_cut[k] = cu
+                        if rule_close_on == 1:
+                            ca = rule_close_after[i]
+                            if ca == ca and ca >= 1.0:
+                                t_close_after[k] = int(ca)
+                        if rule_smove_on == 1:
+                            sa, sb = rule_smove_after[i], rule_smove_by[i]
+                            if sa == sa and sb == sb and sa >= 1.0:
+                                t_sm_after[k] = int(sa)
+                                t_sm_by[k] = sb
                         o_cnt += 1
 
         pos_count[i] = o_cnt
@@ -886,5 +1028,5 @@ def run_kernel(
         t_gross[:n_tr], t_entry_fee[:n_tr], t_exit_fee[:n_tr],
         t_pnl[:n_tr], t_reason[:n_tr],
         equity_curve, pos_count, cash, t_stop[:n_tr],
-        t_move_i[:n_tr], t_move_px[:n_tr], t_ref[:n_tr],
+        t_move_i[:n_tr], t_move_px[:n_tr], t_ref[:n_tr], t_stop_by[:n_tr],
     )

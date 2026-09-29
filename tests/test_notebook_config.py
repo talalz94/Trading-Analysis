@@ -328,51 +328,28 @@ def test_notebook_21_states_no_setting_and_defines_no_function():
     assert not bad, bad
 
 
-def test_notebook_21_config_is_20s_plus_the_cancel_switch():
-    """21 exists to isolate ONE rule. If the trading settings drift from 20 the comparison stops
-    meaning anything, exactly as it would between 19 and 20."""
-    a, b = {}, {}
-    exec(compile(CFG20.read_text(encoding="utf-8"), str(CFG20), "exec"), a)
+def test_notebook_21_config_has_what_the_lab_reads():
+    """Notebook 21's config is the USER's working file -- no longer a copy of 20 held equal to it.
+
+    It used to be, by a test that compared every value against notebook 20. That test broke on
+    four of the owner's own edits in two days (END, FVG_MAX_AGE_BARS, USE_FVG_EXIT, LINE_TFS), and
+    the drift it guarded against -- a build script re-imposing values -- can no longer happen:
+    notebooks read their config and no script writes one. What is still worth holding is that the
+    file loads and carries every setting the lab reads directly, and the value types it needs.
+    """
+    b = {}
     exec(compile(CFG21.read_text(encoding="utf-8"), str(CFG21), "exec"), b)
-    ka = {k: v for k, v in a.items() if k.isupper()}
-    kb = {k: v for k, v in b.items() if k.isupper()}
-    # 21's own additions: the confirmation's switches, the missed-setup layer, the S/R knob, and
-    # the two optional exits with the A/B that compares them, the exit tags, and which timeframes
-    # may trade
-    assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
-                                 "SHOW_REJECTED", "SR_SENSITIVITY",
-                                 "USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT",
-                                 "COMPARE", "EXIT_LABELS", "TRADE_TFS"}, \
-        sorted(set(kb) - set(ka))
-    # the exit switches are the USER's to flip (they switched the FVG exit on, 2026-09-29) -- this
-    # test guards against drift by a build script, not against the notebook's owner
-    assert isinstance(kb["USE_TP_MOVE"], bool) and isinstance(kb["USE_FVG_EXIT"], bool)
-    # THE WINDOW IS NOT A RULE. What 21 must share with 20 is WHAT gets traded, so that the
-    # confirmation is the only difference in the strategy. WHEN is the user's to set per notebook,
-    # and the A/B that matters runs inside 21 via variant(), where both arms share 21's own window.
-    # Pinning END here failed the moment the user widened 21's window, which is not a drift.
-    when = {"VIEW_START", "END", "WARMUP_START", "AS_OF"}
-    # AND THE S/R VALUES THE KNOB NOW OWNS. 21 states SR_SENSITIVITY instead of these four, because
-    # an explicit value wins over the tuned table -- keeping them would have pinned 21 to the old
-    # zones. They are in notebooks/backups/2026-09-27_pre_sr_tuning/. S/R is drawn, never traded,
-    # in these notebooks, so this cannot touch the comparison 21 exists to make.
-    knob = {"ZONES_LEFT", "ZONES_RIGHT", "SR_CLUSTER_PCT", "SR_MIN_TOUCHES"}
-    assert not (knob & set(kb)), "21 must not pin a value the tuned table owns"
-    # AND VALUES THE USER CHANGED THEMSELVES in 21, which is theirs to do -- this test guards
-    # against a BUILD SCRIPT or an assistant drifting 21 away from 20, not against its owner.
-    # 2026-09-27: FVG_MAX_AGE_BARS 500 -> 1000 (gaps only; the veto that reads them is off).
-    user = {"FVG_MAX_AGE_BARS"}          # TL_CONFIRM_N is already an expected difference
-    drifted = sorted(k for k in ka if k not in when | knob | user
-                     and repr(ka[k]) != repr(kb.get(k)))
-    assert drifted == ["TL_CONFIRM_N", "TRENDLINE"], (
-        f"only the confirmation and the line's break rule may differ, got {drifted}")
-    assert kb["TL_CONFIRM_N"], "notebook 21 is pointless with the confirmation off"
-    assert kb["TL_CONFIRM_CANCEL"] is True
-    # the two belong together: requiring a break to prove itself while the line still dies on the
-    # first poke throws away the better signal the same line gives later -- the 15m S5 case
-    assert kb["TRENDLINE"].get("break_sustain_bars", 0) > 0, (
-        "a confirmation without break_sustain_bars retires lines on breaks it just rejected")
-    assert {k: v for k, v in kb["TRENDLINE"].items() if k != "break_sustain_bars"} == ka["TRENDLINE"]
+    need = ["SYMBOL", "TF", "VIEW_START", "END", "WARMUP_START", "LINE_TFS", "TRENDLINE",
+            "TL_CLOSE_N", "TL_FULL_M", "TL_TOUCH_K", "TL_DIR_N", "TL_DIR_SRC", "TL_DIR_FULL_N",
+            "TL_COMBINE", "TL_TOL_ATR", "TL_EXTEND", "ENTRY_RULES", "STOP_N", "STOP_BUFFER_PCT",
+            "BE_AT_RR", "TP_RR", "SEC_TOUCH_N", "SEC_WRONG_M", "SEC_OPP_N", "SEC_MIN_PCT",
+            "SEC_REPLACE_TP", "COSTS", "FVG_MITIGATION", "FVG_MIN_SIZE_ATR", "FVG_VETO_MODE",
+            "EMAS", "MTF_EMAS", "COMPARE"]
+    missing = [k for k in need if k not in b]
+    assert not missing, f"nb21_config.py lacks {missing}"
+    for k in [k for k in b if k.startswith("USE_")]:
+        assert isinstance(b[k], bool), f"{k} is a switch and must be True or False"
+    assert isinstance(b["COMPARE"], dict)
 
 
 def test_notebook_21_config_is_not_an_essay():
@@ -381,7 +358,9 @@ def test_notebook_21_config_is_not_an_essay():
     text = CFG21.read_text(encoding="utf-8")
     lines = text.splitlines()
     comment = sum(1 for l in lines if l.lstrip().startswith("#"))
-    assert len(lines) < 160, f"{len(lines)} lines"
+    # 160 until 2026-09-29, when four exit rules arrived as settings the user asked for; the
+    # comment ratio below is the guard against prose, this one only against sprawl
+    assert len(lines) < 200, f"{len(lines)} lines"
     assert comment / max(len(lines), 1) < 0.35, f"{comment} of {len(lines)} lines are comment"
 
 

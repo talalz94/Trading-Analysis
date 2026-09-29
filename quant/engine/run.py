@@ -16,7 +16,7 @@ _log = get_logger("quant.engine")
 
 REASON_NAMES = {0: "signal", 1: "stop_loss", 2: "take_profit", 3: "forced_close_end",
                 4: "margin_call", 5: "alt_exit", 6: "time_stop", 7: "tp_moved",
-                8: "ref_target"}
+                8: "ref_target", 9: "tp_decayed"}
 
 
 def _ref_arr(df, col, n):
@@ -123,6 +123,9 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
     sl_ref_short = _ref_arr(df, cfg.sl_ref_short_col, n)
     tp_ref_long = _ref_arr(df, cfg.tp_ref_long_col, n)
     tp_ref_short = _ref_arr(df, cfg.tp_ref_short_col, n)
+    rules = [_ref_arr(df, c, n) for c in (cfg.tp_decay_every_col, cfg.tp_decay_cut_col,
+                                          cfg.close_after_col, cfg.stop_time_after_col,
+                                          cfg.stop_time_move_col)]
     ell_i, els_i, exit_legs_long, exit_legs_short, n_legs = _leg_args(signals, xl, xs, n)
     (per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
      leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short) = _leg_stop_args(
@@ -136,7 +139,7 @@ def invoke_kernel(open_, high, low, close, el, xl, es, xs, cfg: BacktestConfig, 
         per_leg_stops, leg_sl_mode, leg_sl_value, leg_sl_buffer, leg_sl_maxrisk,
         leg_sl_fb_mode, leg_sl_fb_value, leg_sl_ref_long, leg_sl_ref_short,
         sl_ref_long, sl_ref_short,
-        tp_ref_long, tp_ref_short,
+        tp_ref_long, tp_ref_short, *rules,
         arm_l, arm_s, alt_l, alt_s, alt_on, alt_rep, alt_tp, arm_touch, arm_wrong, alt_min, sess,
         tp_modes, tp_values, tp_close, tp_mv_modes, tp_mv_values, n_tp,
         **cfg.scalar_args(),
@@ -177,7 +180,7 @@ def run_backtest(
     (t_side, t_entry_i, t_exit_i, t_entry_px, t_exit_px, t_qty,
      t_gross, t_entry_fee, t_exit_fee, t_pnl, t_reason,
      equity_curve, pos_count, final_cash, t_stop,
-     t_move_i, t_move_px, t_ref) = invoke_kernel(
+     t_move_i, t_move_px, t_ref, t_stop_by) = invoke_kernel(
         open_, high, low, close, el, xl, es, xs, cfg, df=df, signals=signals
     )
     elapsed = time.perf_counter() - t0
@@ -200,6 +203,12 @@ def run_backtest(
         trades["target_moved_to"] = t_move_px
     if (cfg.tp_ref_long_col or cfg.tp_ref_short_col) and len(trades):
         trades["ref_target"] = t_ref
+    # WHO MOVED THE STOP, when a rule that can move it is on: "step" (a risk_pct rung, or a
+    # breakeven rung), "time" (the time rule), "" (never moved). A stop-out at a moved stop reads
+    # like a broken chart otherwise -- its exit sits nowhere near the stop drawn at entry.
+    moves = cfg.stop_time_after_col or any(tp.move_stop_mode == "risk_pct" for tp in cfg._tp_list())
+    if moves and len(trades):
+        trades["stop_moved_by"] = pd.Series(t_stop_by).map({0: "", 1: "step", 2: "time"}).to_numpy()
 
     eq = pd.DataFrame({"equity": equity_curve, "open_trades": pos_count})
     eq.insert(0, "t", t_series)   # direct Series assign preserves tz and is fast

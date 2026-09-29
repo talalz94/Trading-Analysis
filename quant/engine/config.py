@@ -15,7 +15,7 @@ import numpy as np
 _SL_MODES = {"none": 0, "entry_pct": 1, "price_abs": 2, "ref_col": 3}
 _TP_MODES = {"entry_pct": 1, "price_abs": 2, "rr": 3}
 _SIZING_MODES = {"cash": 0, "risk_pct_equity": 1, "risk_amount": 2, "lots": 3}
-_MOVE_MODES = {"none": 0, "breakeven": 1, "entry_pct": 2, "price_abs": 3}
+_MOVE_MODES = {"none": 0, "breakeven": 1, "entry_pct": 2, "price_abs": 3, "risk_pct": 4}
 _TRAIL_MODES = {"none": 0, "pct": 1, "price_abs": 2}
 _FALLBACK_MODES = {"entry_pct": 1, "price_abs": 2}
 
@@ -79,7 +79,8 @@ class TakeProfit:
 
     mode: 'entry_pct' | 'price_abs' | 'rr'
     close_pct: percent of the CURRENT remaining position to close at this level.
-    move_stop_mode: after this TP fills, move the stop ('none'|'breakeven'|'entry_pct'|'price_abs').
+    move_stop_mode: after this TP fills, move the stop ('none'|'breakeven'|'entry_pct'|'price_abs'|
+                    'risk_pct' = move_stop_value % of the ORIGINAL risk toward profit, 100 = breakeven).
 
     Note: TP price levels are computed ONCE at entry (rr uses the original stop distance). This is
     intentional and differs from the legacy simulator, which recomputed rr TPs each bar from the
@@ -175,6 +176,17 @@ class BacktestConfig:
     tp_move_after       ...or a LONG WAIT: this many bars held (0 = no time trigger).
                         Judged on the bar's close and applied from the next bar. Already past the
                         new target -> closed at that close. Reason 'tp_moved' either way.
+
+    ── Per-trade time rules: a COLUMN each, read at the trade's ENTRY bar (NaN / <= 0 = off) ─────
+    close_after_col     bars held -> closed at that bar's close, whatever it is doing ('time_stop')
+    tp_decay_every_col  every this many bars held, the target loses...
+    tp_decay_cut_col    ...this fraction of its ORIGINAL distance (0.02 = 2%). Already past the new
+                        target -> closed at that close ('tp_decayed'). The closer of a decayed and a
+                        moved target wins.
+    stop_time_after_col after this many bars held, the stop moves...
+    stop_time_move_col  ...this fraction of the original risk toward profit (1.0 = breakeven), once,
+                        never backwards. Beyond the close already -> closed there ('stop_loss').
+    stop_time_if_profit wait for the first close in profit before moving it
     """
     initial_cash: float = 10_000.0
     cash_per_trade: Optional[float] = None
@@ -234,6 +246,12 @@ class BacktestConfig:
     tp_move_near: float = 0.0        # near miss: best price reached this fraction of the way...
     tp_move_back: float = 0.0        # ...and the close gave back this fraction since
     tp_move_after: int = 0           # or: this many bars held
+    close_after_col: Optional[str] = None        # per-trade hard close, in bars
+    tp_decay_every_col: Optional[str] = None     # per-trade target decay: every N bars...
+    tp_decay_cut_col: Optional[str] = None       # ...cut this fraction of the original distance
+    stop_time_after_col: Optional[str] = None    # per-trade stop move after N bars...
+    stop_time_move_col: Optional[str] = None     # ...by this fraction of the risk (1 = breakeven)
+    stop_time_if_profit: bool = True             # only once a close is in profit
 
     def resolved_cash_per_trade(self) -> float:
         if self.cash_per_trade is not None:
@@ -301,4 +319,8 @@ class BacktestConfig:
             tp_move_near=float(self.tp_move_near),
             tp_move_back=float(self.tp_move_back),
             tp_move_after=int(self.tp_move_after),
+            rule_decay_on=1 if (self.tp_decay_every_col and self.tp_decay_cut_col) else 0,
+            rule_close_on=1 if self.close_after_col else 0,
+            rule_smove_on=1 if (self.stop_time_after_col and self.stop_time_move_col) else 0,
+            rule_smove_if_profit=1 if self.stop_time_if_profit else 0,
         )
