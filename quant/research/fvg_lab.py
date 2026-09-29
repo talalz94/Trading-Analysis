@@ -32,7 +32,7 @@ EXIT_KEYS = frozenset({"USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT"})
 # here: re-trading would silently keep the old frames. test_workspace.py parses the loader's source
 # and fails if it reads any of these.
 RETRADE_KEYS = EXIT_KEYS | frozenset({
-    "COSTS", "TRADE_LONG", "TRADE_SHORT", "RULES_COMBINE",
+    "COSTS", "TRADE_LONG", "TRADE_SHORT", "RULES_COMBINE", "TRADE_TFS",
     "STOP_N", "STOP_BUFFER_PCT", "BE_AT_RR", "TP_RR",
     "USE_RETEST_BAIL", "SEC_TOUCH_N", "SEC_WRONG_M", "SEC_OPP_N", "SEC_MIN_PCT", "SEC_REPLACE_TP",
     "TL_CLOSE_N", "TL_FULL_M", "TL_TOUCH_K", "TL_DIR_N", "TL_DIR_SRC", "TL_DIR_FULL_N",
@@ -294,8 +294,19 @@ def _trade(c, base) -> FvgLab:
     fvg_kwargs, end, src, warm = base["fvg_kwargs"], base["end"], base["src"], base["warm"]
 
     tf_names = {"": c.TF, **{f"{k}__": k for k in line_frames}}
+    # WHICH FITTED TIMEFRAMES MAY TRADE. Every timeframe in tf_names is fitted and drawn; TRADE_TFS
+    # picks the ones whose breaks become entries. None (a config that predates it) = all of them,
+    # which is exactly what every earlier notebook did -- the chart's own timeframe included, with
+    # no way to leave it out.
+    trade_tfs = _get(c, "TRADE_TFS", None)
+    if trade_tfs is not None:
+        unknown = sorted(set(trade_tfs) - set(tf_names.values()))
+        if unknown:
+            raise ValueError(f"TRADE_TFS names {unknown}, whose lines are not fitted: a timeframe "
+                             f"trades only if it is TF ({c.TF}) or in LINE_TFS {tuple(line_frames)}")
+    traded = tuple(p for p, tf in tf_names.items() if trade_tfs is None or tf in trade_tfs)
     params = dict(
-        tl_prefixes=tuple(tf_names), tl_tf_names=tf_names,
+        tl_prefixes=traded, tl_tf_names=tf_names,
         tl_close_n=c.TL_CLOSE_N, tl_full_m=c.TL_FULL_M, tl_touch_k=c.TL_TOUCH_K,
         tl_dir_n=c.TL_DIR_N, tl_dir_src=c.TL_DIR_SRC, tl_dir_full_n=c.TL_DIR_FULL_N,
         tl_extend=c.TL_EXTEND, tl_combine=c.TL_COMBINE, tl_tol_atr=c.TL_TOL_ATR,
