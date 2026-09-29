@@ -237,6 +237,20 @@ on, FVG exit on). Judged per trade, since each arm removes trades:
 5m-line trades on their own are the worst, consistently. Dropping them halves the trade count and
 leaves the rest no better or worse per trade. Nothing here turns the strategy positive.
 
+**Four time and stop rules** (2026-09-29, the user's settings then: 15m+1h+4h lines trading, FVG exit
+on; 546 trades, -0.111R per trade). The config's example values, one arm each:
+
+| rule | train dR | forward dR | forward quarters beaten | t |
+|---|---|---|---|---|
+| DECAY: target -2% of its distance every 24h | -3.7 | -0.5 | 2/9 | -0.69 |
+| STEP: at 50% of the way stop +50% of risk, at 80% to breakeven | +15.5 | -11.7 | 2/9 | 0.40 |
+| TSTOP: after 12h, on a close in profit, stop to breakeven | +5.4 | -31.2 | 3/9 | -1.26 |
+| HARD: close 15m-line trades after 48h | +16.6 | -18.8 | 2/9 | -0.15 |
+
+Train -> forward rank correlation -0.40: the ones that helped 2022-24 are the ones that hurt
+2024-26. **None beats noise.** Stop moves in particular convert more of the trades that would have
+reached 3R into breakeven exits than they rescue from the stop -- the breakeven-at-1R result again.
+
 ---
 
 ## The one-paragraph answer

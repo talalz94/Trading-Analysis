@@ -1957,3 +1957,31 @@ re-found in a new tool: any arm that REMOVES trades has to be read per trade.
 Two test slips worth not repeating: `"15m"` contains the text `"5m"` (split the label on "+"), and
 an assert message on its own line needs a backslash or parentheses.
 
+### Four per-trade time/stop rules, settable per line timeframe (2026-09-29)
+
+TP decay (every N hours the target loses x% of its ORIGINAL distance, linear: 2% a day for 5 days =
+10%), stop steps (at x% of the way to the target move the stop y% of the risk; 100 = breakeven),
+stop by time (after N hours, optionally on the first close in profit), and a hard close after N
+hours. The hour settings can be a dict by LINE timeframe.
+
+- **Per trade, not per bar.** fvg_lab works out, for every bar, which line would have fired a trade
+  there -- the COARSEST when several did, so "5m+15m" is a 15m trade -- and writes each rule's value
+  in BARS to a column; the engine reads it ONCE at the entry bar (`*_col` fields, like tp_ref).
+- **Kernel state lives in trade-indexed `t_*` arrays**, not the slot-indexed `o_*` ones, so none of
+  the four compaction blocks had to grow. `t_tp_orig` keeps each ladder level as set at entry, so a
+  moved target and a decayed one combine as the CLOSER of the two instead of compounding.
+- Stop steps needed no new mechanism: ladder rungs that close nothing, with a new move mode
+  `risk_pct`. `t_stop_by` records who moved the stop (1 rung, 2 time rule), surfaced as
+  `stop_moved_by`, so a stop-out at a moved stop is labelled SL·STEP / SL·TSTOP rather than reading
+  like a broken chart.
+- Found by a test: a fill on a DECAYED target was labelled plain `take_profit` -- the fill code knew
+  only moved targets. The reason now names whichever change was in force.
+- The user put "5m" (the chart's own timeframe) in LINE_TFS, which fitted it twice and would trade
+  every 5m break under two names; fvg_lab now drops TF from LINE_TFS.
+- **The notebook-21 "copy of 20" test is gone**, replaced by a check that the config carries what
+  the lab reads. It broke on four of the owner's edits in two days and guarded against a build
+  script re-imposing values, which can no longer happen. The config line cap went 160 -> 200; the
+  comment-ratio cap still stops prose.
+
+Verdict in docs/WHAT_WORKS.md: none of the four beats noise.
+
