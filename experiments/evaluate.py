@@ -137,11 +137,25 @@ class Evaluation:
             x = x.dropna().sort_values()
             return float(x.iloc[:-k].sum()) if len(x) > k else 0.0
 
+        # PER TRADE, beside the totals. An arm that REMOVES trades (a timeframe switched off, a
+        # filter) makes a losing strategy's total less negative even when it removes them at
+        # random -- trading less of a loser loses less. Such an arm is judged per trade, the way
+        # the FVG veto was. Found when "1h only" scored t 2.79 on total R with the SAME R per trade.
+        pq = (self.trades[self.trades.R.notna()].groupby(["run", "quarter"]).R.mean()
+              .unstack("quarter").reindex(columns=self.train + self.forward))
+
+        def per_trade(x, qs):
+            x = x[x.quarter.isin(qs) & x.R.notna()]
+            return float(x.R.mean()) if len(x) else np.nan
+
         rows = []
         for arm in d.index:
             tr, fw, all_ = d.loc[arm, self.train], d.loc[arm, self.forward], d.loc[arm]
             a = self.trades[self.trades.run == arm]
             sd = all_.std(ddof=1)
+            dq = (pq.loc[arm] - pq.loc[AS_SET]).dropna() if arm in pq.index else pd.Series()
+            sq = dq.std(ddof=1) if len(dq) > 1 else np.nan
+            n_a, n_b = int(a.R.notna().sum()), int(base.R.notna().sum())
             rows.append({
                 "arm": arm,
                 "train dR": round(tr.sum(), 1),
@@ -151,7 +165,11 @@ class Evaluation:
                 "fwd trim3": round(trim(a[a.quarter.isin(self.forward)].R)
                                    - trim(base[base.quarter.isin(self.forward)].R), 1),
                 "t": round(all_.mean() / (sd / np.sqrt(len(all_))), 2) if sd > 0 else np.nan,
-                "trades": int(a.R.notna().sum()) - int(base.R.notna().sum()),
+                "trades": n_a - n_b,
+                "trades %": round(100 * (n_a - n_b) / max(n_b, 1)),
+                "train dR/trade": round(per_trade(a, self.train) - per_trade(base, self.train), 3),
+                "fwd dR/trade": round(per_trade(a, self.forward) - per_trade(base, self.forward), 3),
+                "t/trade": round(dq.mean() / (sq / np.sqrt(len(dq))), 2) if sq and sq > 0 else np.nan,
             })
         out = pd.DataFrame(rows)
         rc = (float(out["train dR"].rank().corr(out["forward dR"].rank()))
@@ -166,13 +184,20 @@ class Evaluation:
         if not len(a):
             return "no arms"
         rc = a.attrs.get("rank_corr", np.nan)
-        best = a["t"].abs().max()
+        # an arm that changes the trade count by more than a fifth is judged per trade
+        filt = a["trades %"].abs() > 20
+        tt = a["t"].where(~filt, a["t/trade"])
+        best = tt.abs().max()
         lines = [f"{len(a)} arms over {len(self.train) + len(self.forward)} quarters.",
                  ("train -> forward rank correlation: n/a (needs 3 or more arms)" if rc != rc
                   else f"train -> forward rank correlation: {rc:+.2f}"
                   + ("  (the train ranking did not survive)" if not rc > 0.3 else "")),
                  f"largest |t|: {best:.2f}" + ("  -- below 2.5, nothing here beats noise"
                                                if best < 2.5 else "  -- worth a closer look")]
+        if filt.any():
+            lines.append(f"judged PER TRADE, since they change how many trades are taken: "
+                         f"{list(a.arm[filt])} -- a lower total from trading less of a losing "
+                         f"strategy is not an improvement")
         if self.same_as_set:
             lines.append(f"identical to the strategy as set, so not run: {self.same_as_set}")
         return "\n".join(lines)
