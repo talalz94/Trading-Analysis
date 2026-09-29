@@ -157,7 +157,8 @@ class _BeLadder(TPMethod):
     """
     name, version = "be_ladder", "v1"
     description = "breakeven (and optional partial) at N R, then a final target and/or a trail"
-    default_params = {"be_at_rr": 1.0, "be_scale_pct": 0.0, "tp_rr": 3.0, "be_trail_pct": 0.0}
+    default_params = {"be_at_rr": 1.0, "be_scale_pct": 0.0, "tp_rr": 3.0, "be_trail_pct": 0.0,
+                      "stop_steps": ()}
 
     def apply(self, cfg: BacktestConfig, p: dict) -> BacktestConfig:
         tps = []
@@ -165,7 +166,17 @@ class _BeLadder(TPMethod):
         if be > 0:
             tps.append(TakeProfit(mode="rr", value=be, close_pct=float(p["be_scale_pct"]),
                                   move_stop_mode="breakeven"))
+        # STOP STEPS: (at R, move %) -- when price reaches `at` R, move the stop `move`% of the
+        # original risk toward profit (100 = breakeven, 150 = lock half an R). Rungs that close
+        # nothing, so no target is touched, and the stop only ever ratchets forward.
+        for at, move in (p.get("stop_steps") or ()):
+            tps.append(TakeProfit(mode="rr", value=float(at), close_pct=0.0,
+                                  move_stop_mode="risk_pct", move_stop_value=float(move)))
         tps.append(TakeProfit(mode="rr", value=float(p["tp_rr"]), close_pct=100.0))
+        from ..engine.config import MAX_TP
+        if len(tps) > MAX_TP:
+            raise ValueError(f"{len(tps)} ladder levels: breakeven, {len(tps) - 2} stop steps and "
+                             f"the target; the engine holds {MAX_TP}")
         cfg = dataclasses.replace(cfg, take_profits=tuple(tps))
         trail = float(p.get("be_trail_pct") or 0.0)
         if trail > 0:

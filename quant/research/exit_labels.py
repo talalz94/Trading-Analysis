@@ -9,6 +9,9 @@ bars and the settings, and says it in words:
     TP·MOVED   MOVED — target moved 3R -> 1.8R at 06-09 16:55: near miss, got 92% of the way,
                then a close gave back 43%
     TP·FVG     FVG — filled the 15m gap 60,812-61,256 to its middle (61,034), 0.5R short of 3R
+    TP·DECAY   DECAY — the target had shrunk to 2.7R after 5 days (2% every 24h, 15m line)
+    SL·TSTOP   TSTOP — the stop moved 100% of the risk after 12h, once in profit; out at +0.0R
+    HARD       HARD — closed after 12h (5m line)
 
 Each rule's TAG comes from its own settings (`TP_MOVE["tag"]`, `FVG_EXIT["tag"]`), so what the chart
 says is decided in the config. Everything is recomputed from what the trade and the bars already
@@ -48,6 +51,21 @@ def label_exits(trades: pd.DataFrame, D: pd.DataFrame, cfg: Any,
     mv = _get(cfg, "TP_MOVE", None) or {}
     fx = _get(cfg, "FVG_EXIT", None) or {}
     mtag, ftag = mv.get("tag", "MOVED"), fx.get("tag", "FVG")
+    dc = _get(cfg, "TP_DECAY", None) or {}
+    sp = _get(cfg, "STOP_STEPS", None) or {}
+    st = _get(cfg, "STOP_TIME", None) or {}
+    hc = _get(cfg, "HARD_CLOSE", None) or {}
+    from ..data.timeframe import tf_minutes
+    from .fvg_lab import per_tf
+    bar_h = tf_minutes(cfg.TF) / 60.0 if hasattr(cfg, "TF") else 1.0
+
+    def line_tf(trigger):
+        """The timeframe whose settings a trade used: the coarsest of the lines that fired it."""
+        parts = [x for x in str(trigger).split("+") if x and x != "?"]
+        try:
+            return max(parts, key=tf_minutes) if parts else "*"
+        except Exception:
+            return parts[-1] if parts else "*"
     h = D["high"].to_numpy(float)
     lo = D["low"].to_numpy(float)
     cl = D["close"].to_numpy(float)
@@ -102,6 +120,32 @@ def label_exits(trades: pd.DataFrame, D: pd.DataFrame, cfg: Any,
         elif cr in ("ref_target", "fvg_exit"):
             tag = f"TP·{ftag}"
             why = f"{ftag}: filled {gap}" if gap else f"{ftag}: reached its gap level"
+        elif cr == "tp_decayed":
+            tf = line_tf(getattr(r, "trigger", ""))
+            every_h, cut = float(per_tf(dc.get("every_h"), tf)), float(per_tf(dc.get("cut_pct"), tf))
+            n = int((xi - ei) * bar_h // every_h) if every_h > 0 else 0
+            tag = f"TP·{dc.get('tag', 'DECAY')}"
+            why = (f"{dc.get('tag', 'DECAY')}: the target had shrunk to "
+                   f"{rr * max(0.0, 1 - cut / 100 * n):.2f}R after {(xi - ei) * bar_h:.0f}h "
+                   f"({cut:g}% every {every_h:g}h, {tf} line)")
+        elif cr == "time_stop" and hc:
+            tf = line_tf(getattr(r, "trigger", ""))
+            tag = hc.get("tag", "HARD")
+            why = f"{tag}: closed after {(xi - ei) * bar_h:.0f}h ({tf} line)"
+        elif cr == "stop_loss" and str(getattr(r, "stop_moved_by", "")) in ("step", "time"):
+            got = s * (float(r.exit_price) - e) / risk if risk > 0 else 0.0
+            if r.stop_moved_by == "time":
+                tf = line_tf(getattr(r, "trigger", ""))
+                tg = st.get("tag", "TSTOP")
+                tag = f"SL·{tg}"
+                why = (f"{tg}: the stop moved {float(per_tf(st.get('move_pct'), tf)):g}% of the "
+                       f"risk after {float(per_tf(st.get('after_h'), tf)):g}h"
+                       f"{', once in profit' if st.get('only_in_profit', True) else ''}; "
+                       f"stopped at {got:+.2f}R")
+            else:
+                tg = sp.get("tag", "STEP")
+                tag = f"SL·{tg}"
+                why = f"{tg}: stopped at a stop a step had moved; out at {got:+.2f}R"
         elif cr == "take_profit":
             why = f"TP: reached the {rr:g}R target"
         elif cr == "stop_loss":

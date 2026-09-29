@@ -23,8 +23,8 @@ TF_WARMUP_BARS = 800                 # history per extra timeframe, in its own b
 
 # ══ §2  ENTRY — a line breaks, the break is confirmed, the extra rules agree ═══════════════════
 # 2.1  which lines
-LINE_TFS  = ("15m", "1h")            # fitted and drawn, as well as TF itself
-TRADE_TFS = ("5m", "15m", "1h")      # whose line breaks may TRADE; the rest are only drawn
+LINE_TFS  = ("5m", "15m", "1h", "4h")            # fitted and drawn, as well as TF itself
+TRADE_TFS = ("15m", "1h", "4h")      # whose line breaks may TRADE; the rest are only drawn
 TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.6,
                  min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0,
                  break_sustain_bars=1)   # closes beyond before a line retires; 0 = the first one
@@ -57,7 +57,7 @@ ENTRY_RULES = [
 ]
 RULES_COMBINE = "all"                # "all" = every rule for that side | "any"
 
-# ══ §3  EXIT — stop, target, and two optional exit strategies ═════════════════════════════════
+# ══ §3  EXIT — stop, target, and the rules that can end a trade differently ═════════════════════
 # 3.1  stop and target — chart tags: TP = target reached, SL = stopped, BE = stopped at breakeven
 STOP_N          = 20                 # stop at the extreme of the last N bars...
 STOP_BUFFER_PCT = 0.05               # ...pushed this % beyond it
@@ -79,7 +79,27 @@ FVG_EXIT     = dict(tag="FVG",       # the chart says TP·FVG
                     near_r=1.0,      # the gap lies within this many R of the target
                     at="ce")         # exit at its "touch" | "ce" (middle) | "full" (far edge)
 
-# 3.4  notebook 18's post-entry bail-out (off)
+# 3.4  EXIT STRATEGY 3 — the longer a trade stays open, the closer its target
+USE_TP_DECAY = False
+TP_DECAY     = dict(tag="DECAY",       # the chart says TP·DECAY
+                    every_h={"*": 24},   # every this many hours open (per line tf, e.g. {"15m": 24})...
+                    cut_pct={"*": 2})    # ...the target loses this % of its distance (5 days: -10%)
+
+# 3.5  STOP RULES — move the stop toward profit, never back; % of the risk: 100 = breakeven
+USE_STOP_STEPS = False
+STOP_STEPS     = dict(tag="STEP",      # the chart says SL·STEP
+                      steps=[(50, 50), (80, 100)])   # (price got this % of the way to target, move %)
+USE_STOP_TIME  = False
+STOP_TIME      = dict(tag="TSTOP",     # the chart says SL·TSTOP
+                      after_h={"*": 12},    # after this many hours (per line tf)...
+                      move_pct=100,         # ...move the stop this far...
+                      only_in_profit=True)  # ...on the first close in profit
+
+# 3.6  HARD CLOSE — out after this many hours, whatever the trade is doing (0 = never)
+USE_HARD_CLOSE = False
+HARD_CLOSE     = dict(tag="HARD", after_h={"5m": 12, "15m": 48, "*": 0})
+
+# 3.7  notebook 18's post-entry bail-out (off)
 USE_RETEST_BAIL = False
 SEC_TOUCH_N, SEC_WRONG_M, SEC_OPP_N = 2, 0, 1
 SEC_MIN_PCT, SEC_REPLACE_TP         = 0.20, True

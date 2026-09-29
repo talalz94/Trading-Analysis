@@ -385,7 +385,8 @@ def test_trade_tfs_switches_a_timeframe_off_without_undrawing_it():
     sys.path.insert(0, str(NB))
     import nb21_config as CFG
     from quant.research import fvg_lab, variant
-    lab = fvg_lab(variant(CFG, TRADE_TFS=("5m", "15m", "1h")))
+    # the timeframes are PINNED here: the user's own LINE_TFS / TRADE_TFS move day to day
+    lab = fvg_lab(variant(CFG, LINE_TFS=("15m", "1h"), TRADE_TFS=("5m", "15m", "1h")))
     off = lab.retrade(TRADE_TFS=("15m", "1h"))
     # by PART -- "15m" contains the text "5m", so a substring test passes nothing and fails all
     assert len(off.trades) and not any("5m" in t.split("+") for t in off.trades.trigger)
@@ -396,3 +397,110 @@ def test_trade_tfs_switches_a_timeframe_off_without_undrawing_it():
         assert len(kept) and kept.trigger.iloc[0] == "15m"
     with pytest.raises(ValueError, match="not fitted"):
         lab.retrade(TRADE_TFS=("4h",))
+
+
+# ---------------------------------------------------------------- the per-trade time rules
+def _rules(rows, side="short", **cols):
+    """A backtest with per-trade rule columns: every kwarg ending _col names a constant column."""
+    d = _df(rows)
+    kw = {}
+    for name, val in cols.items():
+        if name.endswith("_col"):
+            d[name] = val
+            kw[name] = name
+        else:
+            kw[name] = val
+    sig = _short_at(len(d)) if side == "short" else _long_at(len(d))
+    return run_backtest(d, sig, BacktestConfig(**BASE, **kw)).trades
+
+
+def test_the_target_decays_linearly_and_fills_on_a_later_bar():
+    """The user's own example, in bars: 2% of the target's distance every period, so after five
+    periods a 3R target is 2.7R. The decay is judged on the close and used from the next bar."""
+    rows = [(100, 100, 100, 100)] + [(99.5, 99.9, 99.4, 99.5)] * 5 + \
+           [(99.5, 99.6, 97.25, 97.8)]   # bar 6: 97.3 = 2.7R is inside this bar, 97.0 (3R) is not
+    t = _rules(rows, tp_decay_every_col=1.0, tp_decay_cut_col=0.02)
+    r = t.iloc[0]
+    assert r.close_reason == "tp_decayed" and r.exit_i == 6
+    assert r.exit_price == pytest.approx(97.3)
+    off = run_backtest(_df(rows), _short_at(len(rows)), BacktestConfig(**BASE)).trades.iloc[0]
+    assert off.close_reason == "forced_close_end"
+
+
+def test_a_decayed_target_already_behind_the_close_closes_there():
+    """Cut 40% a bar: after bar 1 the 3R target (97) is 1.8R (98.2). Bar 1 CLOSED at 98.1, already
+    past it, so the trade is out at that close -- not at 98.2, a price it never had to wait for."""
+    rows = [(100, 100, 100, 100), (100, 100.1, 98.0, 98.1), (98.1, 98.2, 96.5, 96.8)]
+    r = _rules(rows, tp_decay_every_col=1.0, tp_decay_cut_col=0.4).iloc[0]
+    assert r.close_reason == "tp_decayed" and r.exit_i == 1
+    assert r.exit_price == pytest.approx(98.1)
+
+
+def test_the_hard_close_closes_after_n_bars_whatever_the_trade_is_doing():
+    rows = [(100, 100, 100, 100)] + [(99.8, 100.2, 99.6, 99.9)] * 6
+    r = _rules(rows, close_after_col=3.0).iloc[0]
+    assert r.close_reason == "time_stop" and r.exit_i == 3 and r.exit_price == pytest.approx(99.9)
+
+
+def test_the_time_rule_moves_the_stop_only_once_a_close_is_in_profit():
+    rows = [(100, 100, 100, 100),
+            (100, 100.4, 99.9, 100.3),     # bar 1: 2 bars not yet held
+            (100.3, 100.5, 100.1, 100.4),  # bar 2: held 2, but closing in LOSS -> wait
+            (100.4, 100.4, 99.2, 99.3),    # bar 3: first close in profit -> stop to breakeven (100)
+            (99.3, 100.2, 99.2, 100.1)]    # bar 4: high 100.2 takes the moved stop
+    t = _rules(rows, stop_time_after_col=2.0, stop_time_move_col=1.0, stop_time_if_profit=True)
+    r = t.iloc[0]
+    assert r.close_reason == "stop_loss" and r.exit_i == 4
+    assert r.exit_price == pytest.approx(100.0) and r.stop_moved_by == "time"
+    # without the profit check it moves at bar 2, where the close (100.4) is already through a
+    # breakeven stop -- so it closes at that close, never at a price the bar did not trade
+    u = _rules(rows, stop_time_after_col=2.0, stop_time_move_col=1.0,
+               stop_time_if_profit=False).iloc[0]
+    assert u.exit_i == 2 and u.exit_price == pytest.approx(100.4) and u.close_reason == "stop_loss"
+
+
+def test_a_stop_step_moves_the_stop_a_share_of_the_risk_when_price_gets_there():
+    """At 50% of the way to a 3R target (1.5R, 98.5), move the stop 50% of the risk: 101 -> 100.5."""
+    rows = [(100, 100, 100, 100), (100, 100.1, 98.4, 98.6), (98.6, 100.6, 98.5, 100.4)]
+    cfg = BacktestConfig(**{**BASE, "tp_mode": "none"},
+                         take_profits=(TakeProfit("rr", 1.5, close_pct=0, move_stop_mode="risk_pct",
+                                                  move_stop_value=50),
+                                       TakeProfit("rr", 3.0, close_pct=100)))
+    r = run_backtest(_df(rows), _short_at(3), cfg).trades.iloc[0]
+    assert r.close_reason == "stop_loss" and r.exit_i == 2
+    assert r.exit_price == pytest.approx(100.5) and r.stop_moved_by == "step"
+
+
+def test_the_time_rules_off_change_nothing():
+    d, sig = _walk()
+    for c in ("a", "b"):
+        d[c] = np.nan
+    base = dict(initial_cash=10_000, exit_enabled=True, sl_mode="entry_pct", sl_value=0.5,
+                tp_mode="rr", tp_value=2.0, fee_bps=5, slippage_bps=1)
+    x = run_backtest(d, sig, BacktestConfig(**base))
+    y = run_backtest(d, sig, BacktestConfig(**base, tp_decay_every_col="a", tp_decay_cut_col="b",
+                                            close_after_col="a", stop_time_after_col="a",
+                                            stop_time_move_col="b"))
+    pd.testing.assert_frame_equal(x.trades, y.trades.drop(columns=["stop_moved_by"]))
+    np.testing.assert_array_equal(x.equity_curve.equity.to_numpy(), y.equity_curve.equity.to_numpy())
+
+
+@pytest.mark.skipif(not CACHED, reason="needs the cached BTCUSDT data")
+def test_each_trade_takes_the_rule_settings_of_the_line_that_fired_it():
+    """HARD_CLOSE per line timeframe: 5m-line trades out after 1h, 15m ones left alone."""
+    import sys
+    sys.path.insert(0, str(NB))
+    import nb21_config as CFG
+    from quant.research import fvg_lab, variant
+    lab = fvg_lab(variant(CFG, LINE_TFS=("15m", "1h"), TRADE_TFS=("5m", "15m", "1h"),
+                          USE_FVG_EXIT=False, TL_CONFIRM_N={"1h": 3, "15m": 3, "5m": 2, "*": 0}))
+    t = lab.retrade(USE_HARD_CLOSE=True,
+                    HARD_CLOSE=dict(tag="HARD", after_h={"5m": 1, "*": 0})).trades
+    five = t[t.trigger == "5m"]
+    assert len(five) and (five.bars_held <= 12).all(), "a 5m-line trade outlived its 1h close"
+    others = t[t.trigger.str.split("+").map(lambda p: "5m" not in p)]
+    assert (others.close_reason != "time_stop").all() and (others.bars_held > 12).any()
+    assert set(t.loc[t.close_reason == "time_stop", "exit_tag"]) <= {"HARD"}
+    # a trade BOTH a 5m and a 15m line fired uses the COARSER line's settings -- so no 1h close
+    mixed = t[t.trigger == "5m+15m"]
+    assert len(mixed) and (mixed.close_reason != "time_stop").all()

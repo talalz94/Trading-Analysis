@@ -23,7 +23,9 @@ import pandas as pd
 
 
 # The two optional exit rules' settings.
-EXIT_KEYS = frozenset({"USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT"})
+EXIT_KEYS = frozenset({"USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT",
+                       "USE_TP_DECAY", "TP_DECAY", "USE_STOP_STEPS", "STOP_STEPS",
+                       "USE_STOP_TIME", "STOP_TIME", "USE_HARD_CLOSE", "HARD_CLOSE"})
 
 # EVERY setting read only when TRADING, never when loading, fitting or detecting. A change to these
 # alone can reuse every frame, line and gap already built -- `FvgLab.retrade` -- so an A/B of exits,
@@ -42,6 +44,13 @@ RETRADE_KEYS = EXIT_KEYS | frozenset({
     "USE_FVG_VETO", "FVG_VETO_MODE", "FVG_VETO_TFS", "FVG_VETO_MAX_AGE", "FVG_VETO_MIN_SIZE",
     "FVG_VETO_MAX_DIST", "FVG_RULES",
 })
+
+
+def per_tf(value, tf, default=0.0):
+    """A setting that may be ONE value or a dict by line timeframe with "*" as the fallback."""
+    if isinstance(value, dict):
+        return value.get(tf, value.get("*", default))
+    return default if value is None else value
 
 
 def _get(cfg, name, default=None):
@@ -229,7 +238,9 @@ def fvg_lab(cfg) -> FvgLab:
     # LINE frames are fitted and therefore TRADED. GAP frames are drawn and may veto, never fitted.
     # Two separate settings on purpose: adding 4h to LINE_TFS just to see its gaps would quietly
     # start trading 4h trendlines, which is a change to the strategy made by a drawing setting.
-    line_tfs = tuple(_get(c, "LINE_TFS", ()) or ())
+    # the chart's own timeframe is ALWAYS fitted; naming it in LINE_TFS too would fit it twice and
+    # trade its every break under two names ("5m+5m"), so a duplicate is dropped here
+    line_tfs = tuple(t for t in (_get(c, "LINE_TFS", ()) or ()) if t != c.TF)
     gap_tfs = tuple(_get(c, "FVG_TFS", ()) or ())
     warm = _get(c, "TF_WARMUP_BARS", 800)
     line_frames = (tf_frames(c.SYMBOL, line_tfs, view_start=c.VIEW_START, end=end,
@@ -284,7 +295,8 @@ def _trade(c, base) -> FvgLab:
     from ..data import tf_frames
     from ..indicators import fvg_on_grid
     from ..scenarios import resolve_stop, run_pieces
-    from ..scenarios.entries import trendline_trigger
+    from ..data.timeframe import tf_minutes
+    from ..scenarios.entries import _tl_entry, trendline_trigger
     from ..strategies import build_fvg_rules, fvg_clear, fvg_target
     from ..strategies.conditions import raw
     from ..strategies.rulespec import build_rules
@@ -319,6 +331,11 @@ def _trade(c, base) -> FvgLab:
         tl_confirm_from=_get(c, "TL_CONFIRM_FROM", "every"),
         stop_n=c.STOP_N, stop_buffer_pct=c.STOP_BUFFER_PCT,
         be_at_rr=c.BE_AT_RR, tp_rr=c.TP_RR,
+        # STOP STEPS arrive as (% of the way to the target, % of the risk to move); the ladder
+        # wants the first in R
+        stop_steps=tuple((float(a) / 100.0 * float(c.TP_RR), float(m))
+                         for a, m in (_get(c, "STOP_STEPS", None) or {}).get("steps", ())
+                         ) if _get(c, "USE_STOP_STEPS", False) else (),
         sec_touch_n=c.SEC_TOUCH_N, sec_wrong_m=c.SEC_WRONG_M, sec_opp_n=c.SEC_OPP_N,
         sec_min_pct=c.SEC_MIN_PCT, sec_replace_tp=c.SEC_REPLACE_TP)
     secondary = "entry_retest_bail@v1" if _get(c, "USE_RETEST_BAIL", False) else None
@@ -368,11 +385,49 @@ def _trade(c, base) -> FvgLab:
 
     gap_pick = {}                          # side -> the gap each entry bar's FVG exit chose
 
+    # ---- THE PER-TRADE TIME RULES: target decay, stop moved by time, hard close. Each trade uses
+    # the settings of the line that fired it -- the COARSEST one when several did ("5m+15m" is a
+    # 15m trade) -- read by the engine at the trade's entry bar. Hours become bars here.
+    rules_on = [k for k in ("USE_TP_DECAY", "USE_STOP_TIME", "USE_HARD_CLOSE") if _get(c, k, False)]
+    bar_h = tf_minutes(c.TF) / 60.0
+
+    def _rule_columns(side):
+        tf_at = np.full(len(D), "", dtype=object)
+        for p_ in sorted(traded, key=lambda q: tf_minutes(tf_names[q])):   # coarsest written last
+            hit = np.asarray(_tl_entry(dict(params, tl_prefixes=(p_,)), side)(D), bool)
+            tf_at[hit] = tf_names[p_]
+
+        def per_bar(v, scale):
+            vals = {tf: float(per_tf(v, tf)) * scale for tf in set(tf_at) if tf}
+            return np.array([vals.get(t, np.nan) for t in tf_at], np.float64)
+
+        cols, cfg = {}, {}
+        if _get(c, "USE_TP_DECAY", False):
+            d = c.TP_DECAY
+            cols["rule_decay_every"] = per_bar(d["every_h"], 1.0 / bar_h)
+            cols["rule_decay_cut"] = per_bar(d["cut_pct"], 0.01)
+            cfg.update(tp_decay_every_col="rule_decay_every", tp_decay_cut_col="rule_decay_cut")
+        if _get(c, "USE_STOP_TIME", False):
+            st = c.STOP_TIME
+            cols["rule_stop_after"] = per_bar(st["after_h"], 1.0 / bar_h)
+            cols["rule_stop_move"] = per_bar(st["move_pct"], 0.01)
+            cfg.update(stop_time_after_col="rule_stop_after", stop_time_move_col="rule_stop_move",
+                       stop_time_if_profit=bool(st.get("only_in_profit", True)))
+        if _get(c, "USE_HARD_CLOSE", False):
+            cols["rule_close_after"] = per_bar(c.HARD_CLOSE["after_h"], 1.0 / bar_h)
+            cfg.update(close_after_col="rule_close_after")
+        return cols, cfg
+
     def _frame_for(side):
         """D, plus this side's FVG-exit column when that rule is on, and the config to match."""
         cfg = {**c.COSTS, **exit_cfg}
+        Dx = D
+        if rules_on:
+            cols, extra = _rule_columns(side)
+            Dx = D.assign(**cols)
+            cfg.update(extra)
         if exit_gaps is None:
-            return D, cfg
+            return Dx, cfg
         # the stop method's OWN reference column, so the R the gap is measured in is the trade's
         ref = resolve_stop("high_of_n@v1").prepare(D, {**params, "_side": side})["stop_extreme_n"]
         col = f"fvg_exit_{side}"
@@ -382,7 +437,7 @@ def _trade(c, base) -> FvgLab:
                                         near_r=float(fx.get("near_r", 1.0)),
                                         at=fx.get("at", "ce"), return_gap=True)
         cfg[f"tp_ref_{side}_col"] = col
-        return D.assign(**{col: lv}), cfg
+        return Dx.assign(**{col: lv}), cfg
 
     def _run(veto):
         runs = {}
