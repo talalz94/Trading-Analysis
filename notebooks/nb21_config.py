@@ -23,7 +23,8 @@ TF_WARMUP_BARS = 800                 # history per extra timeframe, in its own b
 
 # ══ §2  ENTRY — a line breaks, the break is confirmed, the extra rules agree ═══════════════════
 # 2.1  which lines
-LINE_TFS  = ("15m", "1h")            # fitted and traded, as well as TF itself
+LINE_TFS  = ("15m", "1h")            # fitted and drawn, as well as TF itself
+TRADE_TFS = ("5m", "15m", "1h")      # whose line breaks may TRADE; the rest are only drawn
 TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.6,
                  min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0,
                  break_sustain_bars=1)   # closes beyond before a line retires; 0 = the first one
@@ -42,7 +43,7 @@ TL_ONCE_PER_LINE = False             # True = only a line's FIRST break may trad
 
 # 2.3  the confirmation — against rs, the candle that FIRED, not against the line
 TL_CONFIRM_FROM   = "first"          # rs = the bar the break started on | "every" bar it reads broken
-TL_CONFIRM_N      = {"1h": 3, "15m": 3, "*": 0}   # candles of grace after rs, per line timeframe
+TL_CONFIRM_N      = {"1h": 3, "15m": 3, "5m": 2, "*": 0}   # candles of grace after rs, per line timeframe
 TL_CONFIRM_ALL    = False            # False = ONE of them confirms | True = all of them, in a row
 TL_CONFIRM_MODE   = "close"          # "close" beyond rs | "full" = the whole candle beyond it
 TL_CONFIRM_COLOUR = True             # the confirming candle must be the trade's own colour
@@ -72,7 +73,7 @@ TP_MOVE     = dict(tag="MOVED",      # the chart says TP·MOVED
                    to=0.6)           # -> the target moves to 60% of its distance (3R -> 1.8R)
 
 # 3.3  EXIT STRATEGY 2 — close when price fills a gap sitting near the target
-USE_FVG_EXIT = False
+USE_FVG_EXIT = True
 FVG_EXIT     = dict(tag="FVG",       # the chart says TP·FVG
                     tfs=("15m", "1h", "4h"),   # whose gaps count, detected as §6 says
                     near_r=1.0,      # the gap lies within this many R of the target

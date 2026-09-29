@@ -375,3 +375,24 @@ def test_labels_are_drawn_only_when_asked_and_read_from_customdata():
     assert ex_on.mode == "markers+text" and ex_on.texttemplate == "%{customdata[3]}"
     assert ex_on.text is None, "labels in `text` would detach from their trades on rewind"
     assert list(ex_on.customdata[:, 3]) == ["SL"]
+
+
+@pytest.mark.skipif(not CACHED, reason="needs the cached BTCUSDT data")
+def test_trade_tfs_switches_a_timeframe_off_without_undrawing_it():
+    """TRADE_TFS picks which fitted timeframes TRADE; the rest are still fitted and drawn. A trade
+    whose entry both a 5m and a 15m line justified survives with 5m off, relabelled 15m."""
+    import sys
+    sys.path.insert(0, str(NB))
+    import nb21_config as CFG
+    from quant.research import fvg_lab, variant
+    lab = fvg_lab(variant(CFG, TRADE_TFS=("5m", "15m", "1h")))
+    off = lab.retrade(TRADE_TFS=("15m", "1h"))
+    # by PART -- "15m" contains the text "5m", so a substring test passes nothing and fails all
+    assert len(off.trades) and not any("5m" in t.split("+") for t in off.trades.trigger)
+    assert "tl_res" in off.D.columns, "the 5m lines must still be fitted, for the chart"
+    both = lab.trades[lab.trades.trigger.str.contains(r"5m\+15m")]
+    for r in both.itertuples():         # a 5m+15m trade keeps its entry, justified by 15m alone
+        kept = off.trades[off.trades.entry_time == r.entry_time]
+        assert len(kept) and kept.trigger.iloc[0] == "15m"
+    with pytest.raises(ValueError, match="not fitted"):
+        lab.retrade(TRADE_TFS=("4h",))

@@ -337,13 +337,16 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     ka = {k: v for k, v in a.items() if k.isupper()}
     kb = {k: v for k, v in b.items() if k.isupper()}
     # 21's own additions: the confirmation's switches, the missed-setup layer, the S/R knob, and
-    # the two optional exits with the A/B that compares them (all OFF in the settings themselves)
+    # the two optional exits with the A/B that compares them, the exit tags, and which timeframes
+    # may trade
     assert set(kb) - set(ka) == {"TL_CONFIRM_CANCEL", "TL_CONFIRM_FROM",
                                  "SHOW_REJECTED", "SR_SENSITIVITY",
                                  "USE_TP_MOVE", "TP_MOVE", "USE_FVG_EXIT", "FVG_EXIT",
-                                 "COMPARE", "EXIT_LABELS"}, sorted(set(kb) - set(ka))
-    assert kb["USE_TP_MOVE"] is False and kb["USE_FVG_EXIT"] is False, (
-        "the exits are A/B arms; switched on in the settings they would change 21's trades")
+                                 "COMPARE", "EXIT_LABELS", "TRADE_TFS"}, \
+        sorted(set(kb) - set(ka))
+    # the exit switches are the USER's to flip (they switched the FVG exit on, 2026-09-29) -- this
+    # test guards against drift by a build script, not against the notebook's owner
+    assert isinstance(kb["USE_TP_MOVE"], bool) and isinstance(kb["USE_FVG_EXIT"], bool)
     # THE WINDOW IS NOT A RULE. What 21 must share with 20 is WHAT gets traded, so that the
     # confirmation is the only difference in the strategy. WHEN is the user's to set per notebook,
     # and the A/B that matters runs inside 21 via variant(), where both arms share 21's own window.
@@ -358,7 +361,7 @@ def test_notebook_21_config_is_20s_plus_the_cancel_switch():
     # AND VALUES THE USER CHANGED THEMSELVES in 21, which is theirs to do -- this test guards
     # against a BUILD SCRIPT or an assistant drifting 21 away from 20, not against its owner.
     # 2026-09-27: FVG_MAX_AGE_BARS 500 -> 1000 (gaps only; the veto that reads them is off).
-    user = {"FVG_MAX_AGE_BARS"}
+    user = {"FVG_MAX_AGE_BARS"}          # TL_CONFIRM_N is already an expected difference
     drifted = sorted(k for k in ka if k not in when | knob | user
                      and repr(ka[k]) != repr(kb.get(k)))
     assert drifted == ["TL_CONFIRM_N", "TRENDLINE"], (
