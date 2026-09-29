@@ -224,6 +224,19 @@ not an edge — train is still negative — but it is consistent, and it is the 
 Also measured: 34% of losers were +1R before they turned, but breakeven at 1R LOSES 24.8R forward
 (1.5R: +27.6 train, -12.2 forward). The winners pull back through +1R too.
 
+**Which line timeframes to trade** (`TRADE_TFS`, 2026-09-29, the user's settings: 5m confirmation
+on, FVG exit on). Judged per trade, since each arm removes trades:
+
+| trading | trades | R/trade train | R/trade forward | vs all three, per trade |
+|---|---|---|---|---|
+| 5m + 15m + 1h | 955 | -0.240 | -0.053 | -- |
+| 15m + 1h | 515 | -0.255 | +0.009 | -0.015 / +0.061, t 0.17 |
+| 1h only | 160 | -0.236 | -0.066 | +0.004 / -0.013, t -0.25 |
+| 5m only | 717 | -0.324 | -0.108 | **-0.084 / -0.055, t -3.35** |
+
+5m-line trades on their own are the worst, consistently. Dropping them halves the trade count and
+leaves the rest no better or worse per trade. Nothing here turns the strategy positive.
+
 ---
 
 ## The one-paragraph answer

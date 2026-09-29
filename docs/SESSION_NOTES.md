@@ -1939,3 +1939,21 @@ exit marker and the sentence in every hover. Two things worth knowing:
 
 The regime study and its trap (ranking by R ranks losers by stop width) are in docs/WHAT_WORKS.md.
 
+### "5m+15m" trades, and TRADE_TFS (2026-09-29)
+
+A trigger of "5m+15m" is ONE trade: `trendline_trigger` re-runs each timeframe's rule on its own
+and names every one that holds on the entry bar -- #05 (06-11 17:55) broke 5m·R69 and 15m·R12,
+both confirmed by 17:55. There was no way to stop a timeframe trading: fvg_lab always passed the
+chart's own timeframe ("" prefix) plus every LINE_TFS frame as `tl_prefixes`. `TRADE_TFS` now picks
+which of the FITTED timeframes trade (the rest stay fitted and drawn); None = all, so every older
+config is unchanged. It is a RETRADE_KEY, so an A/B of it costs one sim per arm.
+
+**Evaluator fix found on the way:** `evaluate.arms()` scored everything by TOTAL R, and "1h only"
+came out at t 2.79 -- purely because it takes 160 trades instead of 955 of a losing strategy. Its
+R per trade was unchanged. Arms that change the trade count by more than 20% are now judged per
+trade (`dR/trade`, `t/trade`), and the verdict says so. The same trap the FVG-veto study documented,
+re-found in a new tool: any arm that REMOVES trades has to be read per trade.
+
+Two test slips worth not repeating: `"15m"` contains the text `"5m"` (split the label on "+"), and
+an assert message on its own line needs a backslash or parentheses.
+

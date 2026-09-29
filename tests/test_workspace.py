@@ -135,11 +135,16 @@ def test_the_evaluation_sees_the_trades_the_lab_sees():
 def test_an_evaluation_runs_end_to_end_and_skips_an_arm_that_changes_nothing():
     from experiments.evaluate import evaluate
     cfg = evaluate_config()
-    ev = evaluate(cfg, arms={"same": dict(TP_RR=cfg.TP_RR), "2R": dict(TP_RR=2.0)},
+    ev = evaluate(cfg, arms={"same": dict(TP_RR=cfg.TP_RR), "2R": dict(TP_RR=2.0),
+                             "longs only": dict(TRADE_SHORT=False)},
                   train=("2023Q1", "2023Q1"), forward=("2025Q1", "2025Q1"), progress=False)
     assert ev.same_as_set == ["same"]
     b = ev.baseline()
     assert list(b.run) == ["as set", "as set, zero cost"] and (b.trades > 0).all()
     a = ev.arms()
-    assert list(a.arm) == ["2R"] and {"train dR", "forward dR", "t", "fwd trim3"} <= set(a)
+    assert set(a.arm) == {"2R", "longs only"}
+    assert {"train dR", "forward dR", "t", "fwd trim3", "fwd dR/trade", "t/trade"} <= set(a)
     assert "not run: ['same']" in ev.verdict()
+    # dropping half the trades lowers a losing strategy's TOTAL loss whatever they were, so an arm
+    # that removes trades must be judged per trade -- and the verdict must say so
+    assert "longs only" in ev.verdict().split("PER TRADE")[1]
