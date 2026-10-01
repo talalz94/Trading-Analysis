@@ -17,7 +17,7 @@ import numpy as np, pandas as pd     # noqa: F401
 SYMBOL, SOURCE = "BTCUSDT", "binance"
 TF             = "5m"                # chart and execution timeframe
 VIEW_START     = "2026-06-01"        # the chart starts here
-END            = "2026-06-20"        # ...and ends here
+END            = "2026-07-15"        # ...and ends here
 WARMUP_START   = "2026-05-01"        # history for lines and gaps; never traded
 TF_WARMUP_BARS = 800                 # history per extra timeframe, in its own bars
 
@@ -80,10 +80,10 @@ FVG_EXIT     = dict(tag="FVG",       # the chart says TP·FVG
                     at="ce")         # exit at its "touch" | "ce" (middle) | "full" (far edge)
 
 # 3.4  EXIT STRATEGY 3 — the longer a trade stays open, the closer its target
-USE_TP_DECAY = False
+USE_TP_DECAY = True
 TP_DECAY     = dict(tag="DECAY",       # the chart says TP·DECAY
                     every_h={"*": 24},   # every this many hours open (per line tf, e.g. {"15m": 24})...
-                    cut_pct={"*": 2})    # ...the target loses this % of its distance (5 days: -10%)
+                    cut_pct={"*": 5})    # ...the target loses this % of its distance (5 days: -10%)
 
 # 3.5  STOP RULES — move the stop toward profit, never back; % of the risk: 100 = breakeven
 USE_STOP_STEPS = False

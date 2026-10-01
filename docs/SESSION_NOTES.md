@@ -1985,3 +1985,21 @@ hours. The hour settings can be a dict by LINE timeframe.
 
 Verdict in docs/WHAT_WORKS.md: none of the four beats noise.
 
+### Notebook 22: notebook 21's strategy on gold, oil and FX (2026-10-01)
+
+`nb22_config.py` reads nb21's settings FRESH each run (`BASE = "nb21_config.py"`) and states only
+the markets and their costs, so 22 always tests what 21 trades. Verdict in docs/WHAT_WORKS.md: only
+USDJPY passed, and it did not replicate on EURJPY / GBPJPY.
+
+- **Only 5m is downloaded; 15m/1h/4h are resampled from it** (`frames_from_5m`), so every market's
+  frames come from one source. Proved exact on BTC: identical trades to the native frames
+  (`test_frames_built_from_5m_trade_exactly_like_the_native_frames`).
+- **A market's costs REPLACE notebook 21's** (fee_bps / slippage_bps / spread / commission_per_lot,
+  unstated = 0) -- otherwise Binance's 8 bps fee would be charged on a gold CFD.
+- Dukascopy oil is `E_Light` / `E_Brent`, now mapped as "WTI" / "BRENT" in quant/data/dukascopy.py.
+- **A Dukascopy request can hang forever.** EURJPY stalled at 2023-09 for 20 minutes with no error;
+  the fetch now runs one month per process under `timeout 90` with three tries. Watch the cache
+  file's last bar, not the log, to tell a slow download from a dead one.
+- R is the unit throughout. In money terms FX positions are capped by the non-margin sim at account
+  equity (allow_leverage=False), so a +3.6R USDJPY window shows only +0.34% -- real FX needs leverage.
+

@@ -148,3 +148,55 @@ def test_an_evaluation_runs_end_to_end_and_skips_an_arm_that_changes_nothing():
     # dropping half the trades lowers a losing strategy's TOTAL loss whatever they were, so an arm
     # that removes trades must be judged per trade -- and the verdict must say so
     assert "longs only" in ev.verdict().split("PER TRADE")[1]
+
+
+# ---------------------------------------------------------------- notebook 22: other markets
+def test_notebook_22_states_nothing_and_its_markets_replace_the_costs():
+    nb = NOTEBOOKS / "22_other_markets.ipynb"
+    bad = []
+    for c in json.loads(nb.read_text(encoding="utf-8"))["cells"]:
+        if c["cell_type"] != "code":
+            continue
+        src = "".join(c["source"])
+        bad += ["assigns: " + l.strip() for l in src.splitlines() if re.match(SETTING_RE, l)]
+        bad += ["defines: " + n.name for n in ast.parse(src).body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    assert not bad, bad
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("nb22_config", NOTEBOOKS / "nb22_config.py")
+    cfg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cfg)
+    from experiments.instrument_scan import base_settings, market_cfg
+    base = base_settings(cfg)
+    gold = market_cfg(base, cfg.MARKETS["Gold"])
+    # Binance's 8 bps fee must never be charged on a gold CFD: what a market does not state is 0
+    assert (gold.COSTS["fee_bps"], gold.COSTS["slippage_bps"], gold.COSTS["spread"]) == (0, 0, 0.25)
+    assert gold.SYMBOL == "XAUUSD" and gold.SOURCE == "dukascopy"
+    # ...and every TRADING setting is notebook 21's own
+    assert all(repr(getattr(gold, k)) == repr(v) for k, v in base.items()
+               if k not in ("SYMBOL", "SOURCE", "COSTS"))
+
+
+@pytest.mark.skipif(not CACHED, reason="needs the cached BTCUSDT data")
+def test_frames_built_from_5m_trade_exactly_like_the_native_frames():
+    """The scan resamples 15m/1h/4h from 5m so every market's frames come from one source. That is
+    only allowed because it is exact: on BTC it must reproduce the native frames' trades."""
+    import quant.data as qdata
+    from experiments.evaluate import frames_4h_from_1h, window_cfg
+    from experiments.instrument_scan import frames_from_5m
+    from quant.data.timeframe import tf_frames
+    from quant.research import fvg_lab
+    from quant.research.workspace import load_settings
+    base = SimpleNamespace(**load_settings(NOTEBOOKS / "nb21_config.py"))
+    w = window_cfg(base, "2024Q3", "2026-08-31")
+    with frames_from_5m():
+        a = fvg_lab(w).trades
+    assert qdata.tf_frames is tf_frames, "the loader must be restored on leaving"
+    qdata.tf_frames = frames_4h_from_1h
+    try:
+        b = fvg_lab(w).trades
+    finally:
+        qdata.tf_frames = tf_frames
+    cols = ["entry_time", "side", "R", "close_reason"]
+    assert len(a)
+    pd.testing.assert_frame_equal(a[cols], b[cols])

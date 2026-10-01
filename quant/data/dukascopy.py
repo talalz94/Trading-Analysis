@@ -30,6 +30,8 @@ _SYMBOL_MAP = {
     "XAUUSD": "XAU/USD", "XAGUSD": "XAG/USD",
     "EURUSD": "EUR/USD", "GBPUSD": "GBP/USD", "USDJPY": "USD/JPY",
     "AUDUSD": "AUD/USD", "USDCAD": "USD/CAD", "USDCHF": "USD/CHF",
+    # crude oil CFDs: Dukascopy's own codes, which are not XXX/YYY pairs
+    "WTI": "E_Light", "BRENT": "E_Brent",
 }
 
 
