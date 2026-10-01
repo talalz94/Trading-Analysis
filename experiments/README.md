@@ -26,6 +26,7 @@ python -m experiments.sr_zone_search --picks-only   # re-select from the saved r
 python -m experiments.level_age_study   # do OLD S/R zones / FVGs hold better? (~10 s) -- no
 python -m experiments.exit_rules_search # move-the-target / FVG-exit on nb21, 19 quarters (~3 min) -- no
 python -m experiments.regime_study      # what differs when nb21's strategy wins vs loses (~2 min) -- nothing but costs
+python -m experiments.instrument_scan   # nb21's strategy on gold/oil/FX vs a metronome (~8 min) -- USDJPY only, unreplicated
 # any strategy file and its COMPARE arms, quarter by quarter: notebooks/evaluate.ipynb, or
 #   from experiments.evaluate import evaluate; evaluate(evaluate_config()).arms()
 ```

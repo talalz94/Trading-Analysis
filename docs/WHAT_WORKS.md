@@ -248,7 +248,36 @@ on; 546 trades, -0.111R per trade). The config's example values, one arm each:
 | HARD: close 15m-line trades after 48h | +16.6 | -18.8 | 2/9 | -0.15 |
 
 Train -> forward rank correlation -0.40: the ones that helped 2022-24 are the ones that hurt
-2024-26. **None beats noise.** Stop moves in particular convert more of the trades that would have
+2024-26. **None beats noise.**
+
+### Other markets (2026-10-01) — one candidate, and it did not replicate
+
+`experiments/instrument_scan.py` / notebook 22: notebook 21's settings as they stood (15m+1h+4h lines
+trading, FVG exit on, target decay 5% per 24h), each market with its own costs, 2022Q1-2026Q3.
+**Promising** = R per trade > 0 after costs in BOTH halves AND the trendline entries beat a
+metronome (an entry every hour on the same side of the 15m EMA, same exits) in both.
+
+| market | trades | R/trade | train | forward | costs/trade | entry vs metronome (train / fwd) |
+|---|---|---|---|---|---|---|
+| **USDJPY** | 387 | **+0.147** | +0.196 | +0.089 | 0.018 | **+0.157 / +0.247, t 2.82** |
+| Gold | 358 | +0.030 | -0.176 | +0.279 | 0.028 | -0.201 / +0.248 |
+| EURJPY | 388 | +0.051 | +0.250 | -0.132 | 0.032 | +0.100 / -0.074 |
+| GBPUSD | 402 | -0.010 | -0.047 | +0.033 | 0.029 | +0.060 / +0.072 |
+| EURUSD | 401 | -0.014 | -0.148 | +0.145 | 0.026 | -0.162 / +0.150 |
+| GBPJPY | 428 | -0.058 | -0.001 | -0.120 | 0.033 | -0.060 / -0.029 |
+| WTI oil | 414 | -0.102 | -0.141 | -0.051 | 0.029 | -0.036 / +0.105 |
+| BTC | 567 | -0.148 | -0.253 | -0.038 | 0.201 | +0.065 / +0.270 |
+
+USDJPY passed, survived double the spread and a 4-hourly metronome, made money on both sides, and its
+entries beat the null in 15 of 19 quarters. **But it did not replicate:** EURJPY and GBPJPY -- added
+afterwards to test exactly that -- fail, EURJPY flipping from +0.250 to -0.132. With four coin flips
+per market, ~0.5 of 8 markets pass by luck alone; one did. 2022 also supplied 32R of USDJPY's 57R.
+Read USDJPY as a lead to watch forward, not a result.
+
+Two things that generalise: **costs are a BTC problem** -- 0.20R a trade there against 0.02-0.03R on
+gold and FX, where the stops are wide against the spread; and **a trending market flatters any entry**
+-- on gold the hourly metronome made +0.046R a trade, MORE than the trendline entries (+0.030R).
+ Stop moves in particular convert more of the trades that would have
 reached 3R into breakeven exits than they rescue from the stop -- the breakeven-at-1R result again.
 
 ---

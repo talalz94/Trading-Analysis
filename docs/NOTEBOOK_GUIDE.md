@@ -177,6 +177,7 @@ library is a screenshot of something that no longer happens.
 
 | notebook | config | what it is for |
 |---|---|---|
+| `22_other_markets` | `nb22_config.py` (+ `nb21_config.py`, read fresh) | notebook 21's strategy on gold, oil and FX beside BTC, against a metronome |
 | **`lab`** | `lab_config.py` + `strategies/*.py` | **start here** -- any strategy on any window |
 | **`evaluate`** | `evaluate_config.py` + `strategies/*.py` | **is it real** -- a strategy and its arms over 19 quarters |
 | `21_break_confirmation` | `nb21_config.py` | the 1h break confirmation + the two exit rules' A/B (now `strategies/tl_break_confirm.py`) |
