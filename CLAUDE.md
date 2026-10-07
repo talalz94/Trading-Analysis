@@ -7,7 +7,8 @@
 > · [`experiments/README.md`](experiments/README.md) · **[`docs/NOTEBOOK_GUIDE.md`](docs/NOTEBOOK_GUIDE.md)
 > (where notebook / config / helper code belongs — read before touching a notebook)** ·
 > **[`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md)
-> (research findings, gotchas, next steps — read this for running context).**
+> (research findings, gotchas, next steps — read this for running context).** ·
+> [`docs/ALERTS.md`](docs/ALERTS.md) (the email alerts monitor — setup, config, robustness).
 >
 > **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
 > before proposing any new strategy idea, because most of them have already been tested and killed.
@@ -26,6 +27,8 @@
 research and backtesting**, testing thousands→millions of parameter combinations over years of
 1-minute data. **Not for live trading.** Focus asset: **gold** (Binance PAXGUSDT/XAUTUSDT proxies,
 and **true spot XAU/USD via Dukascopy**); the data layer is source-agnostic for other assets.
+The one LIVE piece is `quant.alerts`: it watches closed candles and EMAILS when a configured
+pattern forms (`alerts/alerts_config.py`, docs/ALERTS.md). It never places a trade.
 
 Design in one line: **vectorized signal generation + a numba-JIT position/PnL engine**. Signals are
 whole-series boolean numpy arrays computed once; execution runs in a compiled kernel. Result: a
@@ -44,7 +47,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **617 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **646 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -542,10 +545,13 @@ quant/
 │                        #     actually used. Slower than the browser tool and not clickable,
 │                        #     but nothing is filtered and it works inline.
 │                        #     .trades/.all/.blocked/.gaps/.end/.rejected/.census()/.summary()/.figure()
-│                        #     .retrade(**exit_settings) re-runs ONLY the sim for a change to
-│                        #     EXIT_KEYS (USE_TP_MOVE/TP_MOVE/USE_FVG_EXIT/FVG_EXIT), reusing every
-│                        #     frame, line and gap -- proved equal to a full rebuild; anything else
-│                        #     raises, since it could change what is loaded or fitted.
+│                        #     .retrade(**settings) re-runs ONLY the sim for a change to
+│                        #     RETRADE_KEYS -- every setting read only when TRADING: the six exit
+│                        #     strategies in EXIT_KEYS (USE_TP_MOVE, USE_FVG_EXIT, USE_TP_DECAY,
+│                        #     USE_STOP_STEPS, USE_STOP_TIME, USE_HARD_CLOSE + their settings), the
+│                        #     confirmation, stops and costs -- reusing every frame, line and gap;
+│                        #     proved equal to a full rebuild. Anything else raises, since it could
+│                        #     change what is loaded or fitted (a test parses the loader's source).
 │                        #     TRADE_TFS = which FITTED timeframes may TRADE (the rest are still
 │                        #     fitted and drawn); None = all of them, the chart's own TF included --
 │                        #     before it there was no way to leave the chart's TF out. A name that is
@@ -607,7 +613,30 @@ quant/
 │   │                    #     arguments and was BROKEN from e61d7ab to 2026-09-27 without a test
 │   │                    #     noticing; test_exit_rules.py now runs it
 │   └── search.py        #   optuna_search (optional; Bayesian)
-└── reporting/report.py  #   summary / print_summary / to_html (standalone offline report)
+├── reporting/report.py  #   summary / print_summary / to_html (standalone offline report)
+└── alerts/              # EMAIL ALERTS, LIVE (docs/ALERTS.md) — `python -m quant.alerts check |
+    │                    #   test-email | tick | run | status`. WHAT to watch is alerts/alerts_config.py
+    │                    #   (re-read every tick; a broken edit keeps the last good config).
+    ├── config.py        #   load + VALIDATE the config (unknown market/tf/pattern/kind refused by name)
+    ├── feeds.py         #   CLOSED 5m bars straight from Binance REST / dukascopy_python; every
+    │                    #     alert timeframe is resampled from them. Calls run in a pool with a
+    │                    #     timeout, and a market whose last call still hangs gets no second one
+    ├── detectors.py     #   REGISTRY of alert kinds: Detector(validate, warmup_bars, evaluate) over
+    │                    #     one timeframe's FINAL bars. Only `candle` so far; a kind must be
+    │                    #     causal (truncation test in tests/test_alerts.py)
+    ├── engine.py        #   tick(): fetch only markets with a bar DUE, judge only FINAL bars (closed
+    │                    #     + settle_seconds, and data reaching the close or close_grace_minutes
+    │                    #     of feed silence = a shut market), a CURSOR per (alert, market, tf),
+    │                    #     first sight starts from NOW (no history mailed), late finds go to
+    │                    #     "While offline", urgent = this tick, normal = digest, and any email
+    │                    #     sweeps every pending event. Backoff on failed AND empty polls.
+    │                    #     tf_bars() = UTC-aligned buckets, equal to resample_ohlcv (tested)
+    ├── store.py         #   SQLite WAL: cursors / events (id = hash, INSERT OR IGNORE, so a re-judged
+    │                    #     bar can never mail twice) / outbox (written BEFORE sending, retried
+    │                    #     with backoff) / meta; bars as parquet written tmp + os.replace
+    ├── compose.py       #   one email: a section per category in config order, urgent rows first
+    ├── notify.py        #   SmtpNotifier (Gmail App Password from .env ALERT_SMTP_*), File/ListNotifier
+    └── runner.py        #   the minute loop, an OS file lock (one copy only), rotating log, status
 
 experiments/             # INFERENCE layer — find best settings for an idea (SEPARATE from core)
 ├── base.py              #   Experiment (strategy_space + cfg_space, objective, run() -> results/)
@@ -698,9 +727,10 @@ notebooks/               # 22_other_markets + nb22_config.py (2026-10-01) = note
                          #   proved against the pre-change code in a git worktree)
                          # 21_break_confirmation + nb21_config.py = a 1h trendline break must
                          #   be CONFIRMED by a later candle before it is traded, and the setup
-                         #   is CANCELLED if price closes back over rs. 20's settings with one
-                         #   rule on (a test holds them equal), run with and without via
-                         #   variant(), so the rule is the only variable. Its config is the
+                         #   is CANCELLED if price closes back over rs. It STARTED as 20's
+                         #   settings with one rule on; the config is now the user's own, and
+                         #   test_notebook_21_config_has_what_the_lab_reads checks only that every
+                         #   setting the lab reads is present -- never a value. Its config is the
                          #   SHORT kind: 124 lines to 20's 333, because a settings file is a
                          #   control panel and the rules are documented beside the code
                          #   S/R: SR_SENSITIVITY = "normal" replaces the four explicit S/R
@@ -711,10 +741,11 @@ notebooks/               # 22_other_markets + nb22_config.py (2026-10-01) = note
                          #   restructure/): §1 market §2 entry §3 exit + the two exit strategies
                          #   as tagged blocks §4 money §5 A/B §6 gaps §7 S/R §8 chart. EXIT_LABELS
                          #   writes each trade's tag on its exit marker
-                         #   EXITS: USE_TP_MOVE / TP_MOVE and USE_FVG_EXIT / FVG_EXIT, both OFF
-                         #   (a test holds them off), and COMPARE = the A/B arms the notebook
-                         #   tabulates with run_arms. The copy-of-20 test exempts values the USER
-                         #   changed in 21 (FVG_MAX_AGE_BARS 500 -> 1000), by name
+                         #   EXITS: six optional exit strategies, each a USE_ toggle with its own
+                         #   tag (target move, FVG exit, target decay, stop steps, stop-by-time,
+                         #   hard close; hours per LINE timeframe), plus TRADE_TFS. Which are on
+                         #   is the user's choice -- no test pins them. COMPARE = the A/B arms the
+                         #   notebook tabulates with run_arms
                          # 20_rewind + nb20_config.py = notebook 19's chart plus the REWIND
                          #   tool. The config is a verified COPY of 19's (a test fails if any
                          #   value drifts) plus REWIND and AS_OF, so the point-in-time view is
@@ -746,6 +777,10 @@ notebooks/               # 22_other_markets + nb22_config.py (2026-10-01) = note
                          #   06_ema_breakout_candles · 07_rule_builder · 08_sr_zones_view ·
                          #   09_squeeze_momentum · 10_scenario_lab (versioned setups + annotated chart)
 scripts/fetch_gold_dukascopy.py   # resumable true-spot XAUUSD fetch (1m/5m/15m/1h/4h)
+scripts/install_alerts_task.ps1   # the USER runs it: registers the `quant-alerts` scheduled task
+                                  #   (at logon + every 5 min as a watchdog; -Uninstall removes it)
+alerts/alerts_config.py           # THE ALERTS CONFIG, the user's: markets, groups, categories,
+                                  #   alerts, delivery. alerts/state/ is git-ignored
 examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
 ```
 
@@ -898,8 +933,11 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
   WROTE, since a failed run leaves the previous outputs in place and an error scan then reads clean.
 - Installed & used: pandas, numpy, pyarrow, polars, **numba**, plotly, **plotly-resampler**,
   tsdownsample, joblib, scipy, tqdm, requests, dukascopy-python. Optional: optuna.
-- Data cached: BTC/PAXG 1m ≈ 742k rows (2025-01 → 2026-05), 5m/15m/1h derived. Fits in RAM; the
-  challenge is compute, solved by the JIT engine.
+- Data cached (2026-10): BTC 5m 2021-08 → 2026-09 (535k rows) and 1m 2024-08 → 2026-08 (1.06M);
+  Dukascopy 5m 2021-08 → 2026-09 for XAUUSD, USDJPY, EURUSD, GBPUSD, EURJPY, GBPJPY, WTI (~380k
+  each); PAXG 1m 2025-01 → 2026-07; XAUUSD 1h/4h back to 2005. Fits in RAM; the challenge is
+  compute, solved by the JIT engine. The alerts monitor does NOT use this cache -- it keeps its own
+  few weeks of 5m bars in alerts/state/bars/.
 
 ## 10. How to run
 
@@ -926,6 +964,8 @@ print(res.stats)
   Scenario×Stop×TP setups, fully-annotated `scenario_figure`, variant sweep answering the 3 Qs, Preset I/O).
 - CLI: `quant backtest --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy ema_ribbon --params '{"fast":50,"slow":200,"confirm_n":5}'`
 - Demo: `python examples/gold_ema_demo.py` · Tests: `python -m pytest tests/`
+- Alerts: `python -m quant.alerts check` (dry run -> alerts/state/preview.html) · `status`.
+  Setup (Gmail App Password in .env, then scripts/install_alerts_task.ps1) is in docs/ALERTS.md.
 - New strategy = one dataclass in `quant/strategies/` (`prepare` + `build_signals`); sweep with `run_grid`.
 
 ## 11. Tests (what's covered)
@@ -946,7 +986,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back), `test_workspace.py` (strategies as files: a strategy file states only trading settings and the view configs none, a setting in both files is refused, an edited file is read fresh, the lab and evaluate notebooks state and define nothing, the loader never reads a setting re-trade may change -- parsed from its source -- the evaluation sees exactly the lab's trades, and an arm that changes nothing is skipped). Also in `test_exit_rules.py`: a moved target's label names its trigger and its from/to, a plain target says TP, and labels are drawn only when asked and from customdata. `test_exit_rules.py` also: TRADE_TFS takes a timeframe out of trading but not off the chart, and a 5m+15m trade survives as 15m. `test_exit_rules.py` also: the target decays linearly and fills a bar later, a decayed target already behind the close closes there, the hard close, the time stop waits for a close in profit, a stop step moves a share of the risk, all four off change nothing, and each trade takes the settings of the COARSEST line that fired it. `test_workspace.py` also: notebook 22 states nothing, a market's costs REPLACE notebook 21's and every trading setting is 21's own, and frames resampled from 5m trade exactly like the native ones. **617 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back), `test_workspace.py` (strategies as files: a strategy file states only trading settings and the view configs none, a setting in both files is refused, an edited file is read fresh, the lab and evaluate notebooks state and define nothing, the loader never reads a setting re-trade may change -- parsed from its source -- the evaluation sees exactly the lab's trades, and an arm that changes nothing is skipped). Also in `test_exit_rules.py`: a moved target's label names its trigger and its from/to, a plain target says TP, and labels are drawn only when asked and from customdata. `test_exit_rules.py` also: TRADE_TFS takes a timeframe out of trading but not off the chart, and a 5m+15m trade survives as 15m. `test_exit_rules.py` also: the target decays linearly and fills a bar later, a decayed target already behind the close closes there, the hard close, the time stop waits for a close in profit, a stop step moves a share of the risk, all four off change nothing, and each trade takes the settings of the COARSEST line that fired it. `test_workspace.py` also: notebook 22 states nothing, a market's costs REPLACE notebook 21's and every trading setting is 21's own, and frames resampled from 5m trade exactly like the native ones. `test_alerts.py` (the email monitor, on a fake feed and a fake clock: the first tick mails no history, an alert fires once on its close and never again -- not even when a crash re-judges the bar -- a bar is final only once closed, settled and complete or past the grace, a shut market's bar waits for the grace and a shut market is polled ~4 times an hour, urgent alerts on one close share an email, normal ones wait for the digest and ride along with an urgent one, a failed send retries with backoff and goes once, signals found after an outage are LATE not urgent, a failing feed skips only its market, cooldown, category order, tf_bars equals the research resampler, the candle detector never repaints, preview writes no state, the lock admits one copy, a broken config keeps the last good one, email settings come only from the environment -- every rule mutation-checked). **646 total.**
 
 ## 12. Known limitations / honest caveats
 

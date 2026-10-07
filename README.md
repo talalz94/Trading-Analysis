@@ -18,7 +18,7 @@ data layer designed to grow to other providers and asset classes (crypto, FX, eq
 - [Indicators](#indicator-system) · [Strategies](#strategy-framework)
 - [Stop loss](#stop-loss-configuration) · [Take profit](#take-profit-configuration)
 - [Backtesting model](#backtesting-model) · [Optimization](#optimization) · [Visualization](#visualization)
-- [Troubleshooting](#troubleshooting)
+- [Email alerts](#email-alerts) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -65,7 +65,9 @@ quant/
 ├── viz/               # responsive charts (plotly-resampler) + static charts + heatmaps
 ├── optimize/          # grid sweep (bounded parallel) + optional Optuna search
 ├── reporting/         # performance summary + standalone HTML report
+├── alerts/            # email alerts when a pattern forms (python -m quant.alerts; docs/ALERTS.md)
 └── cli.py             # `quant fetch | backtest | report`
+alerts/alerts_config.py  # what the alerts monitor watches (state in alerts/state/, git-ignored)
 examples/  notebooks/  tests/  docs/  data/ (parquet cache, git-ignored)
 ```
 
@@ -549,6 +551,35 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 
 ---
 
+## Email alerts
+
+`quant.alerts` watches markets on this PC and emails you when a pattern forms on a **closed**
+candle. One file, `alerts/alerts_config.py`, says what to watch. It holds the markets (Binance or
+Dukascopy), the timeframes (5m–4h), the alerts grouped into categories, and how often to email:
+urgent alerts at once, the rest in a 15-minute digest, several markets in one email.
+
+```bash
+python -m quant.alerts check        # what WOULD have fired in the last 48h -> alerts/state/preview.html
+python -m quant.alerts test-email   # after adding the Gmail App Password to .env
+powershell -ExecutionPolicy Bypass -File scripts/install_alerts_task.ps1   # run it from now on
+python -m quant.alerts status
+```
+
+It is built to be left running:
+
+- only markets with a bar due are fetched, and only their new bars;
+- the state (SQLite + a few weeks of 5m bars) survives restarts;
+- every alert fires exactly once;
+- after the PC was off it catches up and lists what it missed under "While offline";
+- failed feeds and failed sends retry with backoff;
+- a scheduled task restarts it if it dies.
+
+Setup, config reference and the robustness details are in [`docs/ALERTS.md`](docs/ALERTS.md). The
+first alert kind is candlestick patterns, which have **no measured directional edge**
+(`docs/WHAT_WORKS.md`). An alert brings a chart to your attention; it is not a trade signal.
+
+---
+
 ## Troubleshooting
 
 - **`ModuleNotFoundError: quant`** — run from the repo root, `pip install -e .`, or add the repo to
@@ -575,6 +606,7 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 - [`docs/EXPERIMENT_GUIDE.md`](docs/EXPERIMENT_GUIDE.md) — experiment design & execution method
 - [`experiments/README.md`](experiments/README.md) — inference layer how-to
 - [`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md) — running context: research findings, gotchas, next steps
+- [`docs/ALERTS.md`](docs/ALERTS.md) — the email alerts monitor: setup, config, how it survives outages
 - [`notebooks/`](notebooks/) — `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
   `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `14_pattern_viewer` ·
   `15_tuned_pattern_viewer` (calibrated settings + trendlines) · `16_trendline_research` ·

@@ -2003,3 +2003,47 @@ USDJPY passed, and it did not replicate on EURJPY / GBPJPY.
 - R is the unit throughout. In money terms FX positions are capped by the non-margin sim at account
   equity (allow_leverage=False), so a +3.6R USDJPY window shows only +0.34% -- real FX needs leverage.
 
+### Email alerts: quant.alerts (2026-10-07)
+
+The first LIVE piece of the repo: it emails when a configured pattern forms on a closed candle and
+never trades. Guide: docs/ALERTS.md. The user chose:
+
+- Gmail with an App Password, kept in .env;
+- run on this PC;
+- urgent alerts at once and a 15-minute digest for the rest;
+- Gold, USDJPY and BTC on 15m/1h/4h.
+
+They asked for **one simple example first**: candlestick patterns only. Notebook 21's setups and
+trendline breaks are the next detector kinds, deliberately not built yet.
+
+- **Design.** One 5m feed per market, with every timeframe resampled from it. A cursor per
+  (alert, market, tf). Events are keyed by a hash, so a re-judged bar can never mail twice. An email
+  goes into an outbox before it is sent. The config is re-read every tick, and a broken edit keeps
+  the last good one. A scheduled task (`scripts/install_alerts_task.ps1`, which the USER runs)
+  restarts the monitor at logon and every 5 minutes as a watchdog.
+- **A bar is judged 90 s after it closes, for EVERY market.** Dukascopy publishes ~1 minute late
+  and Binance at once. Waiting the same for both puts one bar close's signals in one email instead
+  of two.
+- **The weekend needs a rule.** Friday's 20:00 4h bar never receives its last 5m bar, so "data
+  reaches the close" alone would leave it unjudged until Monday. It is judged once the feed has
+  answered for `close_grace_minutes` (20) past the close with nothing more. That is 20, not 10,
+  because a feed that is merely LATE would otherwise have a half-built candle judged.
+- **A shut market used to be polled every minute all weekend**: its pairs stay "due" because no
+  bar comes to advance the cursor. Empty polls now back off 1, 2, 4 … 15 minutes, the same as
+  failed ones. Tested: ≤ 12 polls in 2 hours.
+- **dukascopy_python logs every page at INFO in LOCAL time** (`22:35` on a UTC+5 machine at 17:35
+  UTC), and resets its own level on each call, so `setLevel` does nothing. A logger FILTER silences
+  it. The bars themselves ARE UTC: checked against Binance, both end on the same 5m bar.
+- **A cp1252 console cannot print ⚡**, which the subject of an urgent email carries, so the CLI
+  reconfigures stdout with `errors="replace"`.
+- How often the example fires (Mar–Jul 2026, all three markets, per day): engulfing 15m ~38 / 1h ~10
+  / 4h ~2.5; hammer + shooting star 15m ~10 / 1h ~2.4 / 4h ~0.6. So engulfing is urgent only on 4h
+  and is not watched on 15m. A live 24h dry run found 28 signals.
+- Cost: a full 19-day backfill of three markets ~19 s. A due poll is ~2 s (Binance) or ~4 s
+  (Dukascopy). Detection takes milliseconds, after a ~2 s numba compile per process.
+- Two tests passed with their rule deleted (the settle wait, and the grace measured against the last
+  poll rather than `now`). Both turned out to be redundant: the market-is-due check already waits
+  for the settle, and grace only runs right after a successful poll. The finality rule was
+  simplified and given its own direct test. Every rule in `tests/test_alerts.py` is now caught when
+  broken.
+
