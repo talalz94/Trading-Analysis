@@ -559,6 +559,7 @@ Dukascopy), the timeframes (5m–4h), the alerts grouped into categories, and ho
 urgent alerts at once, the rest in a 15-minute digest, several markets in one email.
 
 ```bash
+python -m quant.alerts list         # the menu: instruments, timeframes, patterns, kinds, setups
 python -m quant.alerts check        # what WOULD have fired in the last 48h -> alerts/state/preview.html
 python -m quant.alerts test-email   # after adding the Gmail App Password to .env
 powershell -ExecutionPolicy Bypass -File scripts/install_alerts_task.ps1   # run it from now on
@@ -574,8 +575,18 @@ It is built to be left running:
 - failed feeds and failed sends retry with backoff;
 - a scheduled task restarts it if it dies.
 
-Setup, config reference and the robustness details are in [`docs/ALERTS.md`](docs/ALERTS.md). The
-first alert kind is candlestick patterns, which have **no measured directional edge**
+There are 15 alert kinds, each with an on/off switch in the config:
+- **Patterns:** 62 candlestick patterns and 22 chart-pattern breakouts.
+- **Levels and lines:** trendline breaks, support/resistance zone breaks and bounces, and fair
+  value gaps.
+- **Indicators:** MA and golden crosses, RSI and RSI divergence, MACD, stochastic, Supertrend,
+  Heikin-Ashi, candle runs and big candles.
+- **Setups:** 28 research entry setups.
+
+Markets can be any Binance pair or any of Dukascopy's 1,380 instruments: FX, metals, oil,
+indices, crypto CFDs, bonds and stocks. The full menu is
+[`docs/ALERTS_CATALOGUE.md`](docs/ALERTS_CATALOGUE.md); setup and robustness details are in
+[`docs/ALERTS.md`](docs/ALERTS.md). None of these has a **measured directional edge**
 (`docs/WHAT_WORKS.md`). An alert brings a chart to your attention; it is not a trade signal.
 
 ---
@@ -607,6 +618,7 @@ first alert kind is candlestick patterns, which have **no measured directional e
 - [`experiments/README.md`](experiments/README.md) — inference layer how-to
 - [`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md) — running context: research findings, gotchas, next steps
 - [`docs/ALERTS.md`](docs/ALERTS.md) — the email alerts monitor: setup, config, how it survives outages
+- [`docs/ALERTS_CATALOGUE.md`](docs/ALERTS_CATALOGUE.md) — everything an alert can be set on (generated)
 - [`notebooks/`](notebooks/) — `01_research_cycle` · `02_inference_experiments` · `03_ema_cross_study` ·
   `04_trend_runner_leverage` · `05_simple_1m_ema_breakout` · `14_pattern_viewer` ·
   `15_tuned_pattern_viewer` (calibrated settings + trendlines) · `16_trendline_research` ·

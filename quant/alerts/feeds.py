@@ -99,10 +99,20 @@ class Feed:
             futs[m.name] = f
         for name, f in futs.items():
             try:
-                out[name] = f.result(timeout=self.timeout)
-            except Exception as e:                    # TimeoutError included: the thread lingers,
-                out[name] = e                         # and the next tick will not stack another
+                out[name] = f.result(timeout=self.timeout_for(starts[name], now))
+            except TimeoutError:                     # the thread lingers, and the next tick
+                out[name] = TimeoutError(            # will not stack another beside it
+                    f"no answer in {self.timeout_for(starts[name], now):.0f} s")
+            except Exception as e:
+                out[name] = e
         return out
+
+    def timeout_for(self, start, now) -> float:
+        """A poll of a few new bars gets `timeout`; a first backfill of months gets longer. With
+        everything switched on, BTC's first download is ~42k bars, about 43 Binance requests, and a
+        flat 90 s cut it off on EVERY retry, since each retry asks for the same months again."""
+        bars = max(0.0, (now - start) / pd.Timedelta(minutes=5))
+        return self.timeout + 5.0 * bars / 1000
 
 
 class FakeFeed:

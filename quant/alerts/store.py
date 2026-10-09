@@ -98,6 +98,13 @@ class State:
                             (alert, market, tf)).fetchone()
         return None if r is None else ts(r[0])
 
+    def keep_cursors(self, keep):
+        """Delete every cursor whose (alert, market, tf) is not in `keep`."""
+        gone = [tuple(r) for r in self.db.execute("SELECT alert, market, tf FROM cursors")
+                if tuple(r) not in keep]
+        self.db.executemany("DELETE FROM cursors WHERE alert=? AND market=? AND tf=?", gone)
+        return len(gone)
+
     def set_cursor(self, alert, market, tf, bar):
         self.db.execute("INSERT OR REPLACE INTO cursors VALUES (?, ?, ?, ?)",
                         (alert, market, tf, iso(bar)))

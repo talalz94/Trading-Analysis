@@ -19,6 +19,7 @@ does the same right thing:
 """
 from __future__ import annotations
 
+import json
 import math
 import socket
 from dataclasses import dataclass, field
@@ -51,8 +52,8 @@ def _tf(tf) -> pd.Timedelta:
 
 def history_days(cfg: AlertsConfig) -> int:
     """Calendar days of 5m bars to keep: the longest warm-up, x7/5 for weekends, plus slack."""
-    need = max((REGISTRY[a.kind].warmup_bars(a.params) + 5) * TF_MINUTES[tf]
-               for a in cfg.alerts for tf in a.tfs)
+    need = max(((REGISTRY[a.kind].warmup_bars(a.params) + 5) * TF_MINUTES[tf]
+                for a in cfg.alerts for tf in a.tfs), default=0)
     return math.ceil(need / 1440 * 7 / 5) + 3
 
 
@@ -84,7 +85,7 @@ def final_bars(bars: pd.DataFrame, tf: str, now: pd.Timestamp, d) -> pd.DataFram
     return f[ok.to_numpy()].reset_index(drop=True)
 
 
-def judge(alert, frame: pd.DataFrame, after: Optional[pd.Timestamp]):
+def judge(alert, frame: pd.DataFrame, after: Optional[pd.Timestamp], tf: str):
     """Run the alert's detector over `frame` (final bars only) and return the hits on bars that
     opened after `after`, each as (row of frame, hit dict). Only the warm-up the detector needs is
     passed in, so the cost does not grow with the stored history."""
@@ -92,8 +93,9 @@ def judge(alert, frame: pd.DataFrame, after: Optional[pd.Timestamp]):
     first = 0 if after is None else int((frame[TIME_COL] > after).to_numpy().argmax())
     lo = max(0, first - det.warmup_bars(alert.params))
     win = frame.iloc[lo:].reset_index(drop=True)
+    win["t"] = win[TIME_COL]                         # the research code's time column (UTC)
     hits = []
-    for h in det.evaluate(win, alert.params):
+    for h in det.evaluate(win, alert.params, tf):
         row = win.iloc[h["i"]]
         if after is None or row[TIME_COL] > after:
             hits.append((row, h))
@@ -183,7 +185,7 @@ def detect(cfg, state, markets, now, report):
             if last <= c:
                 continue
             try:
-                hits = judge(a, frame, c)
+                hits = judge(a, frame, c, tf)
             except Exception as e:                     # one broken alert must not stop the rest;
                 report.errors[f"{a.name}/{m}/{tf}"] = f"{type(e).__name__}: {e}"
                 continue                               # its cursor stays, so it is retried
@@ -235,6 +237,11 @@ def deliver(cfg, state, notifier, now, report):
 def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None) -> TickReport:
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     report = TickReport()
+    # an alert switched OFF (or a market / timeframe taken out of it) loses its cursor, so
+    # switching it back on starts from that moment instead of mailing everything in between.
+    # A PC that was off keeps its cursors -- that gap IS caught up, as "while offline".
+    with state:
+        state.keep_cursors({(a.name, m, tf) for (m, tf), al in cfg.pairs().items() for a in al})
     due = _due(cfg, state, now)
     if due:
         ok = refresh_bars(cfg, state, feed, due, now, report)
@@ -260,7 +267,7 @@ def preview(cfg: AlertsConfig, feed, *, hours: float = 48, now=None):
         frame = final_bars(bars, tf, now, cfg.delivery)
         for a in alerts:
             prev, cool = None, a.cooldown_bars * _tf(tf)
-            for row, h in judge(a, frame, None):
+            for row, h in judge(a, frame, None, tf):
                 bar = row[TIME_COL]
                 if cool and prev is not None and bar - prev < cool:
                     continue
@@ -271,8 +278,9 @@ def preview(cfg: AlertsConfig, feed, *, hours: float = 48, now=None):
                                    market=m, tf=tf, bar_time=iso(bar),
                                    close_time=iso(bar + _tf(tf)), what=h["what"],
                                    side=h.get("side", ""), price=float(row["close"]),
-                                   detail='{"tv": "%s"}' % cfg.markets[m].tv, late=0))
-    errors = {m: str(v) for m, v in got.items() if isinstance(v, Exception)}
+                                   detail=json.dumps({"tv": cfg.markets[m].tv,
+                                                      "note": h.get("note", "")}), late=0))
+    errors = {m: f"{type(v).__name__}: {v}" for m, v in got.items() if isinstance(v, Exception)}
     if not events:
         return events, None, None, None, errors
     subject, text, html = compose(events, cfg, now, host=socket.gethostname(),

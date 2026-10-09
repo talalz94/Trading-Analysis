@@ -8,7 +8,9 @@
 > (where notebook / config / helper code belongs — read before touching a notebook)** ·
 > **[`docs/SESSION_NOTES.md`](docs/SESSION_NOTES.md)
 > (research findings, gotchas, next steps — read this for running context).** ·
-> [`docs/ALERTS.md`](docs/ALERTS.md) (the email alerts monitor — setup, config, robustness).
+> [`docs/ALERTS.md`](docs/ALERTS.md) (the email alerts monitor — setup, config, robustness) ·
+> [`docs/ALERTS_CATALOGUE.md`](docs/ALERTS_CATALOGUE.md) (GENERATED: every instrument, timeframe,
+> pattern, alert kind and setup an alert can use).
 >
 > **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
 > before proposing any new strategy idea, because most of them have already been tested and killed.
@@ -47,7 +49,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **646 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **721 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -73,7 +75,10 @@ quant/
 │   ├── binance.py       #   BinanceSource + get_source registry (binance, dukascopy)
 │   ├── _binance_fetch.py#   proven incremental Binance klines fetcher (retries, partial checkpoints)
 │   ├── dukascopy.py     #   DukascopySource — true spot XAU/USD + FX (needs dukascopy-python);
-│   │                    #     crude oil as "WTI" / "BRENT" (Dukascopy's E_Light / E_Brent)
+│   │                    #     crude oil as "WTI" / "BRENT" (Dukascopy's E_Light / E_Brent), short
+│   │                    #     names for metals/indices (US500, GER40, NAS100, DXY ...), and ANY of the
+│   │                    #     library's 1,380 codes as given (COCOA.CMD/USD, AAPL.US/USD);
+│   │                    #     dukascopy_instruments() = code -> group
 │   ├── cache.py         #   generic incremental Parquet cache for range-based providers
 │   ├── store.py         #   pushdown load (column projection + date range) via polars/pyarrow
 │   ├── loader.py        #   get_ohlcv(): fast cache path OR incremental fetch
@@ -614,20 +619,33 @@ quant/
 │   │                    #     noticing; test_exit_rules.py now runs it
 │   └── search.py        #   optuna_search (optional; Bayesian)
 ├── reporting/report.py  #   summary / print_summary / to_html (standalone offline report)
-└── alerts/              # EMAIL ALERTS, LIVE (docs/ALERTS.md) — `python -m quant.alerts check |
+└── alerts/              # EMAIL ALERTS, LIVE (docs/ALERTS.md) — `python -m quant.alerts list | check |
     │                    #   test-email | tick | run | status`. WHAT to watch is alerts/alerts_config.py
-    │                    #   (re-read every tick; a broken edit keeps the last good config).
-    ├── config.py        #   load + VALIDATE the config (unknown market/tf/pattern/kind refused by name)
+    │                    #   (re-read every tick; a broken edit keeps the last good config). Every
+    │                    #   alert has on=True/False; the file ships one alert of each kind, OFF,
+    │                    #   with its measured ~N/day, so the user flips a switch rather than writes
+    ├── config.py        #   load + VALIDATE the config: unknown market/tf/pattern/kind/SETTING refused
+    │                    #     by name, OFF alerts validated too, names unique (a name IS the cursor
+    │                    #     key), Dukascopy symbols checked against the library's 1,380 codes
     ├── feeds.py         #   CLOSED 5m bars straight from Binance REST / dukascopy_python; every
     │                    #     alert timeframe is resampled from them. Calls run in a pool with a
     │                    #     timeout, and a market whose last call still hangs gets no second one
-    ├── detectors.py     #   REGISTRY of alert kinds: Detector(validate, warmup_bars, evaluate) over
-    │                    #     one timeframe's FINAL bars. Only `candle` so far; a kind must be
-    │                    #     causal (truncation test in tests/test_alerts.py)
+    ├── detectors.py     #   REGISTRY of 15 alert kinds, each a thin wrapper over a tested causal
+    │                    #     indicator: candle · chart · trendline · sr_zone · fvg · ma_cross · rsi ·
+    │                    #     rsi_divergence · macd · stochastic · supertrend · heikin_ashi ·
+    │                    #     candle_run · big_candle · setup (any quant/scenarios entry, through
+    │                    #     RuleStrategy's own once/reset logic; time_entry and mtf_trendline are
+    │                    #     excluded). A kind DECLARES params {name: (default, meaning)} + example,
+    │                    #     which drive validation and the catalogue. evaluate(frame, params, tf);
+    │                    #     a hit may carry a `note` (a target, a level) shown in the email
+    ├── catalogue.py     #   the menu built from the registries -> `list` and docs/ALERTS_CATALOGUE.md
+    │                    #     (a test fails when the doc is stale: `list --write-docs`)
     ├── engine.py        #   tick(): fetch only markets with a bar DUE, judge only FINAL bars (closed
     │                    #     + settle_seconds, and data reaching the close or close_grace_minutes
     │                    #     of feed silence = a shut market), a CURSOR per (alert, market, tf),
-    │                    #     first sight starts from NOW (no history mailed), late finds go to
+    │                    #     first sight starts from NOW (no history mailed), and a cursor whose
+    │                    #     alert is switched OFF is deleted so ON again also starts from now (a PC
+    │                    #     that was OFF keeps its cursors: that gap IS caught up), late finds go to
     │                    #     "While offline", urgent = this tick, normal = digest, and any email
     │                    #     sweeps every pending event. Backoff on failed AND empty polls.
     │                    #     tf_bars() = UTC-aligned buckets, equal to resample_ohlcv (tested)
@@ -964,7 +982,8 @@ print(res.stats)
   Scenario×Stop×TP setups, fully-annotated `scenario_figure`, variant sweep answering the 3 Qs, Preset I/O).
 - CLI: `quant backtest --symbol PAXGUSDT --tf 1m --start 2025-06-01 --strategy ema_ribbon --params '{"fast":50,"slow":200,"confirm_n":5}'`
 - Demo: `python examples/gold_ema_demo.py` · Tests: `python -m pytest tests/`
-- Alerts: `python -m quant.alerts check` (dry run -> alerts/state/preview.html) · `status`.
+- Alerts: `python -m quant.alerts list` (the menu) · `check` (dry run -> alerts/state/preview.html)
+  · `status`.
   Setup (Gmail App Password in .env, then scripts/install_alerts_task.ps1) is in docs/ALERTS.md.
 - New strategy = one dataclass in `quant/strategies/` (`prepare` + `build_signals`); sweep with `run_grid`.
 
@@ -986,7 +1005,7 @@ levels come from the completed prior period, running session extremes are expand
 opening range stays hidden until it completes, VWAP starts at the first bar's typical price; exact
 `level_events` classification; zigzag running pivots; every entry family runs long+short with stops on
 the correct side; time stop caps `bars_held`, is byte-identical when off, and never overrides a real
-close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back), `test_workspace.py` (strategies as files: a strategy file states only trading settings and the view configs none, a setting in both files is refused, an edited file is read fresh, the lab and evaluate notebooks state and define nothing, the loader never reads a setting re-trade may change -- parsed from its source -- the evaluation sees exactly the lab's trades, and an arm that changes nothing is skipped). Also in `test_exit_rules.py`: a moved target's label names its trigger and its from/to, a plain target says TP, and labels are drawn only when asked and from customdata. `test_exit_rules.py` also: TRADE_TFS takes a timeframe out of trading but not off the chart, and a 5m+15m trade survives as 15m. `test_exit_rules.py` also: the target decays linearly and fills a bar later, a decayed target already behind the close closes there, the hard close, the time stop waits for a close in profit, a stop step moves a share of the risk, all four off change nothing, and each trade takes the settings of the COARSEST line that fired it. `test_workspace.py` also: notebook 22 states nothing, a market's costs REPLACE notebook 21's and every trading setting is 21's own, and frames resampled from 5m trade exactly like the native ones. `test_alerts.py` (the email monitor, on a fake feed and a fake clock: the first tick mails no history, an alert fires once on its close and never again -- not even when a crash re-judges the bar -- a bar is final only once closed, settled and complete or past the grace, a shut market's bar waits for the grace and a shut market is polled ~4 times an hour, urgent alerts on one close share an email, normal ones wait for the digest and ride along with an urgent one, a failed send retries with backoff and goes once, signals found after an outage are LATE not urgent, a failing feed skips only its market, cooldown, category order, tf_bars equals the research resampler, the candle detector never repaints, preview writes no state, the lock admits one copy, a broken config keeps the last good one, email settings come only from the environment -- every rule mutation-checked). **646 total.**
+close reason), `test_fvg.py` (fair value gaps — the band's orientation (`top` is the higher edge, the bug that inverted every bearish gap), publication from the THIRD candle, CAUSALITY BY TRUNCATION, the three mitigation thresholds, the ATR gates, the live-count columns, the higher-timeframe shift, the two veto modes being exact mirrors, and that a whole layer of boxes costs one trace pair while leaving every existing trace untouched), `test_trendline_sim.py` (multi-timeframe trendline entries and the trade overlay — a higher timeframe's level stays invisible until its bar closed, the confirmation rule behaves the same on every timeframe, an isolated trade keeps its EMAs, and an EMA finer than the chart is refused rather than resampled), `test_rewind.py` (the point-in-time view — rewind=False is inert, the deny-list offers every trace WITH A BIRTH and never the candles or EMAs, rewind keeps every S/R revision and each one stops where the next starts, AS_OF is a truncation not a filter, and the injected script is inert on a figure that was not built for it), `test_rulespec.py` (the one-line rule language), `test_notebook_config.py` (no notebook cell may ASSIGN a setting), `test_sr_zones.py` (the S/R engine -- the new core reproduces the legacy table exactly with its corrections off, an anchored zone never exceeds cluster_pct, a zone broken and held beyond is retired and a reclaim RESETS the count, eviction drops the zone farthest from price, ids are unique under eviction, the strategy and chart paths agree, and SR_TUNED matches the study's evidence file to the value), `test_exit_rules.py` (the moved target fills on a LATER bar than the one that moved it, never the same; already past it closes at the close; a breakeven rung is not moved; the second target is read ONCE at entry, ignored on the losing side, the nearer level fills first and the stop still wins a bar that hits both; both rules armed but never firing change no trade and no equity; run_grid runs; a higher-timeframe gap is live only from its third candle's close and dies on the BASE bar that fills it; the FVG exit picks the right kind on the profit side; a moved target adds no trace; retrade equals a full rebuild -- every one proved to fail with its bug put back), `test_workspace.py` (strategies as files: a strategy file states only trading settings and the view configs none, a setting in both files is refused, an edited file is read fresh, the lab and evaluate notebooks state and define nothing, the loader never reads a setting re-trade may change -- parsed from its source -- the evaluation sees exactly the lab's trades, and an arm that changes nothing is skipped). Also in `test_exit_rules.py`: a moved target's label names its trigger and its from/to, a plain target says TP, and labels are drawn only when asked and from customdata. `test_exit_rules.py` also: TRADE_TFS takes a timeframe out of trading but not off the chart, and a 5m+15m trade survives as 15m. `test_exit_rules.py` also: the target decays linearly and fills a bar later, a decayed target already behind the close closes there, the hard close, the time stop waits for a close in profit, a stop step moves a share of the risk, all four off change nothing, and each trade takes the settings of the COARSEST line that fired it. `test_workspace.py` also: notebook 22 states nothing, a market's costs REPLACE notebook 21's and every trading setting is 21's own, and frames resampled from 5m trade exactly like the native ones. `test_alerts.py` (the email monitor, on a fake feed and a fake clock: the first tick mails no history, an alert fires once on its close and never again -- not even when a crash re-judges the bar -- a bar is final only once closed, settled and complete or past the grace, a shut market's bar waits for the grace and a shut market is polled ~4 times an hour, urgent alerts on one close share an email, normal ones wait for the digest and ride along with an urgent one, a failed send retries with backoff and goes once, signals found after an outage are LATE not urgent, a failing feed skips only its market, cooldown, category order, tf_bars equals the research resampler, the candle detector never repaints, preview writes no state, the lock admits one copy, a broken config keeps the last good one, email settings come only from the environment -- every rule mutation-checked). `test_alerts.py` also: NO ALERT KIND EVER REPAINTS -- every kind and every one of the 28 setups is cut AT the candles it fires on (three fixed cuts let a .shift(-1) through on three kinds), each kind refuses a bad or unknown setting by name even while OFF, names are unique, a market must be an instrument its source has, an alert switched off and on again comes back without the gap, a signal's note reaches the email, and docs/ALERTS_CATALOGUE.md equals what the code accepts; a hanging feed times out BY NAME and is not asked twice, and a months-long first download gets a longer timeout (a flat 90 s cut BTC's 147-day backfill off on every retry). `test_patterns.py` also: every candle pattern runs on fewer candles than it needs (it crashed on 3). **721 total.**
 
 ## 12. Known limitations / honest caveats
 
