@@ -61,6 +61,18 @@ def _pad(pattern_rows, n_pad=30, base=100.0, drift=0.0):
     return rows + pattern_rows
 
 
+@pytest.mark.parametrize("n", [1, 2, 3, 4])
+def test_every_candle_pattern_runs_on_fewer_candles_than_it_needs(n):
+    """A four-candle pattern on three candles is simply False -- it used to crash, because the
+    'k bars ago' helper came back longer than the frame (a live monitor meets this on a market
+    it has only just started to watch)."""
+    t = pd.date_range("2026-01-01", periods=n, freq="1h", tz="UTC")
+    df = pd.DataFrame({"open_time": t, "open": 100.0, "high": 101.0, "low": 99.0,
+                       "close": 100.5, "volume": 1.0}).iloc[:n]
+    out = add_candle_patterns(df)
+    assert len(out) == n
+
+
 def test_hammer_needs_a_downtrend_and_hanging_man_an_uptrend():
     shape = (99.5, 100.5, 94.0, 100.0)             # small body on top, long lower shadow
     down = add_candle_patterns(_frame(_pad([shape], drift=-0.5)), ["hammer", "hanging_man"])
