@@ -2047,3 +2047,42 @@ trendline breaks are the next detector kinds, deliberately not built yet.
   simplified and given its own direct test. Every rule in `tests/test_alerts.py` is now caught when
   broken.
 
+### Alerts: the full menu, and a config of switches (2026-10-09)
+
+The user asked for an easy config and a list of everything an alert can use. The engine already
+took any kind, so this added 14 kinds next to `candle`. Each is a thin wrapper over an indicator
+in `quant/` that is already tested. Together with ~1,380 Dukascopy instruments that makes the
+catalogue: `python -m quant.alerts list`, and docs/ALERTS_CATALOGUE.md generated from the same
+code.
+
+- **The config is a panel of switches.**
+  - Every alert has `on=`.
+  - The file ships one example of each kind, OFF, with its measured `~N/day` on Gold + USDJPY +
+    BTC (Mar–Aug 2026).
+  - The three alerts that were on are unchanged, value for value.
+  - The email section now defaults from the kind, so `category=` and `CATEGORIES` are optional.
+- **A setting a kind does not take is an error, not a default.** Each kind declares
+  `params = {name: (default, meaning)}`, and the same declaration drives validation and the
+  catalogue. OFF alerts are validated too, so switching one on is never the moment it breaks.
+- **Switching an alert off and on is not an outage.** Before this, its old cursor survived, and
+  ON again would have judged every candle since as "while offline". Now each tick deletes the
+  cursor of any (alert, market, tf) the config no longer runs. A PC that was off keeps its cursors.
+- **Three fixed truncation cuts are not enough to catch a lookahead.** A `.shift(-1)` changes only
+  the last candle of a cut, and three cuts at fixed bars let it through on ma_cross, rsi and
+  big_candle. The test now cuts AT the candles each kind fires on (up to 25) plus 10 random ones.
+  That is also the real alerting property: a signal on bar i must exist when the data ends at i.
+- **The sharper test found a real crash:** `add_candle_patterns` on fewer candles than a pattern
+  spans. `_Anatomy.p(arr, k)` returned `k + len - k` items when k > len, because `arr[:-k]` is
+  empty. A monitor meets this on a market it has just started to watch. Fixed (pad =
+  min(k, len)); byte-identical for every normal frame; tested in test_patterns.py.
+- **Setups reuse the backtest's own `RuleStrategy` once/reset logic,** not a rising edge, so an
+  alert fires on the bar the backtest would have entered. `time_entry` (the metronome) and
+  `mtf_trendline` (it needs other timeframes' lines prepared outside) are excluded. Notebook 21's
+  own multi-timeframe setup is still not an alert kind.
+- **Dukascopy symbols:** `_instrument` now accepts any of dukascopy_python's 1,380 codes as given
+  (case-insensitive), plus short names for metals, indices and DXY. Live fetches were checked for
+  E_SandP-500, XPT.CMD/USD, DOLLAR.IDX/USD and BTC/USD. The config validates a Dukascopy market
+  offline against that list.
+- **Cost of switching things on:** history kept = the heaviest ON alert's warm-up. That is 19 days
+  for the default three and 147 with everything in the file on (EMA-200 on 4h needs ~600 candles).
+

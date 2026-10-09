@@ -14,7 +14,8 @@ many files — the incremental cache means you only pay that once.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from functools import lru_cache
+from typing import Dict, Optional
 
 import pandas as pd
 
@@ -32,13 +33,36 @@ _SYMBOL_MAP = {
     "AUDUSD": "AUD/USD", "USDCAD": "USD/CAD", "USDCHF": "USD/CHF",
     # crude oil CFDs: Dukascopy's own codes, which are not XXX/YYY pairs
     "WTI": "E_Light", "BRENT": "E_Brent",
+    # other commodities
+    "XPTUSD": "XPT.CMD/USD", "XPDUSD": "XPD.CMD/USD", "COPPER": "COPPER.CMD/USD",
+    "NATGAS": "GAS.CMD/USD",
+    # stock indices (CFDs) and the dollar index
+    "US500": "E_SandP-500", "NAS100": "E_NQ-100", "US30": "E_D&J-Ind",
+    "US2000": "USSC2000.IDX/USD", "GER40": "E_DAAX", "UK100": "E_Futsee-100",
+    "FRA40": "E_CAAC-40", "EU50": "E_DJE50XX", "JPN225": "E_N225Jap", "HK50": "E_H-Kong",
+    "AUS200": "E_XJO-ASX", "DXY": "DOLLAR.IDX/USD",
 }
 
 
+@lru_cache(maxsize=None)
+def dukascopy_instruments() -> Dict[str, str]:
+    """Every instrument dukascopy_python can fetch: its code -> its group (FX, VCCY = crypto,
+    IDX, CMD, BND, ETF, or the country of a stock). Empty if the package is not installed."""
+    try:
+        from dukascopy_python import instruments as ins
+    except ImportError:
+        return {}
+    return {getattr(ins, n): n.split("_")[1] for n in dir(ins) if n.startswith("INSTRUMENT_")}
+
+
 def _instrument(symbol: str) -> str:
-    s = symbol.upper().replace("/", "")
+    raw = symbol.strip()
+    s = raw.upper().replace("/", "")
     if s in _SYMBOL_MAP:
         return _SYMBOL_MAP[s]
+    own = {c.lower(): c for c in dukascopy_instruments()}.get(raw.lower())
+    if own:                                          # Dukascopy's own code, e.g. "COCOA.CMD/USD"
+        return own
     if len(s) == 6:
         return f"{s[:3]}/{s[3:]}"
     raise ValueError(f"Don't know the Dukascopy instrument for '{symbol}'. Add it to _SYMBOL_MAP.")

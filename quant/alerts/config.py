@@ -21,7 +21,6 @@ BASE_TF = "5m"                                   # every market is stored at 5m;
 TF_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240}
 SOURCES = ("binance", "dukascopy")
 PRIORITIES = ("urgent", "normal")
-_TV = {"binance": "BINANCE:{s}", "dukascopy": "OANDA:{s}"}   # TradingView chart links
 
 
 @dataclass(frozen=True)
@@ -65,6 +64,7 @@ class AlertsConfig:
     delivery: Delivery
     categories: Tuple[str, ...]                  # the order categories appear in an email
     path: Path
+    off: Tuple[Alert, ...] = ()                  # alerts written but switched off (on=False)
 
     def pairs(self):
         """Every (market, tf) some alert watches, and the alerts on each."""
@@ -86,8 +86,36 @@ def _tuple(v):
     return (v,) if isinstance(v, str) else tuple(v)
 
 
+def _market(name, m) -> Market:
+    src = m.get("source")
+    if src not in SOURCES:
+        raise ConfigError(f"market {name!r}: source must be one of {SOURCES}, got {src!r}")
+    sym = str(m.get("symbol", "")).strip()
+    if not sym:
+        raise ConfigError(f"market {name!r} has no symbol")
+    tv = m.get("tv")
+    if src == "binance":
+        sym = sym.upper()
+        if not sym.isalnum():
+            raise ConfigError(f"market {name!r}: {sym!r} is not a Binance symbol like BTCUSDT")
+        tv = tv or f"BINANCE:{sym}"
+    else:
+        from quant.data.dukascopy import _instrument, dukascopy_instruments
+        try:
+            code = _instrument(sym)
+        except ValueError:
+            code = None
+        group = dukascopy_instruments().get(code)
+        if group is None:
+            raise ConfigError(f"market {name!r}: Dukascopy has no instrument {sym!r}; "
+                              "see `python -m quant.alerts list`")
+        if not tv and group == "FX":                 # FX and metals chart on OANDA; others
+            tv = "OANDA:" + code.replace("/", "")      # need tv= to get a chart link
+    return Market(name, sym, src, tv or "")
+
+
 def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
-    from .detectors import REGISTRY
+    from .detectors import CATEGORY_ORDER, REGISTRY
     path = Path(path)
     if not path.is_file():
         raise ConfigError(f"no alerts config at {path}")
@@ -96,15 +124,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
     except Exception as e:                           # a typo saved mid-edit
         raise ConfigError(f"{path.name} does not run: {type(e).__name__}: {e}") from None
 
-    markets = {}
-    for name, m in (ns.get("MARKETS") or {}).items():
-        src = m.get("source")
-        if src not in SOURCES:
-            raise ConfigError(f"market {name!r}: source must be one of {SOURCES}, got {src!r}")
-        sym = str(m.get("symbol", "")).upper()
-        if not sym:
-            raise ConfigError(f"market {name!r} has no symbol")
-        markets[name] = Market(name, sym, src, m.get("tv") or _TV[src].format(s=sym))
+    markets = {name: _market(name, m) for name, m in (ns.get("MARKETS") or {}).items()}
     if not markets:
         raise ConfigError("MARKETS is empty -- nothing to watch")
 
@@ -115,10 +135,14 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
             raise ConfigError(f"group {g!r} names unknown markets {bad}")
         groups[g] = _tuple(members)
 
-    alerts = []
+    alerts, off, names = [], [], set()
     for i, a in enumerate(ns.get("ALERTS") or []):
         a = dict(a)
         name = a.pop("name", f"alert {i + 1}")
+        if name in names:                            # the name is the alert's identity in the
+            raise ConfigError(f"two alerts are named {name!r}")      # state: it must be unique
+        names.add(name)
+        on = a.pop("on", True)
         kind = a.pop("kind", None)
         if kind not in REGISTRY:
             raise ConfigError(f"alert {name!r}: kind must be one of {sorted(REGISTRY)}, got {kind!r}")
@@ -137,19 +161,19 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
         prio = a.pop("priority", "normal")
         if prio not in PRIORITIES:
             raise ConfigError(f"alert {name!r}: priority must be one of {PRIORITIES}")
-        alert = Alert(name=name, category=a.pop("category", "Alerts"), kind=kind,
-                      markets=tuple(dict.fromkeys(ms)), tfs=tfs, priority=prio,
+        alert = Alert(name=name, category=a.pop("category", None) or REGISTRY[kind].category,
+                      kind=kind, markets=tuple(dict.fromkeys(ms)), tfs=tfs, priority=prio,
                       cooldown_bars=int(a.pop("cooldown_bars", 0)), params=a)
-        try:
-            REGISTRY[kind].validate(alert.params)
+        try:                                         # checked even when OFF, so switching one
+            REGISTRY[kind].validate(alert.params)    # on can never be the moment it breaks
         except (KeyError, ValueError) as e:
             raise ConfigError(f"alert {name!r}: {e}") from None
-        alerts.append(alert)
-    if not alerts:
-        raise ConfigError("ALERTS is empty -- nothing to check")
+        (alerts if on else off).append(alert)
 
     delivery = Delivery(**(ns.get("DELIVERY") or {}))
     cats = list(_tuple(ns.get("CATEGORIES")))
-    cats += sorted({a.category for a in alerts} - set(cats))
+    used = {a.category for a in alerts}
+    cats += [c for c in CATEGORY_ORDER if c in used and c not in cats]
+    cats += sorted(used - set(cats))
     return AlertsConfig(markets=markets, alerts=tuple(alerts), delivery=delivery,
-                        categories=tuple(cats), path=path)
+                        categories=tuple(cats), path=path, off=tuple(off))

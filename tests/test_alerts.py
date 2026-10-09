@@ -33,7 +33,7 @@ class Spike(Detector):
     def warmup_bars(self, p):
         return 5
 
-    def evaluate(self, frame, p):
+    def evaluate(self, frame, p, tf):
         return [dict(i=int(i), what="spike", side="bull")
                 for i in np.flatnonzero(frame["high"].to_numpy() >= p["level"])]
 
@@ -68,7 +68,7 @@ def bars(spikes=(), start="2026-05-30", end="2026-06-08", stop=None, seed=0):
 
 def config(tmp_path, alerts, delivery=None, categories=("Spikes", "Other")):
     p = tmp_path / "cfg.py"
-    markets = {"A": dict(symbol="AAAUSD", source="dukascopy"),
+    markets = {"A": dict(symbol="XAUUSD", source="dukascopy"),
                "B": dict(symbol="BBBUSDT", source="binance")}
     p.write_text(f"MARKETS = {markets!r}\nCATEGORIES = {categories!r}\n"
                  f"ALERTS = {alerts!r}\nDELIVERY = {delivery or {}!r}\n")
@@ -102,10 +102,9 @@ class Rig:
 
 
 # ── config ──────────────────────────────────────────────────────────────────────────────────
-def test_the_shipped_config_loads():
-    cfg = load_config(DEFAULT_CONFIG)
-    assert set(cfg.markets) == {"Gold", "USDJPY", "BTC"}
-    assert {tf for a in cfg.alerts for tf in a.tfs} == {"15m", "1h", "4h"}
+def test_the_shipped_config_loads_and_every_alert_in_it_is_valid():
+    cfg = load_config(DEFAULT_CONFIG)                # checks the OFF alerts too
+    assert cfg.markets and (cfg.alerts or cfg.off)
 
 
 @pytest.mark.parametrize("bad, says", [
@@ -113,11 +112,73 @@ def test_the_shipped_config_loads():
     (dict(tfs=("1h", "3h")), "tfs must be"),
     (dict(kind="nope"), "kind must be one of"),
     (dict(priority="asap"), "priority must be"),
-    (dict(level=None, kind="candle", patterns=("engulfing_bull", "engulfed")), "engulfed"),
 ])
 def test_a_config_mistake_is_refused_by_name(tmp_path, bad, says):
     with pytest.raises(ConfigError, match=says):
         config(tmp_path, [spike_alert(**bad)])
+
+
+def plain(kind, **kw):
+    return dict(name="x", kind=kind, markets="all", tfs="1h", **kw)
+
+
+@pytest.mark.parametrize("alert, says", [
+    (plain("candle", patterns=("engulfing_bull", "engulfed")), "engulfed"),
+    (plain("rsi", perod=14), r"no setting \['perod'\]"),            # a typo is not a default
+    (plain("rsi", above=30, below=70), "below < above"),
+    (plain("ma_cross", fast=200, slow=50), "fast must be shorter"),
+    (plain("fvg", event="sweep"), "formed | filled | both"),
+    (plain("trendline", direction="sideways"), "direction must be"),
+    (plain("setup", setup="time_entry_long@v1"), "unknown setup"),        # the metronome
+    (plain("setup", setup="bos_long@v1", options=dict(zz_mult=2)), r"no option \['zz_mult'\]"),
+    (dict(plain("rsi"), on=False, perod=14), "perod"),                  # checked while OFF too
+])
+def test_every_kind_refuses_a_bad_setting_by_name(tmp_path, alert, says):
+    with pytest.raises(ConfigError, match=says):
+        config(tmp_path, [alert])
+
+
+def test_two_alerts_cannot_share_a_name(tmp_path):
+    with pytest.raises(ConfigError, match="two alerts are named 'spike'"):
+        config(tmp_path, [spike_alert(), spike_alert(tfs="4h")])
+
+
+@pytest.mark.parametrize("market, ok", [
+    (dict(symbol="US500", source="dukascopy"), "E_SandP-500"),          # a short name
+    (dict(symbol="cocoa.cmd/usd", source="dukascopy"), "COCOA.CMD/USD"),  # Dukascopy's own code
+    (dict(symbol="EURJPY", source="dukascopy"), "EUR/JPY"),             # any 6-letter FX pair
+    (dict(symbol="ABCXYZ", source="dukascopy"), None),
+    (dict(symbol="NOTHING", source="dukascopy"), None),
+    (dict(symbol="btc-usdt", source="binance"), None),
+])
+def test_a_market_must_be_an_instrument_its_source_has(tmp_path, market, ok):
+    from quant.data.dukascopy import _instrument
+    p = tmp_path / "cfg.py"
+    p.write_text(f"MARKETS = {{'M': {market!r}}}\nALERTS = {[plain('candle', patterns='all')]!r}\n")
+    if ok is None:
+        with pytest.raises(ConfigError, match="'M'"):
+            load_config(p)
+    else:
+        assert _instrument(load_config(p).markets["M"].symbol) == ok
+
+
+def test_every_short_name_is_a_real_dukascopy_instrument():
+    from quant.data.dukascopy import _SYMBOL_MAP, dukascopy_instruments
+    assert not [v for v in _SYMBOL_MAP.values() if v not in dukascopy_instruments()]
+
+
+def test_an_alert_switched_off_is_not_run_and_comes_back_without_the_gap(tmp_path):
+    on = [spike_alert(markets=("A",))]
+    off = [dict(spike_alert(markets=("A",)), on=False)]
+    r = Rig(tmp_path, on, a=["2026-06-03 02:20", "2026-06-03 05:20"])
+    r.tick("2026-06-03 00:01:30")
+    r.cfg = config(tmp_path, off)
+    assert r.cfg.alerts == () and [a.name for a in r.cfg.off] == ["spike"]
+    r.tick("2026-06-03 03:01:30")                    # the 02:00 spike: switched off, not judged
+    r.cfg = config(tmp_path, on)
+    r.tick("2026-06-03 04:01:30")                    # back on: starts from now, nothing mailed
+    assert r.events() == []
+    assert r.tick("2026-06-03 06:01:30").events == 1  # and fires again from then on
 
 
 # ── firing ──────────────────────────────────────────────────────────────────────────────────
@@ -302,6 +363,81 @@ def test_timeframe_bars_match_the_research_resampler(tf, rule):
     pd.testing.assert_frame_equal(mine, ref, check_dtype=False)
 
 
+def synthetic(n=1500, seed=7):
+    """Hourly candles with trends, volatility regimes and wicks: enough structure that every
+    kind fires on it, so a no-repaint check is never vacuous."""
+    rng = np.random.default_rng(seed)
+    drift = np.repeat(rng.normal(0, 0.25, n // 60 + 1), 60)[:n]
+    vol = np.repeat(rng.uniform(0.4, 1.6, n // 40 + 1), 40)[:n]
+    c = 1000 + np.cumsum(drift + rng.normal(0, 1, n) * vol)
+    o = np.r_[c[0], c[:-1]] + rng.normal(0, 0.2, n) * vol
+    t = pd.date_range("2026-01-05", periods=n, freq="1h", tz="UTC")
+    return pd.DataFrame({TIME_COL: t, "t": t, "open": o,
+                         "high": np.maximum(o, c) + rng.exponential(0.5, n) * vol,
+                         "low": np.minimum(o, c) - rng.exponential(0.5, n) * vol, "close": c,
+                         "volume": rng.lognormal(3, 0.6, n)})
+
+
+def _kind_cases():
+    from quant.alerts.detectors import setup_keys
+    cases = [(k, dict(d.example)) for k, d in REGISTRY.items() if k not in ("spike", "setup")]
+    cases += [("chart", dict(patterns="all")), ("sr_zone", dict(event="both")),
+              ("fvg", dict(event="both")), ("ma_cross", dict(fast=20, slow=50)),
+              ("rsi", dict(when="enter")), ("macd", dict(cross="zero")),
+              ("stochastic", dict(above=100, below=0))]
+    cases += [("setup", dict(setup=s)) for s in setup_keys()]
+    return cases
+
+
+@pytest.mark.parametrize("kind, params", _kind_cases(),
+                         ids=lambda x: x if isinstance(x, str) else ",".join(
+                             f"{k}={v}" for k, v in x.items())[:40])
+def test_no_alert_kind_ever_repaints(kind, params):
+    """Run on the candles up to bar i, a kind must say exactly what it says about them when run
+    on all of them. Cut AT the signals -- data ending on the very bar that fired -- because a
+    lookahead of one bar changes nothing but the last candle, and three fixed cuts let a .shift(-1)
+    through on three kinds."""
+    det = REGISTRY[kind]
+    det.validate(params)
+    f = synthetic()
+    key = lambda h: (h["i"], h["what"], h.get("note", ""))          # noqa: E731
+    full = {key(h) for h in det.evaluate(f, params, "1h")}
+    if kind != "setup":                              # a few setups are rare on any 1,500 bars
+        assert full, f"{kind} never fired, so this test would prove nothing"
+    rng = np.random.default_rng(0)
+    ends = sorted({i + 1 for i, *_ in full})
+    cuts = set(rng.choice(ends, min(25, len(ends)), replace=False).tolist()) if ends else set()
+    cuts |= set(rng.integers(600, len(f), 10).tolist())
+    for k in sorted(cuts):
+        cut = {key(h) for h in det.evaluate(f.iloc[:k].reset_index(drop=True), params, "1h")}
+        want = {x for x in full if x[0] < k}
+        assert cut == want, (kind, k, sorted(cut ^ want)[:4])
+
+
+def test_setups_fire_on_this_data_too():
+    from quant.alerts.detectors import setup_keys
+    f = synthetic()
+    fired = [s for s in setup_keys()
+             if REGISTRY["setup"].evaluate(f, dict(setup=s), "1h")]
+    assert len(fired) >= len(setup_keys()) - 3
+
+
+def test_a_signal_carries_its_note_into_the_email(tmp_path):
+    cfg = config(tmp_path, [spike_alert()])
+    e = dict(category="Spikes", market="A", tf="1h", priority="normal", late=0, what="x",
+             side="bull", price=1.0, detail='{"note": "target 84,120"}',
+             close_time="2026-06-03T01:00:00+00:00")
+    _, text, html = compose([e], cfg, at("2026-06-03 01:02"))
+    assert "(target 84,120)" in text and "target 84,120</span>" in html
+
+
+def test_the_catalogue_doc_is_what_the_code_accepts(monkeypatch):
+    from quant.alerts.catalogue import DOC, catalogue
+    monkeypatch.delitem(REGISTRY, "spike")           # this file's own test kind
+    assert DOC.read_text(encoding="utf-8") == catalogue(markdown=True), \
+        "docs/ALERTS_CATALOGUE.md is stale: python -m quant.alerts list --write-docs"
+
+
 def test_the_candle_detector_never_repaints():
     rng = np.random.default_rng(3)
     n = 800
@@ -312,10 +448,10 @@ def test_the_candle_detector_never_repaints():
                       "low": np.minimum(o, c) - rng.exponential(0.6, n), "close": c,
                       "volume": 1.0})
     p = dict(patterns=("engulfing_bull", "engulfing_bear", "hammer", "shooting_star"))
-    full = {(h["i"], h["what"]) for h in CandleDetector().evaluate(f, p)}
+    full = {(h["i"], h["what"]) for h in CandleDetector().evaluate(f, p, "1h")}
     assert len(full) > 20
     for k in (100, 333, 517, 799):
-        cut = {(h["i"], h["what"]) for h in CandleDetector().evaluate(f.iloc[:k], p)}
+        cut = {(h["i"], h["what"]) for h in CandleDetector().evaluate(f.iloc[:k], p, "1h")}
         assert cut == {x for x in full if x[0] < k}, k
 
 
@@ -371,6 +507,29 @@ def test_the_loop_survives_a_broken_config_and_a_second_copy_exits(tmp_path, mon
         for h in list(runner.log.handlers):
             runner.log.removeHandler(h)
             h.close()
+
+
+def test_a_hanging_feed_times_out_by_name_and_is_not_asked_twice(monkeypatch):
+    import threading
+    from quant.alerts import feeds
+    from quant.alerts.config import Market
+    gate = threading.Event()
+    monkeypatch.setitem(feeds._FETCHERS, "binance", lambda *a: gate.wait(5))
+    feed, m, now = feeds.Feed(timeout=0.2), Market("B", "BBBUSDT", "binance", ""), at("2026-06-03")
+    try:
+        first = feed.fetch([m], {"B": now - pd.Timedelta(minutes=10)}, now)["B"]
+        again = feed.fetch([m], {"B": now - pd.Timedelta(minutes=10)}, now)["B"]
+    finally:
+        gate.set()
+    assert isinstance(first, TimeoutError) and "no answer in" in str(first)
+    assert "still hanging" in str(again)              # no second thread beside the stuck one
+
+
+def test_a_months_long_first_download_gets_a_longer_timeout():
+    from quant.alerts.feeds import Feed
+    f, now = Feed(timeout=90), at("2026-06-03")
+    assert f.timeout_for(now - pd.Timedelta(minutes=15), now) < 91      # a normal poll
+    assert f.timeout_for(now - pd.Timedelta(days=147), now) > 250       # 42k bars, ~43 requests
 
 
 def test_email_settings_come_only_from_the_environment(monkeypatch):

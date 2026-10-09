@@ -1,4 +1,5 @@
 """
+    python -m quant.alerts list         every instrument, timeframe, pattern, kind and setup you can use
     python -m quant.alerts check        what WOULD have fired in the last 48h -> preview.html; sends nothing
     python -m quant.alerts test-email   one short email, to prove the .env settings work
     python -m quant.alerts tick         one pass of the monitor, then exit
@@ -17,16 +18,23 @@ from .config import DEFAULT_CONFIG, DEFAULT_STATE, load_config
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m quant.alerts", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["check", "test-email", "tick", "run", "status"])
+    ap.add_argument("command", choices=["list", "check", "test-email", "tick", "run", "status"])
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--hours", type=float, default=48, help="check: how far back to look")
+    ap.add_argument("--write-docs", action="store_true",
+                    help="list: rewrite docs/ALERTS_CATALOGUE.md instead of printing")
     a = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):           # a cp1252 console cannot print the bolt
         try:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError):
             pass
+
+    if a.command == "list":
+        from .catalogue import catalogue, write_docs
+        print(f"wrote {write_docs()}" if a.write_docs else catalogue())
+        return 0
 
     if a.command == "status":
         from .runner import status
@@ -39,7 +47,7 @@ def main(argv=None) -> int:
         cfg = load_config(a.config)
         events, subject, text, html, errors = preview(cfg, Feed(), hours=a.hours)
         for m, e in errors.items():
-            print(f"  {m}: feed failed -- {e}")
+            print(f"  {m}: feed failed -- {e}")       # already "Type: message"
         if not events:
             print(f"nothing would have fired in the last {a.hours:g} hours")
             return 0

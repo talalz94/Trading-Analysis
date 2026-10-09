@@ -1,45 +1,120 @@
 """
 ALERTS — WHAT TO WATCH, AND WHEN TO EMAIL YOU.  THIS FILE IS YOURS.
 
-The monitor re-reads this file every minute: save, and the next tick uses it, no restart.
-Try a change first with   python -m quant.alerts check   -- it shows what WOULD have fired in the
-last 48 hours as the email it would have sent, and sends nothing. Full guide: docs/ALERTS.md.
+  Change it   edit and save; the running monitor picks it up within a minute
+  Test it     python -m quant.alerts check    what WOULD have fired in the last 48h (sends nothing)
+  Options     python -m quant.alerts list     every instrument, pattern, kind and setup there is
+                                              (also in docs/ALERTS_CATALOGUE.md)
 
-  §1 markets   §2 alerts   §3 delivery
+  §1 MARKETS     which instruments
+  §2 ALERTS      what to look for -- each one has an on/off switch
+  §3 DELIVERY    when to email
 """
 
-# ══ §1  MARKETS — every one is fetched at 5m; each alert's timeframes are built from that ══════
+# ══ §1  MARKETS ═════════════════════════════════════════════════════════════════════════════════
+#   "any name you like": dict(symbol=..., source=...)
+#   source  "binance"   = crypto (any Binance spot pair: BTCUSDT, ETHUSDT ...)
+#           "dukascopy" = gold, silver, FX, oil, indices (XAUUSD, EURUSD, WTI, US500, GER40 ...)
+
 MARKETS = {
-    "Gold":   dict(symbol="XAUUSD",  source="dukascopy"),
-    "USDJPY": dict(symbol="USDJPY",  source="dukascopy"),
-    "BTC":    dict(symbol="BTCUSDT", source="binance"),
+    "Gold":     dict(symbol="XAUUSD",  source="dukascopy"),
+    "USDJPY":   dict(symbol="USDJPY",  source="dukascopy"),
+    "BTC":      dict(symbol="BTCUSDT", source="binance"),
+    # "ETH":      dict(symbol="ETHUSDT", source="binance"),
+    # "S&P 500":  dict(symbol="US500",   source="dukascopy"),
 }
-GROUPS = {                           # a name an alert's `markets=` can use; "all" always exists
+
+GROUPS = {                           # a name markets= can use; "all" = every market above
     "metals & FX": ("Gold", "USDJPY"),
 }
 
-# ══ §2  ALERTS — categories appear in an email in this order ════════════════════════════════════
-CATEGORIES = ("Candle patterns",)
+# ══ §2  ALERTS ══════════════════════════════════════════════════════════════════════════════════
+#   on        True = watching · False = kept here, switched off
+#   name      any name, unique (renaming an alert starts it afresh)
+#   kind      what to look for -- its own settings follow it (python -m quant.alerts list):
+#               candle · chart · trendline · sr_zone · fvg · ma_cross · rsi · rsi_divergence ·
+#               macd · stochastic · supertrend · heikin_ashi · candle_run · big_candle · setup
+#   markets   "all", a group, or names from §1     tfs   "5m" "15m" "30m" "1h" "2h" "4h"
+#   priority  "urgent" = email at once · "normal" = next digest
+#   cooldown_bars  (optional) after firing, quiet for this many of that timeframe's bars
+#
+#   ~N/day = how often it fired on Gold + USDJPY + BTC together, Mar-Aug 2026, as set here.
 
-# kind="candle": any of the 62 patterns in quant/indicators/candle_patterns.py, or patterns="all".
-# priority  urgent = emailed the minute it is found · normal = waits for the next digest
-# cooldown_bars = after firing, stay quiet on that market + timeframe for this many of its bars
-# How often each fired on these three markets, Mar-Jul 2026 (a day, all three together):
-#   engulfing   15m ~38   1h ~10   4h ~2.5      hammer + shooting star   15m ~10   1h ~2.4   4h ~0.6
 ALERTS = [
-    dict(name="engulfing 4h", category="Candle patterns", kind="candle",
+
+    # ── CANDLE PATTERNS ────────────────────────────────────────────────────────────────────────
+    dict(on=True,  name="engulfing 4h", kind="candle",                              # ~2.5/day
          patterns=("engulfing_bull", "engulfing_bear"),
-         markets="all", tfs=("4h",), priority="urgent"),
-    dict(name="engulfing 1h", category="Candle patterns", kind="candle",
+         markets="all", tfs="4h", priority="urgent"),
+
+    dict(on=True,  name="engulfing 1h", kind="candle",                              # ~9.6/day
          patterns=("engulfing_bull", "engulfing_bear"),
-         markets="all", tfs=("1h",), priority="normal"),
-    dict(name="hammer / shooting star", category="Candle patterns", kind="candle",
+         markets="all", tfs="1h", priority="normal"),
+
+    dict(on=True,  name="hammer / shooting star", kind="candle",                    # ~11/day
          patterns=("hammer", "shooting_star"),
          markets="all", tfs=("15m", "1h", "4h"), priority="normal", cooldown_bars=4),
+
+    dict(on=False, name="morning / evening star", kind="candle",                    # ~1.4/day
+         patterns=("morning_star", "evening_star"),
+         markets="all", tfs=("1h", "4h"), priority="normal"),
+
+    # ── CHART PATTERNS ── fires on the breakout, with the measured-move target ────────────────
+    dict(on=False, name="tops & bottoms breakout", kind="chart",                    # ~0.2/day
+         patterns=("double_top", "double_bottom", "head_shoulders", "inverse_head_shoulders"),
+         markets="all", tfs=("1h", "4h"), priority="urgent"),
+
+    # ── LEVELS & LINES ─────────────────────────────────────────────────────────────────────────
+    dict(on=False, name="trendline break", kind="trendline", min_touches=3,         # ~0.3/day
+         markets="all", tfs=("1h", "4h"), priority="normal"),
+
+    dict(on=False, name="S/R zone break", kind="sr_zone", event="break",            # ~1.1/day
+         markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="big FVG formed", kind="fvg", event="formed",               # ~1.3/day
+         min_size_atr=1.0, markets="all", tfs=("1h", "4h"), priority="normal"),
+
+    # ── INDICATORS ─────────────────────────────────────────────────────────────────────────────
+    dict(on=False, name="price crosses EMA 200", kind="ma_cross", ma="ema",         # ~0.4/day
+         period=200, markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="golden / death cross", kind="ma_cross", ma="sma",          # ~0.1/day
+         fast=50, slow=200, markets="all", tfs="4h", priority="urgent"),
+
+    dict(on=False, name="RSI leaves overbought / oversold", kind="rsi",             # ~0.4/day
+         when="exit", above=70, below=30, markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="RSI divergence", kind="rsi_divergence",                    # ~0.2/day
+         markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="MACD signal cross", kind="macd", cross="signal",           # ~1.1/day
+         markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="stochastic cross in extreme", kind="stochastic",           # ~1.1/day
+         above=80, below=20, markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="Supertrend flip", kind="supertrend",                       # ~0.3/day
+         markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="Heikin-Ashi flip", kind="heikin_ashi", after=4,            # ~1.6/day
+         markets="all", tfs="4h", priority="normal"),
+
+    dict(on=False, name="5 candles in a row", kind="candle_run", n=5,               # ~1.5/day
+         markets="all", tfs="1h", priority="normal"),
+
+    dict(on=False, name="big candle", kind="big_candle", atr_mult=3.0,              # ~1.1/day
+         markets="all", tfs="1h", priority="urgent"),
+
+    # ── SETUPS ── research entries from quant/scenarios (28 of them: see `list`) ──────────────
+    dict(on=False, name="break of structure", kind="setup", setup="bos_long@v1",    # ~0.6/day
+         markets="all", tfs="1h", priority="normal"),
+
+    dict(on=False, name="squeeze fires", kind="setup", setup="squeeze_long@v1",     # ~1.0/day
+         markets="all", tfs="1h", priority="normal"),
 ]
 
 # ══ §3  DELIVERY ════════════════════════════════════════════════════════════════════════════════
 DELIVERY = dict(
     digest_minutes=15,               # normal alerts: at most one email this often
-    catchup_max_age_minutes=30,      # found later than this after its bar closed (PC was off)
+    catchup_max_age_minutes=30,      # found later than this after its candle closed (PC was off)
 )                                    #   -> listed under "While offline", never sent as urgent
