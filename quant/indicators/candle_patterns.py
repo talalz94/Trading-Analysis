@@ -94,8 +94,9 @@ class _Anatomy:
     def p(self, arr: np.ndarray, k: int = 1) -> np.ndarray:
         if k <= 0:
             return arr
+        k = min(k, len(arr))                         # fewer bars than k: all padding, same length
         pad = np.full(k, np.nan if arr.dtype.kind == "f" else False)
-        return np.concatenate([pad, arr[:-k]])
+        return np.concatenate([pad, arr[:len(arr) - k]])
 
     def equal(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         """Two prices are 'the same level' within `equal_tol` of the average true range."""
