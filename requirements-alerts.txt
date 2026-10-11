@@ -1,0 +1,11 @@
+# What the alerts monitor needs (python -m quant.alerts) -- and nothing else: no plotting, no
+# notebooks. For a small server: scripts/install_alerts_linux.sh installs exactly this.
+# Pinned to the versions the alerts tests pass with. pytest is only for running those tests.
+numpy==2.3.3
+pandas==2.3.3
+numba==0.62.1
+pyarrow==22.0.0
+scipy==1.16.2
+requests==2.34.2
+dukascopy-python==4.0.1
+python-dotenv==1.2.2

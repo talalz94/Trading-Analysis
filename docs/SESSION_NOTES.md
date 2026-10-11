@@ -2119,3 +2119,35 @@ breaks it by a rule, e.g. "2 candles formed below the 5m trendline".
 - **Live check:** a 72 h dry run on the user's example found 6 breaks across BTC, gold and
   USDJPY, plus 2 formations.
 
+### Alerts on a free cloud server (2026-10-11)
+
+The user wanted the monitor running without their PC on. Chosen: **Oracle Cloud Always Free**.
+Step-by-step guide in docs/ALERTS_CLOUD.md; `scripts/install_alerts_linux.sh` installs it as a
+systemd service.
+
+- **Free-tier facts** (checked 2026-10-11 on Oracle's own page):
+  - the Arm allowance is now **2 OCPU / 12 GB**, not the 4 / 24 most guides still quote;
+  - idle reclaim applies under 20% CPU, network and memory over 7 days;
+  - Always Free compute exists only in the home region, which is permanent.
+
+  The monitor will look idle. The usual fix is upgrading to Pay As You Go, which users and Oracle
+  emails say stops reclaim and keeps Always Free free. Oracle's page does not state the exemption.
+- **Binance refuses US servers and many datacenter ranges.** Railway reports even its Netherlands
+  and Singapore regions. Step 7 of the guide tests it with one curl. The fallback is Dukascopy
+  `BTC/USD`, measured over 20 days against Binance:
+  - 24/7;
+  - median close −0.03%;
+  - 1h / 4h candles the same colour 96% / 98% of the time;
+  - but only 60 of Binance's 108 hourly candle-pattern alerts also fired. Patterns are sensitive
+    to exact OHLC, so "same chart" needs Binance itself.
+- **What a server needs**, measured rather than guessed:
+  - running every alert kind imports only numpy, pandas, numba, pyarrow, scipy, requests,
+    dukascopy-python and python-dotenv (no plotly, polars, tqdm or joblib);
+  - pinned in requirements-alerts.txt, and test_alerts.py passes in a clean Python 3.12 venv
+    holding only those (Ubuntu 24.04 ships 3.12);
+  - peak memory is 132 MB for the default three alerts and a 19-day backfill, so the 1 GB AMD
+    micro VM is enough when the Arm VM is out of capacity.
+- **Not tested here:** the systemd half of the install script (no Linux or WSL on the dev PC).
+  It is syntax-checked, and the venv half and the Python commands it runs are proved. The branch
+  must be PUSHED for the server to clone it (the repo is public; only `main` was on GitHub).
+
