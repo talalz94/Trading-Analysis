@@ -562,7 +562,8 @@ urgent alerts at once, the rest in a 15-minute digest, several markets in one em
 python -m quant.alerts list         # the menu: instruments, timeframes, patterns, kinds, setups
 python -m quant.alerts check        # what WOULD have fired in the last 48h -> alerts/state/preview.html
 python -m quant.alerts test-email   # after adding the Gmail App Password to .env
-powershell -ExecutionPolicy Bypass -File scripts/install_alerts_task.ps1   # run it from now on
+powershell -ExecutionPolicy Bypass -File scripts/install_alerts_task.ps1   # run it on this PC
+bash scripts/install_alerts_linux.sh                                       # ...or on a server (docs/ALERTS_CLOUD.md)
 python -m quant.alerts status
 ```
 

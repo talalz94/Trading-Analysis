@@ -10,7 +10,8 @@
 > (research findings, gotchas, next steps — read this for running context).** ·
 > [`docs/ALERTS.md`](docs/ALERTS.md) (the email alerts monitor — setup, config, robustness) ·
 > [`docs/ALERTS_CATALOGUE.md`](docs/ALERTS_CATALOGUE.md) (GENERATED: every instrument, timeframe,
-> pattern, alert kind and setup an alert can use).
+> pattern, alert kind and setup an alert can use) · [`docs/ALERTS_CLOUD.md`](docs/ALERTS_CLOUD.md)
+> (running the alerts on Oracle Cloud's free tier, step by step).
 >
 > **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
 > before proposing any new strategy idea, because most of them have already been tested and killed.
@@ -810,6 +811,15 @@ notebooks/               # 22_other_markets + nb22_config.py (2026-10-01) = note
 scripts/fetch_gold_dukascopy.py   # resumable true-spot XAUUSD fetch (1m/5m/15m/1h/4h)
 scripts/install_alerts_task.ps1   # the USER runs it: registers the `quant-alerts` scheduled task
                                   #   (at logon + every 5 min as a watchdog; -Uninstall removes it)
+scripts/install_alerts_linux.sh   # the same on a Linux SERVER (docs/ALERTS_CLOUD.md = Oracle Cloud's
+                                  #   free tier, step by step): .venv from requirements-alerts.txt,
+                                  #   a systemd service (boot + Restart=always 30 s), --uninstall.
+                                  #   Refuses to run as root or without ALERT_SMTP_PASSWORD in .env.
+                                  #   Syntax-checked only: no systemd on the dev PC
+requirements-alerts.txt           # ONLY what quant.alerts imports (measured by running every kind):
+                                  #   numpy pandas numba pyarrow scipy requests dukascopy-python
+                                  #   python-dotenv, pinned; proved in a clean Python 3.12 venv (the
+                                  #   Ubuntu 24.04 python) by test_alerts.py passing there
 alerts/alerts_config.py           # THE ALERTS CONFIG, the user's: markets, groups, categories,
                                   #   alerts, delivery. alerts/state/ is git-ignored
 examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
@@ -997,7 +1007,8 @@ print(res.stats)
 - Demo: `python examples/gold_ema_demo.py` · Tests: `python -m pytest tests/`
 - Alerts: `python -m quant.alerts list` (the menu) · `check` (dry run -> alerts/state/preview.html)
   · `status`.
-  Setup (Gmail App Password in .env, then scripts/install_alerts_task.ps1) is in docs/ALERTS.md.
+  Setup (Gmail App Password in .env, then scripts/install_alerts_task.ps1) is in docs/ALERTS.md;
+  on a cloud server, docs/ALERTS_CLOUD.md (Oracle free tier) + scripts/install_alerts_linux.sh.
 - New strategy = one dataclass in `quant/strategies/` (`prepare` + `build_signals`); sweep with `run_grid`.
 
 ## 11. Tests (what's covered)
