@@ -732,6 +732,7 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                        patterns: Optional[Sequence[str]] = None,
                        prefix: str = "pat",
                        _collect: Optional[List[dict]] = None,
+                       _formed: Optional[List[dict]] = None,
                        **removed) -> pd.DataFrame:
     """Detect classical chart patterns and publish their entry / stop / target levels.
 
@@ -752,6 +753,12 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
     pivots); `min_pivots`/`lookback_pivots` bound the window search; `max_wait` is how long a formed
     shape waits for its break; `overlap_frac` is how much two same-name detections may overlap
     before the weaker is dropped.
+
+    `_formed`, if given a list, receives one dict per shape on the bar it is REGISTERED -- its
+    pivots are confirmed and it starts waiting for its break -- whether or not it ever breaks out.
+    That is what "the pattern has formed" can honestly mean at the time: the breakout rows above are
+    known only later, so taking formations from them would be a lookahead. Appending to it changes
+    nothing else.
     """
     if removed:
         # These knobs were replaced when trendlines became fitted rather than assumed. Say so
@@ -844,6 +851,10 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                     cand.expires_i = min(cand.expires_i,
                                          int(last + frac * (apex - last)))
                 live.append(cand)
+                if _formed is not None:
+                    _formed.append(dict(i=i, pattern=cand.name, direction=cand.direction,
+                                        boundary=cand.boundary_at(i), stop=cand.stop,
+                                        height=cand.height, expires_i=cand.expires_i))
             pi += 1
 
         # 2) a live shape confirms when price CLOSES through its boundary

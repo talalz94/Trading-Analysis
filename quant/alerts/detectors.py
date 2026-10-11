@@ -19,6 +19,10 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+from quant.data.base import TIME_COL
+
+from .config import TF_MINUTES as _TF_MIN
+
 CATEGORY_ORDER = ("Candle patterns", "Chart patterns", "Levels & lines", "Indicators", "Setups")
 DIRECTIONS = ("both", "up", "down")
 
@@ -136,12 +140,13 @@ class CandleDetector(Detector):
 
 class ChartDetector(Detector):
     kind, category = "chart", "Chart patterns"
-    summary = ("a chart pattern BREAKS OUT: price closes through its neckline / boundary "
-               "(22 of them, with the measured-move target)")
+    summary = ("a chart pattern FORMS (its swings are in place and it starts waiting for a break), "
+               "and/or BREAKS OUT: price closes through its neckline / boundary (22 of them)")
     params = {"patterns": ("all", "names, or 'all' / 'bullish' / 'bearish'"),
+              "event": ("breakout", "formed | breakout | both"),
               "sensitivity": ("normal", "major | normal | minor -- bigger or smaller swings")}
     example = dict(patterns=("double_top", "double_bottom", "head_shoulders",
-                             "inverse_head_shoulders"))
+                             "inverse_head_shoulders"), event="both")
 
     def _names(self, p):
         from quant.indicators import CHART_PATTERNS, CHART_PATTERN_DIRECTION
@@ -150,6 +155,8 @@ class ChartDetector(Detector):
 
     def check(self, p):
         self._names(p)
+        if p["event"] not in ("formed", "breakout", "both"):
+            raise ValueError("event must be formed | breakout | both")
         if p["sensitivity"] not in ("major", "normal", "minor"):
             raise ValueError("sensitivity must be major | normal | minor")
 
@@ -160,37 +167,104 @@ class ChartDetector(Detector):
         from quant.indicators import add_chart_patterns, CHART_PATTERN_DIRECTION
         p = self.settings(params)
         pats = self._names(p)
+        formed = [] if p["event"] in ("formed", "both") else None
         out = add_chart_patterns(frame[["open", "high", "low", "close", "volume"]],
-                                 sensitivity=p["sensitivity"], patterns=pats)
+                                 sensitivity=p["sensitivity"], patterns=pats, _formed=formed)
         side = {1: "bull", -1: "bear", 0: ""}
-        name, tgt, stop = out["pat_name"].to_numpy(), out["pat_target"], out["pat_stop"]
-
-        def note(pat):
-            return lambda i: (f"target {_px(tgt.iat[i])} · stop {_px(stop.iat[i])}"
-                              if name[i] == pat and np.isfinite(tgt.iat[i]) else "")
         hits = []
-        for pat in pats:
-            col = out[f"pat_{pat}"].to_numpy(bool)
-            d = side[CHART_PATTERN_DIRECTION[pat]]
-            if d == "":                               # channels / symmetrical: side of the break
+        if formed:
+            # a channel or symmetrical triangle registers once per direction it could break --
+            # one shape, so one alert naming both edges
+            shapes: Dict[tuple, list] = {}
+            for r in formed:
+                shapes.setdefault((r["i"], r["pattern"]), []).append(r)
+            for (i, pat), rs in sorted(shapes.items()):
+                d = CHART_PATTERN_DIRECTION[pat]
+                if not (_want(p, True) and d >= 0 or _want(p, False) and d <= 0):
+                    continue
+                note = " or ".join(
+                    f"breaks {'above' if r['direction'] > 0 else 'below'} {_px(r['boundary'])}"
+                    f" → target {_px(r['boundary'] + r['direction'] * r['height'])}"
+                    for r in sorted(rs, key=lambda r: -r["direction"]))
+                hits.append(dict(i=int(i), what=f"{_pretty(pat)} formed", side=side[d],
+                                 note=note))
+        if p["event"] in ("breakout", "both"):
+            name, tgt, stop = out["pat_name"].to_numpy(), out["pat_target"], out["pat_stop"]
+
+            def note(pat):
+                return lambda i: (f"target {_px(tgt.iat[i])} · stop {_px(stop.iat[i])}"
+                                  if name[i] == pat and np.isfinite(tgt.iat[i]) else "")
+            for pat in pats:
+                col = out[f"pat_{pat}"].to_numpy(bool)
                 for i in np.flatnonzero(col):
                     s = {1: "bull", -1: "bear"}.get(int(np.sign(out["pat_dir"].iat[i])), "")
-                    hits.append(dict(i=int(i), what=_pretty(pat), side=s, note=note(pat)(i)))
-            else:
-                hits += _hits(col, _pretty(pat), d, note(pat))
+                    if not _want(p, s == "bull"):
+                        continue
+                    hits.append(dict(i=int(i), what=f"{_pretty(pat)} breakout", side=s,
+                                     note=note(pat)(i)))
         return hits
 
 
 # ══ LEVELS & LINES ══════════════════════════════════════════════════════════════════════════
+# ── breaking a level by a RULE ──────────────────────────────────────────────────────────────
+# "2 candles below the line" is several different rules, and they are not interchangeable. Every
+# one is counted FROM THE FIRST CLOSE THROUGH, over consecutive candles, against the level as it
+# stood there -- a trendline carried along its own slope, a zone held flat -- and a close back
+# across the level ends that break. It fires ONCE, on the candle that completes the rule, and that
+# candle's close is the time in the email:
+#
+#   closes=N   N closes in a row beyond the level           (closes=1: the first close through)
+#   full=N     N whole candles in a row beyond it, wicks included -- much stricter
+#   colour=N   N candles in a row of the break's colour: red for a break down, green for up
+#   confirm=N  (trendlines) then, within N candles, one of the break's colour must close beyond
+#              the WHOLE candle that completed the rule -- notebook 21's confirmation
+#
+# Every one that is set must hold. A closes-only rule is EXACTLY the research's tl_close_n (a test
+# holds them equal). full / colour deliberately differ: tl_full_m counts the break candle itself,
+# so "2 whole candles below" fired only when the candle that crossed the line was already wholly
+# below it -- 0.02 a day on BTC 5m -- which is not what the words mean.
+_RULE = {"closes": (1, "N closes in a row beyond it (1 = the first close through)"),
+         "full": (0, "N whole candles in a row beyond it, wicks included (0 = off)"),
+         "colour": (0, "N candles in a row of the break's colour: red down, green up (0 = off)")}
+
+
+def _check_rule(p):
+    for k in _RULE:
+        if int(p[k]) < 0:
+            raise ValueError(f"{k} must be 0 or more")
+    if int(p["closes"]) < 1 and int(p["full"]) < 1:
+        raise ValueError("a break needs closes >= 1 or full >= 1 -- colour alone is not a break")
+
+
+def _rule_words(p, word):
+    """'2 closes below, 2 red' -- the rule in the words it was set in, for the email."""
+    parts = []
+    if int(p["full"]) >= 1:
+        parts.append(f"{p['full']} whole candle{'s' * (int(p['full']) > 1)} {word}")
+    if int(p["closes"]) > 1 and int(p["closes"]) > int(p["full"]):
+        parts.append(f"{p['closes']} closes {word}")
+    if int(p["colour"]) >= 1:
+        parts.append(f"{p['colour']} {'green' if word == 'above' else 'red'}")
+    return ", ".join(parts)
+
+
 class TrendlineDetector(Detector):
     kind, category = "trendline", "Levels & lines"
-    summary = "price closes through a FITTED trendline (support or resistance with N touches)"
-    params = {"direction": ("both", "up = through resistance · down = through support"),
+    summary = ("a FITTED trendline (N touches) FORMS, and/or price BREAKS it by a rule: N closes, "
+               "N whole candles and/or N candles of the break's colour beyond it")
+    params = {"event": ("break", "formed | break | both"),
+              "direction": ("both", "up = resistance lines (broken upward) · down = support lines"),
+              **_RULE,
+              "confirm": (0, "then, within N candles, one of the break's colour must close beyond "
+                             "the WHOLE break candle (notebook 21's rule; 0 = off)"),
               "min_touches": (3, "pivots the line must touch"),
               "swing_size": (3.5, "zigzag pivot size in ATRs: bigger = longer, fewer lines")}
-    example = dict(direction="both", min_touches=3)
+    example = dict(event="both", closes=2)
 
     def check(self, p):
+        if p["event"] not in ("formed", "break", "both"):
+            raise ValueError("event must be formed | break | both")
+        _check_rule(p)
         if int(p["min_touches"]) < 2:
             raise ValueError("min_touches must be at least 2")
 
@@ -198,39 +272,103 @@ class TrendlineDetector(Detector):
         return 500         # a line may live 500 bars
 
     def evaluate(self, frame, params, tf):
-        from quant.indicators import add_trendlines
+        from quant.indicators import add_trendlines, trendline_table
         p = self.settings(params)
-        out = add_trendlines(frame[["open", "high", "low", "close"]].copy(),
-                             min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]))
-        res, sup = out["tl_res"].shift(1), out["tl_sup"].shift(1)
-        rt, st = out["tl_res_touches"].shift(1), out["tl_sup_touches"].shift(1)
+        d = add_trendlines(frame[["open", "high", "low", "close"]].copy(),
+                           min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]))
+        lines = trendline_table(d)
+        when = frame[TIME_COL] + pd.Timedelta(minutes=_TF_MIN.get(tf, 0))   # each bar's close
         hits = []
-        if _want(p, True):
-            hits += _hits(out["tl_break_up"], "broke a resistance trendline", "bull",
-                          lambda i: f"line {_px(res.iat[i])} · {int(rt.iat[i] or 0)} touches"
-                          if np.isfinite(res.iat[i]) else "")
-        if _want(p, False):
-            hits += _hits(out["tl_break_dn"], "broke a support trendline", "bear",
-                          lambda i: f"line {_px(sup.iat[i])} · {int(st.iat[i] or 0)} touches"
-                          if np.isfinite(sup.iat[i]) else "")
+        if p["event"] in ("formed", "both"):
+            for r in lines.itertuples():
+                up = r.kind > 0
+                if not _want(p, up):
+                    continue
+                i = int(r.born_i)
+                col = "tl_res" if up else "tl_sup"
+                lvl, tc = d[col].iat[i], d[f"{col}_touches"].iat[i]  # as published THEN, not later
+                hits.append(dict(
+                    i=i, what=f"{'resistance' if up else 'support'} trendline formed",
+                    side="bear" if up else "bull",
+                    note=f"line {_px(lvl)} · {int(tc)} touches · "
+                         f"{'rising' if r.slope > 0 else 'falling'}" if np.isfinite(lvl) else ""))
+        if p["event"] in ("break", "both"):
+            o, c, h, l = (frame[k].to_numpy(float) for k in ("open", "close", "high", "low"))
+            rule = dict(closes=int(p["closes"]), full=int(p["full"]), colour=int(p["colour"]),
+                        confirm=int(p["confirm"]))
+            for up in (True, False):
+                if not _want(p, up):
+                    continue
+                col = "tl_res" if up else "tl_sup"
+                pairs = _sustained(d[f"tl_break_{'up' if up else 'dn'}"].to_numpy(bool),
+                                   d[col].to_numpy(float), d[f"{col}_slope"].to_numpy(float),
+                                   o, h, l, c, up, **rule)
+                kind = 1 if up else -1
+                broke = lines[(lines["kind"] == kind) & lines["broke"]].set_index("end_i")
+                words = _rule_words(p, "above" if up else "below")
+                for k, j in pairs:
+                    note = words
+                    if k in broke.index:                 # the line that broke ON bar k, named
+                        r = broke.loc[k]                 # by when it formed: no window renumbers it
+                        r = r.iloc[-1] if isinstance(r, pd.DataFrame) else r
+                        note = (f"{words + ' · ' if words else ''}line formed "
+                                f"{when.iat[int(r['born_i'])]:%d %b %H:%M} · "
+                                f"{int(r['touches'])} touches")
+                    hits.append(dict(i=int(j), side="bull" if up else "bear", note=note,
+                                     what=f"broke a {'resistance' if up else 'support'} trendline"
+                                          + (" (confirmed)" if rule["confirm"] else "")))
         return hits
+
+
+def _sustained(first, level, slope, o, h, l, c, up: bool, closes: int, full: int, colour: int,
+               confirm: int = 0):
+    """[(k, j)]: for each first close through the level at bar k, the bar j that completes the
+    rule, or nothing if price closes back across the level first. The level at bar j is
+    level[k] + slope[k] * (j - k): a trendline extended along its own slope, a zone held flat."""
+    out = []
+    n = len(c)
+    for k in np.flatnonzero(first):
+        L0, m = level[k], (slope[k] if np.isfinite(slope[k]) else 0.0)
+        nc = nf = nk = 0
+        for j in range(k, n):
+            L = L0 + m * (j - k)
+            if not (c[j] > L if up else c[j] < L):
+                break                                 # closed back: this break is over
+            nc += 1
+            nf = nf + 1 if (l[j] > L if up else h[j] < L) else 0
+            nk = nk + 1 if (c[j] > o[j] if up else c[j] < o[j]) else 0
+            if nc >= closes and nf >= full and nk >= colour:
+                if confirm <= 0:
+                    out.append((k, j))
+                    break
+                # the candle that completed the rule is the reference: a later candle of the
+                # break's colour has to close beyond ALL of it, within `confirm` candles
+                for x in range(j + 1, min(n, j + 1 + confirm)):
+                    right = c[x] > o[x] if up else c[x] < o[x]
+                    if right and (c[x] > h[j] if up else c[x] < l[j]):
+                        out.append((k, x))
+                        break
+                break
+    return out
 
 
 class SRZoneDetector(Detector):
     kind, category = "sr_zone", "Levels & lines"
-    summary = ("a support / resistance zone (clustered swing highs and lows) is BROKEN, or price "
-               "BOUNCES off it")
+    summary = ("a support / resistance zone (clustered swing highs and lows) is BROKEN by a rule "
+               "(N closes / whole candles / candles of the break's colour), or price BOUNCES off it")
     params = {"event": ("break", "break | bounce | both"),
               "direction": ("both", "up = resistance broken / support held · down = the mirror"),
+              **_RULE,
               "sensitivity": ("normal", "tight | normal | loose -- fewer, stronger zones to more"),
               "min_touches": (None, "swings a zone needs; None = the tuned value for the tf")}
-    example = dict(event="break", sensitivity="normal")
+    example = dict(event="break", closes=2, sensitivity="normal")
 
     def check(self, p):
         if p["event"] not in ("break", "bounce", "both"):
             raise ValueError("event must be break | bounce | both")
         if p["sensitivity"] not in ("tight", "normal", "loose"):
             raise ValueError("sensitivity must be tight | normal | loose")
+        _check_rule(p)
 
     def warmup_bars(self, params):
         return 500
@@ -242,25 +380,33 @@ class SRZoneDetector(Detector):
         need = int(p["min_touches"] if p["min_touches"] is not None else sp.pop("min_touches", 1))
         sp.pop("min_touches", None)
         out = add_sr_zones(frame[["open", "high", "low", "close"]].copy(), **sp)
-        c, h, l = (frame[k].to_numpy(float) for k in ("close", "high", "low"))
+        o, c, h, l = (frame[k].to_numpy(float) for k in ("open", "close", "high", "low"))
         sup = out["sr_support"].shift(1).to_numpy(float)
         res = out["sr_resistance"].shift(1).to_numpy(float)
         sup[out["sr_support_touches"].shift(1).fillna(0).to_numpy() < need] = np.nan
         res[out["sr_resistance_touches"].shift(1).fillna(0).to_numpy() < need] = np.nan
         prev = np.r_[np.nan, c[:-1]]
-        with np.errstate(invalid="ignore"):
-            events = {
-                ("break", True): (c > res) & (prev <= res), ("break", False): (c < sup) & (prev >= sup),
-                ("bounce", True): (l <= sup) & (c > sup), ("bounce", False): (h >= res) & (c < res)}
-        words = {("break", True): ("broke resistance", res), ("break", False): ("broke support", sup),
-                 ("bounce", True): ("bounced off support", sup),
-                 ("bounce", False): ("rejected at resistance", res)}
         hits = []
-        for (ev, up), mask in events.items():
-            if p["event"] in (ev, "both") and _want(p, up):
-                what, lvl = words[(ev, up)]
-                hits += _hits(mask, what, "bull" if up else "bear",
-                              lambda i, lvl=lvl: f"zone {_px(lvl[i])}")
+        with np.errstate(invalid="ignore"):
+            if p["event"] in ("break", "both"):
+                for up, lvl in ((True, res), (False, sup)):
+                    if not _want(p, up):
+                        continue
+                    first = (c > lvl) & (prev <= lvl) if up else (c < lvl) & (prev >= lvl)
+                    words = _rule_words(p, "above" if up else "below")
+                    for k, j in _sustained(first, lvl, np.zeros(len(c)), o, h, l, c, up,
+                                           int(p["closes"]), int(p["full"]), int(p["colour"])):
+                        hits.append(dict(i=int(j), what="broke resistance" if up else
+                                         "broke support", side="bull" if up else "bear",
+                                         note=f"zone {_px(lvl[k])}"
+                                              + (f" · {words}" if words else "")))
+            if p["event"] in ("bounce", "both"):
+                if _want(p, True):
+                    hits += _hits((l <= sup) & (c > sup), "bounced off support", "bull",
+                                  lambda i: f"zone {_px(sup[i])}")
+                if _want(p, False):
+                    hits += _hits((h >= res) & (c < res), "rejected at resistance", "bear",
+                                  lambda i: f"zone {_px(res[i])}")
         return hits
 
 

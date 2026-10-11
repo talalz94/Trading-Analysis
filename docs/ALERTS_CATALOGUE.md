@@ -100,52 +100,61 @@ dict(on=True, name="...", kind="candle", patterns=('engulfing_bull', 'engulfing_
 
 ### Chart patterns
 
-**`chart`**: a chart pattern BREAKS OUT: price closes through its neckline / boundary (22 of them, with the measured-move target)
+**`chart`**: a chart pattern FORMS (its swings are in place and it starts waiting for a break), and/or BREAKS OUT: price closes through its neckline / boundary (22 of them)
 
 | setting | default | meaning |
 |---|---|---|
 | `patterns` | `'all'` | names, or 'all' / 'bullish' / 'bearish' |
-| `sensitivity` | `'normal'` | major | normal | minor -- bigger or smaller swings |
+| `event` | `'breakout'` | formed \| breakout \| both |
+| `sensitivity` | `'normal'` | major \| normal \| minor -- bigger or smaller swings |
 
 ```python
-dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom', 'head_shoulders', 'inverse_head_shoulders'), markets="all", tfs="1h")
+dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom', 'head_shoulders', 'inverse_head_shoulders'), event='both', markets="all", tfs="1h")
 ```
 
 ### Levels & lines
 
-**`trendline`**: price closes through a FITTED trendline (support or resistance with N touches)
+**`trendline`**: a FITTED trendline (N touches) FORMS, and/or price BREAKS it by a rule: N closes, N whole candles and/or N candles of the break's colour beyond it
 
 | setting | default | meaning |
 |---|---|---|
-| `direction` | `'both'` | up = through resistance · down = through support |
+| `event` | `'break'` | formed \| break \| both |
+| `direction` | `'both'` | up = resistance lines (broken upward) · down = support lines |
+| `closes` | `1` | N closes in a row beyond it (1 = the first close through) |
+| `full` | `0` | N whole candles in a row beyond it, wicks included (0 = off) |
+| `colour` | `0` | N candles in a row of the break's colour: red down, green up (0 = off) |
+| `confirm` | `0` | then, within N candles, one of the break's colour must close beyond the WHOLE break candle (notebook 21's rule; 0 = off) |
 | `min_touches` | `3` | pivots the line must touch |
 | `swing_size` | `3.5` | zigzag pivot size in ATRs: bigger = longer, fewer lines |
 
 ```python
-dict(on=True, name="...", kind="trendline", direction='both', min_touches=3, markets="all", tfs="1h")
+dict(on=True, name="...", kind="trendline", event='both', closes=2, markets="all", tfs="1h")
 ```
 
-**`sr_zone`**: a support / resistance zone (clustered swing highs and lows) is BROKEN, or price BOUNCES off it
+**`sr_zone`**: a support / resistance zone (clustered swing highs and lows) is BROKEN by a rule (N closes / whole candles / candles of the break's colour), or price BOUNCES off it
 
 | setting | default | meaning |
 |---|---|---|
-| `event` | `'break'` | break | bounce | both |
+| `event` | `'break'` | break \| bounce \| both |
 | `direction` | `'both'` | up = resistance broken / support held · down = the mirror |
-| `sensitivity` | `'normal'` | tight | normal | loose -- fewer, stronger zones to more |
+| `closes` | `1` | N closes in a row beyond it (1 = the first close through) |
+| `full` | `0` | N whole candles in a row beyond it, wicks included (0 = off) |
+| `colour` | `0` | N candles in a row of the break's colour: red down, green up (0 = off) |
+| `sensitivity` | `'normal'` | tight \| normal \| loose -- fewer, stronger zones to more |
 | `min_touches` | `None` | swings a zone needs; None = the tuned value for the tf |
 
 ```python
-dict(on=True, name="...", kind="sr_zone", event='break', sensitivity='normal', markets="all", tfs="1h")
+dict(on=True, name="...", kind="sr_zone", event='break', closes=2, sensitivity='normal', markets="all", tfs="1h")
 ```
 
 **`fvg`**: a fair value gap (three-candle imbalance) FORMS, or a live one gets FILLED
 
 | setting | default | meaning |
 |---|---|---|
-| `event` | `'formed'` | formed | filled | both |
+| `event` | `'formed'` | formed \| filled \| both |
 | `direction` | `'both'` | up = bullish gaps · down = bearish gaps |
 | `min_size_atr` | `0.25` | smallest gap, in ATRs |
-| `mitigation` | `'ce'` | what counts as filled: touch | ce (midpoint) | full |
+| `mitigation` | `'ce'` | what counts as filled: touch \| ce (midpoint) \| full |
 
 ```python
 dict(on=True, name="...", kind="fvg", event='formed', min_size_atr=0.5, markets="all", tfs="1h")
@@ -157,7 +166,7 @@ dict(on=True, name="...", kind="fvg", event='formed', min_size_atr=0.5, markets=
 
 | setting | default | meaning |
 |---|---|---|
-| `ma` | `'ema'` | ema | sma |
+| `ma` | `'ema'` | ema \| sma |
 | `period` | `200` | price vs this MA (ignored when fast/slow are set) |
 | `fast` | `None` | fast MA period, for an MA-vs-MA cross |
 | `slow` | `None` | slow MA period |
@@ -174,7 +183,7 @@ dict(on=True, name="...", kind="ma_cross", ma='ema', period=200, markets="all", 
 | `period` | `14` | RSI length |
 | `above` | `70` | overbought line |
 | `below` | `30` | oversold line |
-| `when` | `'enter'` | enter | exit |
+| `when` | `'enter'` | enter \| exit |
 | `direction` | `'both'` | up = crossing upward · down = crossing downward |
 
 ```python
@@ -201,7 +210,7 @@ dict(on=True, name="...", kind="rsi_divergence", period=14, left=5, right=5, mar
 | `fast` | `12` | fast EMA length |
 | `slow` | `26` | slow EMA length |
 | `signal` | `9` | signal line length |
-| `cross` | `'signal'` | signal | zero |
+| `cross` | `'signal'` | signal \| zero |
 | `direction` | `'both'` | up = bullish cross · down = bearish |
 
 ```python

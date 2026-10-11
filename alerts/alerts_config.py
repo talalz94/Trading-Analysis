@@ -59,17 +59,25 @@ ALERTS = [
          patterns=("morning_star", "evening_star"),
          markets="all", tfs=("1h", "4h"), priority="normal"),
 
-    # ── CHART PATTERNS ── fires on the breakout, with the measured-move target ────────────────
-    dict(on=False, name="tops & bottoms breakout", kind="chart",                    # ~0.2/day
+    # ── CHART PATTERNS ── event: "formed" (shape in place) · "breakout" (close through) · "both"
+    dict(on=False, name="tops & bottoms", kind="chart", event="both",               # ~0.6/day
          patterns=("double_top", "double_bottom", "head_shoulders", "inverse_head_shoulders"),
          markets="all", tfs=("1h", "4h"), priority="urgent"),
 
-    # ── LEVELS & LINES ─────────────────────────────────────────────────────────────────────────
+    # ── LEVELS & LINES ── a break can need a RULE, counted from the first close through:
+    #      closes=N  N closes in a row beyond · full=N  N whole candles beyond (wicks too)
+    #      colour=N  N candles of the break's colour (red down, green up) · all that are set
+    dict(on=False, name="5m trendline: 2 closes beyond", kind="trendline",          # ~2.4/day
+         event="break", closes=2, markets="all", tfs="5m", priority="urgent"),
+
+    dict(on=False, name="trendline formed", kind="trendline", event="formed",       # ~0.6/day
+         markets="all", tfs=("1h", "4h"), priority="normal"),
+
     dict(on=False, name="trendline break", kind="trendline", min_touches=3,         # ~0.3/day
          markets="all", tfs=("1h", "4h"), priority="normal"),
 
-    dict(on=False, name="S/R zone break", kind="sr_zone", event="break",            # ~1.1/day
-         markets="all", tfs="4h", priority="normal"),
+    dict(on=False, name="S/R zone: 2 closes beyond", kind="sr_zone", event="break", # ~0.8/day
+         closes=2, markets="all", tfs="4h", priority="normal"),
 
     dict(on=False, name="big FVG formed", kind="fvg", event="formed",               # ~1.3/day
          min_size_atr=1.0, markets="all", tfs=("1h", "4h"), priority="normal"),

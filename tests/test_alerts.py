@@ -381,7 +381,12 @@ def synthetic(n=1500, seed=7):
 def _kind_cases():
     from quant.alerts.detectors import setup_keys
     cases = [(k, dict(d.example)) for k, d in REGISTRY.items() if k not in ("spike", "setup")]
-    cases += [("chart", dict(patterns="all")), ("sr_zone", dict(event="both")),
+    cases += [("chart", dict(patterns="all", event="both")),
+              ("trendline", dict(event="both", closes=2, full=1, colour=2)),
+              ("trendline", dict(event="break", closes=1, confirm=3)),
+              ("trendline", dict(event="break", closes=0, full=2)),
+              ("sr_zone", dict(event="break", closes=2, full=1, colour=1)),
+              ("chart", dict(patterns="all")), ("sr_zone", dict(event="both")),
               ("fvg", dict(event="both")), ("ma_cross", dict(fast=20, slow=50)),
               ("rsi", dict(when="enter")), ("macd", dict(cross="zero")),
               ("stochastic", dict(above=100, below=0))]
@@ -412,6 +417,75 @@ def test_no_alert_kind_ever_repaints(kind, params):
         cut = {key(h) for h in det.evaluate(f.iloc[:k].reset_index(drop=True), params, "1h")}
         want = {x for x in full if x[0] < k}
         assert cut == want, (kind, k, sorted(cut ^ want)[:4])
+
+
+def test_a_break_rule_counts_from_the_first_close_through():
+    """By hand, on a level at 100 that is broken downward twice."""
+    from quant.alerts.detectors import _sustained
+    c = np.array([101, 99.0, 98.5, 100.5, 98.0, 97.0, 96.0, 95.5])
+    o = c + 0.4                                       # every candle red
+    h = np.array([102, 100.5, 99.5, 101, 100.2, 99.0, 96.5, 96.0])
+    l = c - 0.5
+    first = np.r_[False, (c[1:] < 100) & (c[:-1] >= 100)]           # bars 1 and 4
+    flat, zero = np.full(8, 100.0), np.zeros(8)
+
+    def at(**rule):
+        return [j for _, j in _sustained(first, flat, zero, o, h, l, c, False, **rule)]
+
+    assert at(closes=1, full=0, colour=0) == [1, 4]   # the first close through, each time
+    assert at(closes=2, full=0, colour=0) == [2, 5]   # bar 3 closed back: the first break died
+    assert at(closes=3, full=0, colour=0) == [6]
+    assert at(closes=1, full=2, colour=0) == [6]      # whole candles: highs 99.0, 96.5 < 100
+    assert at(closes=2, full=0, colour=0, confirm=2) == [6]   # 96 closes below bar 5's low 96.5
+    o[5] = c[5] - 0.4                                 # bar 5 is GREEN, though still below 100
+    assert at(closes=1, full=0, colour=2) == [2, 7]   # red 1-2; then red 4, GREEN 5 resets,
+                                                      # red 6 and 7 -- not 5, as without colour
+    assert at(closes=2, full=0, colour=0) == [2, 5]   # colour off: the green candle is irrelevant
+    # a SLOPED line is carried along its slope: a support falling 2 a bar is at 98 on bar 2, so
+    # the 98.5 close there is back ABOVE it and the first break dies -- flat, it survived
+    pairs = _sustained(first, flat, np.full(8, -2.0), o, h, l, c, False,
+                       closes=2, full=0, colour=0)
+    assert pairs == [(4, 5)]                          # flat gave [(1, 2), (4, 5)]
+
+
+@pytest.mark.parametrize("n", [1, 2, 3])
+def test_a_closes_rule_is_exactly_the_research_rule(n):
+    """closes=N must mean what notebook 21's tl_close_n means, or an alert and a backtest
+    would disagree about the same break."""
+    from quant.indicators import add_trendlines
+    from quant.scenarios.entries import _tl_entry
+    f = synthetic()
+    d = add_trendlines(f[["open", "high", "low", "close"]].copy())
+    q = dict(tl_prefixes=("",), tl_close_n=n, tl_extend=True)
+    research = set(np.flatnonzero(_tl_entry(q, "long")(d) | _tl_entry(q, "short")(d)))
+    alert = {h["i"] for h in REGISTRY["trendline"].evaluate(f, dict(closes=n), "1h")}
+    assert research and alert == research
+
+
+def test_a_trendline_forms_on_the_bar_it_is_first_published_and_a_break_names_it():
+    from quant.indicators import add_trendlines, trendline_table
+    f = synthetic()
+    lines = trendline_table(add_trendlines(f[["open", "high", "low", "close"]].copy()))
+    hits = REGISTRY["trendline"].evaluate(f, dict(event="both", closes=2), "1h")
+    formed = sorted(h["i"] for h in hits if h["what"].endswith("formed"))
+    assert formed == sorted(lines["born_i"].astype(int))
+    breaks = [h for h in hits if h["what"].startswith("broke")]
+    assert breaks and all("line formed" in h["note"] and "2 closes" in h["note"] for h in breaks)
+
+
+def test_the_chart_formed_hook_changes_nothing_and_every_breakout_formed_first():
+    from quant.indicators import add_chart_patterns
+    f = synthetic(2000)[["open", "high", "low", "close", "volume"]]
+    formed = []
+    plain = add_chart_patterns(f)
+    hooked = add_chart_patterns(f, _formed=formed)
+    pd.testing.assert_frame_equal(plain, hooked)
+    hits = REGISTRY["chart"].evaluate(f, dict(patterns="all", event="both"), "1h")
+    made = [(h["i"], h["what"].replace(" formed", "")) for h in hits if h["what"].endswith("formed")]
+    outs = [(h["i"], h["what"].replace(" breakout", "")) for h in hits
+            if h["what"].endswith("breakout")]
+    assert outs and made
+    assert all(any(m == name and i < j for i, m in made) for j, name in outs)
 
 
 def test_setups_fire_on_this_data_too():
