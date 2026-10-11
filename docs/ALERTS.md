@@ -132,9 +132,9 @@ DELIVERY = dict(digest_minutes=15, catchup_max_age_minutes=30)
 | category | kind | fires when |
 |---|---|---|
 | Candle patterns | `candle` | one of 62 candlestick patterns completes |
-| Chart patterns | `chart` | one of 22 chart patterns breaks out, with its measured-move target and stop |
-| Levels & lines | `trendline` | price closes through a fitted trendline |
-| | `sr_zone` | a support/resistance zone is broken, or price bounces off it |
+| Chart patterns | `chart` | one of 22 chart patterns **forms** and/or **breaks out** (`event=`), with its target and stop |
+| Levels & lines | `trendline` | a fitted trendline **forms**, and/or price **breaks it by a rule** (below) |
+| | `sr_zone` | a support/resistance zone is **broken by a rule**, or price bounces off it |
 | | `fvg` | a fair value gap forms, or gets filled |
 | Indicators | `ma_cross` | price crosses an EMA/SMA, or a golden/death cross |
 | | `rsi` | RSI enters, or leaves, overbought/oversold |
@@ -146,6 +146,41 @@ DELIVERY = dict(digest_minutes=15, catchup_max_age_minutes=30)
 | | `candle_run` | N candles in a row of one colour |
 | | `big_candle` | a candle at least k × ATR long |
 | Setups | `setup` | one of 28 research entry setups (break of structure, squeeze, WaveTrend cross, VWAP reversion, support break …) would open a trade |
+
+**Formation and break, as two separate alerts.** `event="formed"` fires when the thing first
+exists. A trendline exists from the candle its last touch is confirmed on. A chart pattern exists
+once its swings are in place, and it then waits for a break, whether or not one ever comes.
+`event="break"` (or `"breakout"` for chart patterns) fires when price breaks it, and
+`event="both"` sends both. A formation note says where the break would be, for example
+`breaks below 84,120 → target 82,000`. A break note says which line broke, for example
+`2 closes below · line formed 10 Oct 04:05 · 3 touches`.
+
+**Breaking a level by a rule.** Trendline and S/R-zone breaks take a rule. It is counted from the
+first close through, over consecutive candles, against the level as it stood there: a trendline is
+carried along its own slope, a zone is held flat. A close back across the level ends that break.
+
+| setting | meaning |
+|---|---|
+| `closes=N` | N closes in a row beyond the level (`1`, the default, = the first close through) |
+| `full=N` | N whole candles in a row beyond it, wicks included |
+| `colour=N` | N candles in a row of the break's colour: red for a break down, green for up |
+| `confirm=N` | (trendlines) then, within N candles, one of the break's colour must close beyond the whole candle that completed the rule. This is notebook 21's confirmation. |
+
+Every setting you give must hold. The alert fires **once**, on the candle that completes the rule,
+and the time in the email is that candle's close. So "alert me when 2 candles close below the 5m
+trendline" is:
+
+```python
+dict(on=True, name="5m trendline: 2 closes beyond", kind="trendline",
+     event="break", closes=2, markets="all", tfs="5m", priority="urgent"),
+```
+
+Use `full=2` instead when "below" should mean whole candles below, wicks included. A `closes` rule
+means exactly what notebook 21's `tl_close_n` means, and a test holds the two equal. `full` and
+`colour` deliberately differ from the research's `tl_full_m` / `tl_dir_n`, which count the break
+candle itself. In the research version, "2 whole candles below" fired only when the very candle
+that crossed the line was already wholly below it: 0.02 a day on BTC 5m, against 0.8 counted this
+way.
 
 **Rules that keep it honest:**
 - **A setting a kind does not have is refused by name.** `perod=14` on an RSI alert is an error,

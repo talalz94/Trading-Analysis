@@ -2086,3 +2086,36 @@ code.
 - **Cost of switching things on:** history kept = the heaviest ON alert's warm-up. That is 19 days
   for the default three and 147 with everything in the file on (EMA-200 on 4h needs ~600 candles).
 
+### Alerts: formation, and breaks by a rule (2026-10-11)
+
+The user asked for an alert when a pattern or level FORMS, and another at the exact candle that
+breaks it by a rule, e.g. "2 candles formed below the 5m trendline".
+
+- **Formed events.**
+  - **trendline:** the line's born_i from trendline_table, which is the bar its last pivot
+    confirmed and the bar it is first published. The note reads the level and touches from the
+    per-bar columns AT that bar; the table's touches are final and would repaint.
+  - **chart:** a new opt-in hook, `add_chart_patterns(_formed=[])`, receives every shape on the
+    bar it is registered. The breakout rows (and chart_pattern_shapes' formed_i) exist only for
+    shapes that later broke out, so taking formations from them would be a lookahead. On BTC 1h
+    the four tops/bottoms shapes registered 23 times in 184 days and broke out 9.
+  - **fvg:** already had formed and filled.
+- **Break rule** (trendline and sr_zone): closes / full / colour, plus confirm for trendlines.
+  - Counted from the first close through; a close back ends the break; fires once.
+  - First tried by reusing the research `_tl_entry`. Its `closes` matches exactly, and a test
+    keeps it that way: 97 / 72 / 61 identical alerts on BTC 5m for closes = 1 / 2 / 3.
+  - Its `tl_full_m` / `tl_dir_n` count the break candle itself, and hold the line only
+    max(n, m) - 1 bars. "2 whole candles below" therefore needed the crossing candle to be wholly
+    below already: 0.02 a day. Counted from the break it is 0.8 a day.
+  - So `_sustained()` is the alert's own, with the semantics written down in detectors.py.
+- **A break names its line by when it formed** ("line formed 10 Oct 04:05 · 3 touches"), not by
+  the S7 / R3 id. Ids are numbered within the frame the detector sees, and each tick sees a
+  different window.
+- **Rates** on Gold + USDJPY + BTC, Mar–Aug 2026:
+  - 5m trendline, 2 closes beyond: 2.4 a day;
+  - trendline formed, 1h + 4h: 0.6;
+  - tops & bottoms formed + breakout, 1h + 4h: 0.6;
+  - S/R zone, 2 closes beyond, 4h: 0.8.
+- **Live check:** a 72 h dry run on the user's example found 6 breaks across BTC, gold and
+  USDJPY, plus 2 formations.
+

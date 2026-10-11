@@ -123,7 +123,8 @@ def catalogue(markdown: bool = False) -> str:
             if markdown:
                 out += [f"**`{d.kind}`**: {d.summary}", ""]
                 out += ["| setting | default | meaning |", "|---|---|---|"]
-                out += [f"| `{k}` | `{dv!r}` | {txt} |" for k, (dv, txt) in d.params.items()]
+                out += [f"| `{k}` | `{dv!r}` | {txt.replace('|', chr(92) + '|')} |"   # a | in a
+                        for k, (dv, txt) in d.params.items()]                         # cell splits it
                 out += ["", f"```python\n{line}\n```", ""]
             else:
                 out += ["", f"  {d.kind}: {d.summary}"]
