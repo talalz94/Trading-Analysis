@@ -69,7 +69,7 @@ nothing and does not touch the monitor's state. Run it after every change to the
 ## 3. Start the monitor
 
 **On a cloud server** (it keeps running while your PC is off): follow
-[ALERTS_CLOUD.md](ALERTS_CLOUD.md). It covers Oracle Cloud's free tier step by step, and
+[ALERTS_CLOUD.md](ALERTS_CLOUD.md). It covers Google Cloud's free tier step by step, and
 `scripts/install_alerts_linux.sh` installs the monitor as a Linux service there. The rest of this
 section is for running it on this PC instead. **Never both:** every alert would arrive twice.
 
@@ -341,7 +341,9 @@ python -m quant.alerts status
 - **On this PC it runs only while the PC is on and you are logged on.** It catches up afterwards,
   but cannot email you during the gap. On a server it runs all the time: see
   [ALERTS_CLOUD.md](ALERTS_CLOUD.md).
-- **Binance refuses data to US servers and to many datacenter IP ranges.** On a cloud server, test
-  it first (ALERTS_CLOUD.md, step 7). The fallback is Dukascopy's `BTC/USD`, which trades 24/7 and
-  sits within ~0.03% of Binance's price. Its candle-pattern alerts do not always match Binance's
-  chart: 60 of 108 hourly alerts matched over 20 days.
+- **Binance refuses data to US servers and to many datacenter IP ranges** (HTTP 451). The feed
+  then switches by itself to Binance's market-data host, `data-api.binance.vision`, which gives the
+  same candles. Whether that host answers a given server is tested in step 7 of ALERTS_CLOUD.md.
+  If both refuse, use Dukascopy's `BTC/USD`, which trades 24/7 and sits within ~0.03% of Binance's
+  price. Its candle-pattern alerts do not always match Binance's chart: 60 of 108 hourly alerts
+  matched over 20 days.

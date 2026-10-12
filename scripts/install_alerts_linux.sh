@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install (or update, or remove) the quant alerts monitor as a systemd service on a Linux server --
-# the cloud counterpart of scripts/install_alerts_task.ps1. Tested path: Ubuntu 24.04 on Oracle
-# Cloud's Always Free VMs (docs/ALERTS_CLOUD.md walks through all of it).
+# the cloud counterpart of scripts/install_alerts_task.ps1. Written for Ubuntu 24.04, e.g. Google
+# Cloud's free e2-micro (docs/ALERTS_CLOUD.md walks through all of it).
 #
 #     bash scripts/install_alerts_linux.sh              install, or update after a git pull
 #     bash scripts/install_alerts_linux.sh --uninstall  stop it and remove the service
