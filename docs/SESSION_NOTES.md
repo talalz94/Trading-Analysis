@@ -2151,3 +2151,31 @@ systemd service.
   It is syntax-checked, and the venv half and the Python commands it runs are proved. The branch
   must be PUSHED for the server to clone it (the repo is public; only `main` was on GitHub).
 
+### Cloud host: Google Cloud, not Oracle (2026-10-12)
+
+- **Oracle's free sign-up failed from Pakistan.** Its fraud check is known to refuse PIN-type debit
+  cards, cards outside the US/EU, VPNs, and IP/billing-country mismatches. The user has a Dubai
+  card but is located in Pakistan, which is exactly such a mismatch. PayPal does not operate in
+  Pakistan.
+- **Survey of free always-on options (2026-10):**
+  - Free indefinitely AND a real always-on VM: only Oracle Always Free and Google's e2-micro.
+  - Free for a limited time: Azure (12 months), AWS (6 months / credits).
+  - They sleep: Koyeb (scales to zero after 1 h, no workers or volumes) and Render.
+  - No free tier: Fly.io (about $2 a month).
+  - PythonAnywhere: $10 a month for an always-on task.
+  - Northflank: claims always-on, but compute and volumes are vague and it says "not for
+    production".
+  - GitHub Actions: runs 5–30 minutes late, can drop runs, and is on US IPs.
+- **Chosen: Google Cloud's free tier.** docs/ALERTS_CLOUD.md was rewritten for it.
+  - Always Free continues after the 90-day trial only if the account is upgraded; otherwise
+    billing is disabled and access is lost.
+  - Only us-west1, us-central1 and us-east1 qualify.
+  - The disk must be *Standard* persistent; the console default, *Balanced*, is charged.
+  - 1 GB of outbound traffic a month.
+  - Whether the in-use external IPv4 is charged on the free VM is contested: older Google pages
+    say it is free, a 2026 aggregator says $0.005 an hour. The guide's step 11 reads the bill.
+- **Binance from a US server:** api.binance.com answers 451. The feed now falls back to
+  `data-api.binance.vision`, which serves the same /klines (71 of 71 candles identical, checked
+  live), and remembers which host answered. Whether that host also refuses US servers is
+  unknown; step 7 of the guide tests it. If both refuse, BTC moves to Dukascopy `BTC/USD`.
+

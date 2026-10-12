@@ -599,6 +599,45 @@ def test_a_hanging_feed_times_out_by_name_and_is_not_asked_twice(monkeypatch):
     assert "still hanging" in str(again)              # no second thread beside the stuck one
 
 
+class _Resp:
+    def __init__(self, code, body=None):
+        self.status_code, self._body = code, body
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        import requests
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
+
+
+def test_binance_refusing_a_server_falls_back_to_its_market_data_host(monkeypatch):
+    """A US server (Google's free VM) gets HTTP 451 from api.binance.com; the same candles come
+    from data-api.binance.vision, and the host that answered is used from then on."""
+    import requests
+    from quant.alerts import feeds
+    t0 = int(at("2026-06-03 00:00").timestamp() * 1000)
+    kline = [[t0 + k * 300_000, "1", "2", "0.5", "1.5", "10"] + [0] * 6 for k in range(3)]
+    calls = []
+
+    def get(url, params=None, timeout=None):
+        calls.append(url.rsplit("/api/v3", 1)[0])
+        return _Resp(451) if "api.binance.com" in url else _Resp(200, kline)
+
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(feeds, "_binance_host", [0])
+    bars_ = feeds.binance_5m("BTCUSDT", at("2026-06-03 00:00"), at("2026-06-03 00:20"))
+    assert len(bars_) == 3 and calls == ["https://api.binance.com", "https://data-api.binance.vision"]
+    feeds.binance_5m("BTCUSDT", at("2026-06-03 00:00"), at("2026-06-03 00:20"))
+    assert calls[2:] == ["https://data-api.binance.vision"]          # remembered: one call
+
+    monkeypatch.setattr(requests, "get", lambda url, params=None, timeout=None: _Resp(451))
+    monkeypatch.setattr(feeds, "_binance_host", [0])
+    with pytest.raises(requests.HTTPError, match="refuses this server on every host"):
+        feeds.binance_5m("BTCUSDT", at("2026-06-03 00:00"), at("2026-06-03 00:20"))
+
+
 def test_a_months_long_first_download_gets_a_longer_timeout():
     from quant.alerts.feeds import Feed
     f, now = Feed(timeout=90), at("2026-06-03")

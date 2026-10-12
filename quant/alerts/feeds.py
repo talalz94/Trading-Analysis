@@ -24,7 +24,12 @@ from quant.data.base import TIME_COL
 
 BAR = pd.Timedelta(minutes=5)
 COLS = [TIME_COL, "open", "high", "low", "close", "volume"]
-_BINANCE = "https://api.binance.com/api/v3/klines"
+# Binance refuses some servers outright -- every US one, and many datacenter ranges -- with HTTP
+# 451 "restricted location" (or 403). Its market-data-only host serves the same public /klines; if
+# the main host refuses, that one is tried, and whichever answered is remembered for the next call.
+_BINANCE_HOSTS = ("https://api.binance.com", "https://data-api.binance.vision")
+_binance_host = [0]
+_log = logging.getLogger("quant.alerts")
 
 
 def _closed(df: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
@@ -34,15 +39,32 @@ def _closed(df: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
     return df[COLS].drop_duplicates(TIME_COL, keep="last").sort_values(TIME_COL).reset_index(drop=True)
 
 
-def binance_5m(symbol: str, start: pd.Timestamp, now: pd.Timestamp, *, timeout: float = 15.0):
+def _binance_klines(params: dict, timeout: float):
     import requests
+    first = _binance_host[0]
+    refused = None
+    for k in [first] + [i for i in range(len(_BINANCE_HOSTS)) if i != first]:
+        r = requests.get(_BINANCE_HOSTS[k] + "/api/v3/klines", params=params, timeout=timeout)
+        if r.status_code in (403, 451):              # "restricted location": try the other host
+            refused = refused or r
+            continue
+        r.raise_for_status()
+        if k != first:
+            _log.info("Binance: %s refused this server (HTTP %s); using %s", _BINANCE_HOSTS[first],
+                      refused.status_code if refused is not None else "?", _BINANCE_HOSTS[k])
+            _binance_host[0] = k
+        return r.json()
+    raise requests.HTTPError(f"Binance refuses this server on every host (HTTP "
+                             f"{refused.status_code}): move BTC to source='dukascopy', "
+                             f"symbol='BTC/USD' -- docs/ALERTS_CLOUD.md", response=refused)
+
+
+def binance_5m(symbol: str, start: pd.Timestamp, now: pd.Timestamp, *, timeout: float = 15.0):
     rows, t = [], int(start.timestamp() * 1000)
     end = int(now.timestamp() * 1000)
     while t < end:
-        r = requests.get(_BINANCE, params=dict(symbol=symbol, interval="5m", startTime=t,
-                                               endTime=end, limit=1000), timeout=timeout)
-        r.raise_for_status()
-        batch = r.json()
+        batch = _binance_klines(dict(symbol=symbol, interval="5m", startTime=t, endTime=end,
+                                     limit=1000), timeout)
         if not batch:
             break
         rows += batch
