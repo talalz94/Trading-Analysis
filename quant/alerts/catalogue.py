@@ -150,6 +150,31 @@ def catalogue(markdown: bool = False) -> str:
         for k in keys:
             out.append(f"  {k:<28} {SCENARIOS[k].side:<5}  "
                        f"{SCENARIOS[k].description.split('. ')[0][:90]}")
+
+    # ── 7. news ─────────────────────────────────────────────────────────────────────────────
+    from quant.news.catalog import CRITICAL, CURRENCIES, LEVELS
+    from .news import SETTINGS as NEWS_SETTINGS
+    h1("7. News (the NEWS block)")
+    para("Economic-calendar notices, driven by the clock rather than by candles: the week "
+         "ahead, tomorrow's releases, reminders before a release, the actual against the "
+         "forecast once it is out, and a release that moved. Times are Forex Factory's.")
+    if markdown:
+        out += ["| setting | meaning |", "|---|---|"]
+        out += [f"| `{k}` | {v.replace('|', chr(92) + '|')} |" for k, v in NEWS_SETTINGS.items()]
+        out.append("")
+    else:
+        for k, v in NEWS_SETTINGS.items():
+            out.append(f"  {k:<14} {v}")
+    h2("Currencies")
+    words(CURRENCIES, 10)
+    h2("Levels, lowest to highest")
+    words(LEVELS[1:], 10)
+    para("")
+    para("critical = a high-impact release on this list (never a medium one):")
+    for cur, titles in CRITICAL.items():
+        out.append(f"  {cur}: " + ", ".join(titles))
+    if markdown:
+        out.append("")
     return "\n".join(out).strip() + "\n"
 
 

@@ -5,6 +5,7 @@
     python -m quant.alerts tick         one pass of the monitor, then exit
     python -m quant.alerts run          the monitor itself (what the scheduled task starts)
     python -m quant.alerts status       is it running, when did it last email, what is queued
+    python -m quant.alerts news         the covered calendar for the next --days, with reminders
 """
 from __future__ import annotations
 
@@ -18,10 +19,12 @@ from .config import DEFAULT_CONFIG, DEFAULT_STATE, load_config
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m quant.alerts", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["list", "check", "test-email", "tick", "run", "status"])
+    ap.add_argument("command", choices=["list", "check", "test-email", "tick", "run", "status",
+                                        "news"])
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--hours", type=float, default=48, help="check: how far back to look")
+    ap.add_argument("--days", type=float, default=7, help="news: how far ahead to look")
     ap.add_argument("--write-docs", action="store_true",
                     help="list: rewrite docs/ALERTS_CATALOGUE.md instead of printing")
     a = ap.parse_args(argv)
@@ -39,6 +42,24 @@ def main(argv=None) -> int:
     if a.command == "status":
         from .runner import status
         print(status(a.state))
+        return 0
+
+    if a.command == "news":
+        import pandas as pd
+        from .news import LiveNews, upcoming_table
+        cfg = load_config(a.config)
+        if not cfg.news.on:
+            print("NEWS is off (or missing) in the config")
+            return 0
+        now = pd.Timestamp.now(tz="UTC")
+        live = LiveNews(a.state / "news")
+        for k, v in live.refresh(now).items():
+            print(f"  {k}: {v}")
+        print(f"times in {cfg.news.timezone}; results "
+              + ("on" if live.results_available() and cfg.news.results else
+                 "OFF (no JBLANKED_API_KEY in .env)" if cfg.news.results else "off"))
+        rows = upcoming_table(live, cfg, now, days=a.days)
+        print("\n".join(rows) if rows else f"nothing covered in the next {a.days:g} days")
         return 0
 
     if a.command == "check":

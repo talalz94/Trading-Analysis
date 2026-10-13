@@ -325,3 +325,39 @@ The research entry setups in quant/scenarios. An alert fires on the bar the back
 | `vwap_rev_short@v1` | short | price beyond N sigma of session VWAP and starting back toward it |
 | `wt_cross_long@v1` | long | WaveTrend fast/slow cross while the slow line is beyond the OB/OS level |
 | `wt_cross_short@v1` | short | WaveTrend fast/slow cross while the slow line is beyond the OB/OS level |
+
+## 7. News (the NEWS block)
+
+Economic-calendar notices, driven by the clock rather than by candles: the week ahead, tomorrow's releases, reminders before a release, the actual against the forecast once it is out, and a release that moved. Times are Forex Factory's.
+
+| setting | meaning |
+|---|---|
+| `on` | True = news notices on |
+| `currencies` | {currency: lowest level kept}, e.g. {'USD': 'medium', 'EUR': 'high'}; '*' = every other currency |
+| `timezone` | the zone your emails show times in, e.g. 'Asia/Karachi' |
+| `week_ahead` | 'Sun 20:00' -- the week's high/critical news, once a week; None = off |
+| `day_ahead` | '20:00' -- tomorrow's covered news, every evening; None = off |
+| `remind_before` | {level: minutes before}, e.g. {'critical': (60, 15), 'high': (15,)} |
+| `results` | lowest level whose actual-vs-forecast is emailed (needs JBLANKED_API_KEY); None = off |
+| `warn_alerts` | a candle alert within this many minutes of high news says so; 0 = off |
+
+### Currencies
+
+`USD`, `EUR`, `GBP`, `JPY`, `AUD`, `CAD`, `CHF`, `NZD`, `CNY`
+
+### Levels, lowest to highest
+
+`low`, `medium`, `high`, `critical`
+
+
+
+critical = a high-impact release on this list (never a medium one):
+
+  USD: CPI m/m, CPI y/y, Core CPI m/m, Core CPI y/y, Non-Farm Employment Change, Unemployment Rate, Average Hourly Earnings m/m, Federal Funds Rate, FOMC Statement, FOMC Press Conference, FOMC Economic Projections, Core PCE Price Index m/m, PPI m/m, Core PPI m/m, Retail Sales m/m, Core Retail Sales m/m, Advance GDP q/q
+  EUR: Main Refinancing Rate, Monetary Policy Statement, ECB Press Conference, CPI Flash Estimate y/y, Core CPI Flash Estimate y/y
+  GBP: Official Bank Rate, Monetary Policy Summary, CPI y/y
+  JPY: BOJ Policy Rate, Monetary Policy Statement, BOJ Press Conference
+  CAD: Overnight Rate, BOC Rate Statement, CPI m/m, Employment Change, Unemployment Rate
+  AUD: Cash Rate, RBA Rate Statement, CPI q/q, Employment Change
+  NZD: Official Cash Rate, RBNZ Rate Statement
+  CHF: SNB Policy Rate

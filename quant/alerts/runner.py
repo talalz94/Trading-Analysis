@@ -69,6 +69,7 @@ def log_report(r):
 def run_forever(config_path: Path, state_dir: Path, notifier, feed, *, offset_s: int = 20):
     from .engine import tick
     from .store import State
+    from .news import LiveNews
     lock = acquire_lock(state_dir / "alerts.lock")
     if lock is None:
         return 0                                       # already running: the watchdog's no-op
@@ -77,6 +78,7 @@ def run_forever(config_path: Path, state_dir: Path, notifier, feed, *, offset_s:
         setup_logging(state_dir)
         log.info("monitor started (pid %d)", os.getpid())
         state, cfg = State(state_dir), None
+        news = LiveNews(state_dir / "news")             # one calendar, kept across ticks
         while True:
             try:
                 cfg = load_config(config_path)
@@ -85,7 +87,7 @@ def run_forever(config_path: Path, state_dir: Path, notifier, feed, *, offset_s:
                           "waiting for a valid one", e)
             if cfg is not None:
                 try:
-                    log_report(tick(cfg, state, notifier, feed))
+                    log_report(tick(cfg, state, notifier, feed, news=news))
                 except Exception:
                     log.exception("tick failed")
             now = time.time()                          # next tick: offset_s past the next minute
@@ -116,6 +118,15 @@ def status(state_dir: Path) -> str:
     lines.append("events      " + (", ".join(f"{n} {k}" for k, n in q) or "none yet"))
     err = s.db.execute("SELECT key, value FROM meta WHERE key LIKE 'feed_error:%'").fetchall()
     lines += [f"{k:<11} {v}" for k, v in err]
+    if (state_dir / "news").is_dir():
+        from quant.news.calendar import NewsStore
+        m = NewsStore(state_dir / "news").meta()
+        ok = m.get("feed_ok")
+        ago = "" if ok is None else f" ({(now - pd.Timestamp(ok)).total_seconds() / 60:.0f} min ago)"
+        lines.append(f"news feed   last updated {ok}{ago}")
+        for k in ("feed_error", "jb_ok", "fred_ok", "jb_zone"):
+            if m.get(k):
+                lines.append(f"news        {k} {m[k]}")
     lines.append("cursors")
     for r in s.db.execute("SELECT * FROM cursors ORDER BY market, tf, alert"):
         lines.append(f"  {r['market']:<8} {r['tf']:>4}  {r['alert']:<28} last judged bar {r['last_bar']}")

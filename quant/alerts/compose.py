@@ -49,8 +49,36 @@ def _rows(events):
                                          e["market"], TF_MINUTES.get(e["tf"], 0)))
 
 
+_OPEN_DIV = '<div style="font:14px -apple-system,Segoe UI,Arial,sans-serif;color:#111827;">'
+
+
 def compose(events, cfg, now, *, host: str = "", title: str = ""):
-    """-> (subject, text, html)"""
+    """-> (subject, text, html). News notices (quant.alerts.news) come first, in their own
+    section; an email without them is exactly what it always was."""
+    from .news import is_news, news_html, news_subject, news_text
+    news = [e for e in events if is_news(e)]
+    if not news:
+        return _compose_signals(events, cfg, now, host=host, title=title)
+    rest = [e for e in events if not is_news(e)]
+    now = pd.Timestamp(now).tz_convert("UTC")
+    ntext = "\n".join(["NEWS", "----", *news_text(news)])
+    nhtml = '<h3 style="margin:18px 0 6px;font-size:15px;">News</h3>' + news_html(news)
+    if rest:
+        subject, text, html = _compose_signals(rest, cfg, now, host=host, title=title)
+        return (f"{subject} · +{len(news)} news", ntext + "\n\n" + text,
+                html.replace(_OPEN_DIV, _OPEN_DIV + nhtml, 1))
+    bolt = "⚡ " if any(e["priority"] == "urgent" for e in news) else ""
+    subject = f"{cfg.delivery.subject_prefix} {bolt}{news_subject(news)} · {now:%H:%M} UTC"
+    foot = f"quant alerts{' on ' + host if host else ''}"
+    text = "\n".join(([title, ""] if title else []) + [ntext, "", f"-- {foot} · {cfg.path.name}"])
+    html = (_OPEN_DIV + (f'<p style="color:#6b7280;">{_html.escape(title)}</p>' if title else "")
+            + nhtml + f'<p style="margin-top:22px;color:#9ca3af;font-size:12px;">'
+            f'{_html.escape(foot)} &middot; {_html.escape(cfg.path.name)}</p></div>')
+    return subject, text, html
+
+
+def _compose_signals(events, cfg, now, *, host: str = "", title: str = ""):
+    """The candle alerts' email -> (subject, text, html)."""
     live = [e for e in events if not e["late"]]
     late = [e for e in events if e["late"]]
     n_urgent = sum(e["priority"] == "urgent" for e in live)
@@ -124,7 +152,7 @@ def compose(events, cfg, now, *, host: str = "", title: str = ""):
         out.append("</table>")
         return "".join(out)
 
-    h = ['<div style="font:14px -apple-system,Segoe UI,Arial,sans-serif;color:#111827;">']
+    h = [_OPEN_DIV]
     if title:
         h.append(f'<p style="color:#6b7280;">{esc(title)}</p>')
     for cat, rows in sections.items():

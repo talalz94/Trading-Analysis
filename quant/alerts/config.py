@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Tuple
 
+from .news import CATEGORY as NEWS_CATEGORY
+from .news import ALERT as NEWS_ALERT
+from .news import NewsConfig, NewsConfigError, parse_news
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "alerts" / "alerts_config.py"
 DEFAULT_STATE = ROOT / "alerts" / "state"
@@ -65,6 +69,7 @@ class AlertsConfig:
     categories: Tuple[str, ...]                  # the order categories appear in an email
     path: Path
     off: Tuple[Alert, ...] = ()                  # alerts written but switched off (on=False)
+    news: NewsConfig = NewsConfig()              # the NEWS block (off when absent)
 
     def pairs(self):
         """Every (market, tf) some alert watches, and the alerts on each."""
@@ -139,6 +144,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
     for i, a in enumerate(ns.get("ALERTS") or []):
         a = dict(a)
         name = a.pop("name", f"alert {i + 1}")
+        if name == NEWS_ALERT:                       # news notices are stored under this name
+            raise ConfigError(f"the alert name {NEWS_ALERT!r} is reserved for the NEWS block")
         if name in names:                            # the name is the alert's identity in the
             raise ConfigError(f"two alerts are named {name!r}")      # state: it must be unique
         names.add(name)
@@ -171,9 +178,15 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
         (alerts if on else off).append(alert)
 
     delivery = Delivery(**(ns.get("DELIVERY") or {}))
+    try:
+        news = parse_news(ns.get("NEWS"))
+    except NewsConfigError as e:
+        raise ConfigError(str(e)) from None
     cats = list(_tuple(ns.get("CATEGORIES")))
     used = {a.category for a in alerts}
     cats += [c for c in CATEGORY_ORDER if c in used and c not in cats]
     cats += sorted(used - set(cats))
+    if news.on and NEWS_CATEGORY not in cats:        # news first unless placed explicitly
+        cats.insert(0, NEWS_CATEGORY)
     return AlertsConfig(markets=markets, alerts=tuple(alerts), delivery=delivery,
-                        categories=tuple(cats), path=path, off=tuple(off))
+                        categories=tuple(cats), path=path, off=tuple(off), news=news)
