@@ -27,6 +27,7 @@ python -m experiments.level_age_study   # do OLD S/R zones / FVGs hold better? (
 python -m experiments.exit_rules_search # move-the-target / FVG-exit on nb21, 19 quarters (~3 min) -- no
 python -m experiments.regime_study      # what differs when nb21's strategy wins vs loses (~2 min) -- nothing but costs
 python -m experiments.instrument_scan   # nb21's strategy on gold/oil/FX vs a metronome (~8 min) -- USDJPY only, unreplicated
+python -m experiments.nq_open_reversion # JJ Simon's NY-open reversion on Nasdaq 100 1m (~15 min download) -- no bias, -0.08R
 # any strategy file and its COMPARE arms, quarter by quarter: notebooks/evaluate.ipynb, or
 #   from experiments.evaluate import evaluate; evaluate(evaluate_config()).arms()
 ```
