@@ -277,6 +277,47 @@ Read USDJPY as a lead to watch forward, not a result.
 Two things that generalise: **costs are a BTC problem** -- 0.20R a trade there against 0.02-0.03R on
 gold and FX, where the stops are wide against the spread; and **a trending market flatters any entry**
 -- on gold the hourly metronome made +0.046R a trade, MORE than the trendline entries (+0.030R).
+
+### New York open reversion ("fair pricing theory") on Nasdaq 100 (2026-10-13) — no edge, and no bias
+
+From a 2026 podcast with a prop-firm trader, JJ Simon (summary in docs/SESSION_NOTES.md). He trades
+NQ futures on the 1-minute chart and says the edge per trade is "slight".
+`experiments/nq_open_reversion.py` tests the rule as he states it:
+- fair price = the 9:30 ET open; entries only 9:30–11:00, back TOWARD fair price;
+- on a candle close: a displacement (bigger body than the opposite-coloured candle before it,
+  closing beyond its wick) or a break of structure (a close beyond the latest swing);
+- at least 80% of the target left to fair price;
+- static 25 / 38 points (his evaluation setting, 2026 points, scaled to each day's price);
+- one position at a time; three losses in a row ends the session; NQ futures costs 0.725 points.
+
+Data: Dukascopy NAS100 1m, 1,243 days, 2022Q1–2026Q3.
+
+| arm | trades | win % | R gross | R net | train | forward | quarters + |
+|---|---|---|---|---|---|---|---|
+| his rules (either entry) | 5,115 | 38.5 | -0.029 | **-0.080** (t -4.7) | -0.060 | -0.104 | 2/19 |
+| break of structure only | 3,406 | 39.1 | -0.015 | -0.066 | -0.064 | -0.069 | 2/19 |
+| displacement only | 4,004 | 38.7 | -0.025 | -0.075 | -0.060 | -0.092 | 3/19 |
+| target = fair price itself | 3,586 | 21.3 | -0.050 | -0.100 | -0.023 | -0.189 | 6/19 |
+| without the 3-loss stop | 6,438 | 38.8 | -0.022 | -0.073 | -0.060 | -0.089 | 1/19 |
+| metronome TOWARD the open (every 5 min) | 7,510 | 38.5 | -0.030 | -0.080 | -0.073 | -0.088 | 3/19 |
+| metronome AWAY from the open | 8,340 | 40.6 | +0.023 | -0.027 | -0.060 | +0.009 | 8/19 |
+
+- **There is no reversion bias to capture.** Trading toward the open every 5 minutes does WORSE
+  than trading away from it, in both halves. If anything the first 90 minutes drift away from the
+  open.
+- **His entries add nothing.** They score the same as the toward-metronome (+0.013 train,
+  -0.015 forward). The win rate is 38.5% where 40.8% is needed after costs.
+- **Negative every year 2022–2026**, both price-scaled and at his literal fixed 25/38 points.
+- **Not tested:**
+  - his A+ setup, reversion to the pre-news price on 8:30 CPI/PPI days (it needs a news calendar);
+  - the opening continuation trade;
+  - his discretion (moving fair price, "wick rejection" entries).
+- The away-metronome's +0.009 forward is not a finding. It was a null, t 0.45, and negative in
+  train.
+- **What this does NOT say:** whether the method pays on prop firms. With many accounts and losses
+  capped at evaluation fees, a firm's payout rules can turn a small negative edge per trade into
+  payouts. That is a bet on the firm's rules, not on the market. These trades carry no edge of
+  their own.
  Stop moves in particular convert more of the trades that would have
 reached 3R into breakeven exits than they rescue from the stop -- the breakeven-at-1R result again.
 
@@ -324,6 +365,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | **Volume** confirmation (first use in this project) | ✗ worse than random | Phase 2: −0.052 vs null −0.045 |
 | Squeeze release, EMA-gradient extremes | ✗ worse than random | Phase 2 |
 | WaveTrend cross, RSI divergence (confirmed *and* zero-lag), VWAP reversion | ✗ | Beat the null only by clawing back cost drag, still negative |
+| **Reversion to the New York open** (Nasdaq 100 1m, JJ Simon's "fair pricing theory") | ✗ no bias | Toward-the-open metronome -0.080R vs away +0.009R forward; his displacement/structure entries = the metronome; -0.08R a trade after NQ costs, negative every year 2022-26 |
 | Hour-of-day / weekday filters | ✗ | No quarter-to-quarter persistence; trained pick ranked 110/127 out-of-sample |
 | Higher timeframe as a cure | ✗ | `real − null` is negative at every symbol × timeframe and gets **worse** higher up |
 | Support/resistance-break family (the original setup) | ✗ | Parameter spike with negative neighbours; 1 of 36 survivors where chance predicts ~4 |

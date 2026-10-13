@@ -2179,3 +2179,44 @@ systemd service.
   live), and remembers which host answered. Whether that host also refuses US servers is
   unknown; step 7 of the guide tests it. If both refuse, BTC moves to Dukascopy `BTC/USD`.
 
+### JJ Simon's "fair pricing theory", and testing its core (2026-10-13)
+
+**The source:** a 2026 podcast with a prop-firm trader, about $1.5–1.8M in payouts against about
+$400k spent on fees. He trades NQ futures on the 1-minute chart, price only. His idea:
+- **Fair price:**
+  - the session's opening price (9:30 ET; also the 2 pm, Asia and London opens);
+  - on scheduled 8:30 news days, the price just BEFORE the news ("priced in");
+  - after surprise news, the consolidation that follows.
+- **Trades, only in the first 90 minutes of each session:**
+  - one continuation in the opening candle's direction;
+  - then reversions back toward fair price, entering on a candle close:
+    - a displacement: body bigger than the previous opposite-coloured candle's, closing beyond its
+      wick;
+    - or a break of structure: a close beyond a swing.
+- **Targets and stops are static dollar amounts chosen for each prop firm's rules,** not the
+  chart: evaluations 25/38 points, funded accounts bigger.
+- **Three losses in a row ends the session.**
+- **He says the edge per trade is "slight".** The money comes from running it across 40+ prop
+  accounts, where only evaluation fees are at risk.
+
+**Tested** in `experiments/nq_open_reversion.py`: the NY-open reversion as he states it, on
+Dukascopy's Nasdaq 100, 1,243 days 2022–2026. Verdict in docs/WHAT_WORKS.md:
+- no bias toward the open — a metronome trading AWAY from it beats one trading toward it;
+- his entries score the same as the metronome;
+- -0.08R a trade after NQ costs, negative every year.
+
+Gotchas, for anyone extending it:
+- **His points are 2026 points.** The video's trades are July–August 2026 (CPI on "Tuesday July
+  14th"), with Nasdaq near 30,000. In 2022 Nasdaq was near 12,400, so a fixed 25-point stop would
+  be 2.5× wider relative to the market. The main test scales stop and target to each day's price;
+  his literal fixed points give the same verdict.
+- **Time zones:** 9:30 ET is 13:30 UTC in summer and 14:30 UTC in winter. The sessions are built
+  with America/New_York, and a test covers both seasons.
+- **Lookahead:** a swing low is only known once the NEXT candle closes. Counting it one candle
+  early changes a result only when a break lands on exactly that candle, so the no-lookahead test
+  cuts at every bar; four fixed cuts let it through.
+- **The 3-loss rule is applied after the engine run.** With one position at a time, dropping a
+  session's trades after its third loss in a row is exactly the same as having stopped trading.
+- **Not tested yet:** his "A+" news-day reversion to the pre-news price (it needs a CPI/PPI/NFP
+  calendar), the opening continuation, and his discretion.
+
