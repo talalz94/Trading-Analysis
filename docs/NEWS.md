@@ -42,7 +42,7 @@ April 2025. Without FRED, US dates come from Forex Factory only.
 |---|---|---|
 | Forex Factory weekly feed | this week, every currency: exact time, impact, forecast, previous | **exact**: the time carries its own offset. No actuals. |
 | Forex Factory archive (scraped by a third party, research only) | 2007-01 → 2025-04: impact, actual, forecast, previous | **dates right, clock repaired** (below) |
-| JBlanked API (Forex Factory data) | actuals, by date range | its timestamps have no zone; it is calibrated against the feed and refused unless 90% of matches agree |
+| JBlanked API (Forex Factory data) | actuals, by date range | its timestamps have no zone (stored raw). See *JBlanked's clock* below. |
 | FRED (St. Louis Fed) | official US release dates | official; dates only, so the time is the official one |
 
 **The Forex Factory website is not scraped.** Its calendar and news pages sit behind a Cloudflare
@@ -64,6 +64,22 @@ export, and it is open.
    - Their time comes from the official US schedule (CPI, payrolls, PPI, retail sales, GDP and
      PCE at 8:30 New York), or else from the same event's nearest timed release in its home zone.
    - The `time_q` column says which: `exact` / `official` / `typical` / `date` / `allday`.
+
+**JBlanked's clock.** Its client's offsets (GMT = 3, EST = 7) point to MetaTrader broker time,
+i.e. New York + 7 hours, which follows US daylight saving. That is a guess from constants, so
+nothing assumes it:
+- **Stored raw.** Rows are kept exactly as sent.
+- **Zone decided at every build.** The evidence is the feed's exact times, the archive's exact
+  times, and the **official US release times** on JBlanked's own dates, which are ground truth in
+  any season.
+- **No answer while a tie remains.** For half the year, broker time, Athens, Moscow and fixed
+  GMT+3 all read the same. Broker time and Athens differ only in the weeks when US and EU clocks
+  change on different Sundays. So until the data contains such a week, no zone is chosen. The
+  rows then keep only their date: they lend their **numbers** to the matching release, and its
+  time comes from the feed or the official schedule.
+- **Units.** JBlanked's bare numbers are put into Forex Factory's printed units by the ratio of
+  their forecasts. "254" or "254000" beside "140K" both become "254K".
+- **Status.** `python -m quant.news status` shows the zone chosen and why (`jb_zone_evidence`).
 
 **The merge** keys a release on currency + title + its day in the home zone. Each field is then
 taken from the most trusted source that has it:

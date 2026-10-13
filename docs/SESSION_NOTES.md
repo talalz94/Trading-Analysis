@@ -2252,11 +2252,29 @@ on the charts. docs/NEWS.md is the guide. What was found on the way:
   - the merged calendar (83k events) is 3.6 MB and builds in ~5 s. It was 18 s until categories,
     directions and values were computed per DISTINCT title/value rather than per row.
 - **JBlanked** (free key, one request per 5 minutes) serves Forex Factory's calendar WITH actuals
-  by date range. Its timestamps carry no zone, and its README suggests GMT+3. The zone is
-  calibrated against the feed (`calibrate_jb_zone`) and refused unless 90% of matches agree.
-  **Not yet verified on real data: no key yet.**
-- **FRED** release names are matched by NAME at run time (a wrong id cannot creep in). **Not yet
-  verified on real data: no key yet.**
+  by date range.
+  - **Format (from its own source code):** `"Date": "2024.02.08 15:30:00"`, plus `Name`,
+    `Currency`, `Event_ID`, `Actual`, `Forecast`, `Previous`, `Impact` and so on.
+  - **Its clock:** the client's offset table (GMT = 3, EST = 7) implies MetaTrader broker time,
+    i.e. New York + 7 hours, which follows US daylight saving.
+  - **The trap:** calibrating on one week cannot tell broker time from Athens, Moscow or GMT+3.
+    The first version, run in October, would have picked fixed GMT+3 and been an hour wrong all
+    winter, with JBlanked's "exact" time beating the official one.
+  - **Now:** rows are stored RAW, and the zone is decided at every build from the feed, the
+    archive and the official US times on JBlanked's own dates. A tie between candidates that
+    differ somewhere in the year is refused, so the rows keep only their date and lend only their
+    numbers. Actuals are put in Forex Factory's printed units.
+  - Mutation-checked: 5 rules.
+  - **Still unseen live:** no key yet.
+- **FRED** release names are matched by NAME at run time. All seven were checked against FRED's
+  public release list: CPI rid 10, PPI 46, Employment Situation 50, Advance Monthly Sales for
+  Retail and Food Services 9, Personal Income and Outlays 54, Gross Domestic Product 53, FOMC
+  Press Release 101.
+  - Both APIs answer from this PC; without a key, FRED says "api_key is not set" and JBlanked
+    returns 401.
+  - FRED's WEBSITE times out for scripted requests from here; the API does not.
+  - **To check once the key exists:** do FOMC Press Release (101) dates include press releases
+    that are not rate decisions?
 - **Gaps until the keys exist:** the calendar has no actuals after 2025-04-07 and no dates for
   2025-04 .. 2026-10, so the lab's June 2026 window shows no news strip yet. The news-day test runs
   on Nov 2021 – Apr 2025 for now; with the keys, rerun
@@ -2275,3 +2293,52 @@ on the charts. docs/NEWS.md is the guide. What was found on the way:
   - Verified in a browser: the 11 Jul 2024 CPI hover reads A -0.1% vs F 0.1%, "worse for USD",
     -1.5σ; after rewinding to 12:00 that day the actual is gone and the marker stays.
 
+
+### RESUME HERE -- "finish news setup" paused mid-task (2026-10-13)
+
+The user has added BOTH keys to `.env` (`FRED_API_KEY`, `JBLANKED_API_KEY`).
+
+**Done and tested:**
+- **JBlanked is stored raw.** Its zone is decided at every build with the tie guard and the
+  broker-time (NY+7) candidate, and actuals are put in Forex Factory's units. 5 rules
+  mutation-checked; 815 tests passed with this in.
+- **JBlanked is NOT free for the calendar.** With a free key the `range`, `week` AND `today`
+  endpoints all answer HTTP 401: "This endpoint requires credits". So there are no live actuals
+  and no history without buying credits. That is the user's decision; ask them. The options:
+  - buy credits (price behind their login at jblanked.com/api/billing);
+  - US-only actuals computed from FRED series (slower, and needs care: rounding of m/m from index
+    levels);
+  - no result emails.
+  - Live polling now uses `kind="week"`. Either way, the alerts should stop polling for a day
+    after a "requires credits" answer: TODO, not done.
+- **FRED key works.** But FRED's release calendar contains phantom non-headline dates, about one
+  per release per year: CPI Feb seasonal revisions, retail Apr revisions, NFP Aug benchmark
+  preview. FRED's "FOMC Press Release" (rid 101) changes almost DAILY (3,894 dates), so it is
+  useless for decision dates. The first FRED download (with those phantoms) is PARKED outside
+  the repo, and `data/news/fred.parquet` is absent on purpose.
+
+**Written but NOT yet tested or run** (in `quant/news/sources.py`, all in the WIP commit):
+- `fred_rows` rewritten to use each series' FIRST-PRINT dates (`series/observations`,
+  `output_type=4`: CPIAUCSL, PPIFIS+PPIFGS, PAYEMS, RSAFS, PCEPI, GDP). GDP adds Prelim/Final from
+  `series/vintagedates`. Future dates come from the schedule, one per month (`_one_per_month`).
+- `fetch_fomc` / `parse_fomc`: the Fed's own calendar page (federalreserve.gov, 2021-2027).
+  Rate decision and statement 14:00 ET, press conference 14:30, projections at the * meetings.
+  Source name "fed"; the calendar reads store file `fomc`.
+
+**Next steps, in order:**
+1. Fix `tests/test_news.py::test_fred_dates_become_official_times_with_daylight_saving`. Its fake
+   `_fred` must also answer `series/observations` and `series/vintagedates`. Add tests for:
+   - first prints dropping a vintage-start date shared by >3 observations;
+   - `_one_per_month`;
+   - `parse_fomc` on a saved snippet: last day of "Apr/May 30-1", "*", notation votes skipped.
+2. Add `update_fomc` (twice a day, like FRED) to `update_all` and to `LiveNews.refresh`.
+   Include "fomc" in `calendar._stale` and in the `load_events` source list (only "fred" is
+   there now).
+3. Run `python -m quant.news update`. Check FRED first prints against the archive 2022-2025,
+   release by release: they must be identical, with no extras. Also check the 2025 shutdown
+   dates (Sep CPI on 24 Oct 2025; Oct+Nov payrolls together on 16 Dec 2025).
+4. Rerun `python -m experiments.nq_news_reversion`. The calendar should now reach 2026-09 for
+   8:30 days. Outsider z still stops at 2025-04 without actuals. Update WHAT_WORKS.md, the result
+   CSVs (force-add) and the test count in CLAUDE.md.
+5. Ask the user about JBlanked credits, then finish the alerts "no credits" back-off.
+6. Full suite, then commit.

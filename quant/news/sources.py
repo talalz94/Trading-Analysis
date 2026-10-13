@@ -26,8 +26,11 @@ time_q says how the time was obtained, best first:
                  a group, and the scrape was re-sorted afterwards. Their DATE is right (24 of 24
                  CPI dates 2023-24 checked); their time comes from catalog or history.
   JBLANKED   jblanked.com's API (free key, one request per 5 minutes): Forex Factory's calendar
-             WITH actuals, by date range. Its timestamps carry no zone; `jb_zone` holds the one
-             found by calibrating against the feed (calendar.calibrate_jb_zone).
+             WITH actuals, by date range. Its timestamps ("2024.02.08 15:30:00") carry NO zone.
+             Its own client's offsets (GMT = 3, EST = 7) point at MetaTrader broker time, i.e.
+             New York + 7 h, which follows US daylight saving -- but that is a guess from
+             constants, so the rows are stored RAW (`wall`) and the zone is decided when the
+             calendar is built, from all the evidence (calendar.calibrate_jb_zone).
   FRED       St. Louis Fed (free key): the OFFICIAL release dates of US releases, past and
              scheduled. Dates only -- the time is the official one.
 """
@@ -262,7 +265,10 @@ def fetch_jb(key: str, *, kind: str = "range", start=None, end=None, source="for
     r = _get(url, params=params, timeout=timeout,
              headers={"Authorization": f"Api-Key {key}", "Content-Type": "application/json"})
     if r.status_code != 200:
-        raise SourceError(f"JBlanked {kind}: HTTP {r.status_code} {r.text[:160]!r}")
+        why = r.text[:160]
+        if "credits" in why.lower():
+            why += " -- this JBlanked endpoint needs paid credits (jblanked.com/api/billing)"
+        raise SourceError(f"JBlanked {kind}: HTTP {r.status_code} {why!r}")
     data = r.json()
     if isinstance(data, dict):                 # tolerate a wrapped list
         for k in ("data", "results", "events"):
@@ -289,9 +295,27 @@ def _num_text(v) -> Optional[str]:
     return _blank_to_none(v)
 
 
-def parse_jb(items: Iterable[dict], zone: Optional[str]) -> pd.DataFrame:
-    """JBlanked rows -> rows. `zone` is the time zone its naive timestamps are in (found by
-    calibration); without one the rows carry their date only (time_q "date")."""
+JB_RAW_COLS = ["wall", "currency", "title", "impact", "actual", "forecast", "previous",
+               "source"]
+# MetaTrader broker time: New York wall time + 7 h. Not an IANA zone, so it is named here and
+# handled by `localize_wall`. It follows US daylight saving, which no fixed offset and no European
+# zone does: the weeks when US and EU clocks change on different Sundays tell them apart.
+NY7 = "America/New_York+7"
+
+
+def localize_wall(wall, zone: str) -> pd.Series:
+    """Naive wall times read in `zone` (an IANA name or NY7) -> UTC. The repeated hour of a
+    clock change takes its first pass; a skipped one is shifted forward."""
+    w = pd.to_datetime(pd.Series(wall))
+    if zone == NY7:
+        w, zone = w - pd.Timedelta(hours=7), "America/New_York"
+    loc = w.dt.tz_localize(zone, ambiguous=np.ones(len(w), bool), nonexistent="shift_forward")
+    return loc.dt.tz_convert("UTC")
+
+
+def parse_jb(items: Iterable[dict]) -> pd.DataFrame:
+    """JBlanked's events -> RAW rows (JB_RAW_COLS): the naive `wall` time exactly as sent, no
+    zone applied. `jb_rows` turns them into calendar rows once the zone is known."""
     rec = []
     for e in items:
         raw_t = _field(e, "Date", "date", "time")
@@ -299,55 +323,61 @@ def parse_jb(items: Iterable[dict], zone: Optional[str]) -> pd.DataFrame:
             wall = pd.Timestamp(str(raw_t).replace(".", "-", 2))
         except (ValueError, TypeError):
             continue
-        cur = str(_field(e, "Currency") or "").upper().strip()
-        if zone:
-            t = wall.tz_localize(zone, ambiguous="NaT", nonexistent="shift_forward")
-            t = t.tz_convert("UTC") if t is not pd.NaT else pd.NaT
-            q = "exact"
-        else:
-            t = (pd.Timestamp(wall.date()).tz_localize(HOME_TZ.get(cur, "UTC"))
-                 + pd.Timedelta(hours=12)).tz_convert("UTC")
-            q = "date"
-        if t is pd.NaT:
+        if wall is pd.NaT or wall.tzinfo is not None:
             continue
-        rec.append(dict(t=t, time_q=q, currency=cur,
+        rec.append(dict(wall=wall, currency=str(_field(e, "Currency") or "").upper().strip(),
                         title=" ".join(str(_field(e, "Name", "title", "event") or "").split()),
                         impact=impact_level(_field(e, "Impact")),
                         actual=_num_text(_field(e, "Actual")),
                         forecast=_num_text(_field(e, "Forecast")),
                         previous=_num_text(_field(e, "Previous")), source="jblanked"))
-    return _rows(pd.DataFrame(rec, columns=ROW_COLS))
+    out = pd.DataFrame(rec, columns=JB_RAW_COLS)
+    out["wall"] = pd.to_datetime(out["wall"])
+    return out
 
 
-def jb_walls(items: Iterable[dict]) -> pd.DataFrame:
-    """(currency, title, naive wall time) of JBlanked rows -- what calibration compares."""
-    rec = []
-    for e in items:
-        try:
-            wall = pd.Timestamp(str(_field(e, "Date", "date", "time")).replace(".", "-", 2))
-        except (ValueError, TypeError):
-            continue
-        rec.append(dict(currency=str(_field(e, "Currency") or "").upper().strip(),
-                        title=" ".join(str(_field(e, "Name", "title", "event") or "").split()),
-                        wall=wall))
-    return pd.DataFrame(rec, columns=["currency", "title", "wall"])
+def jb_rows(raw: pd.DataFrame, zone: Optional[str]) -> pd.DataFrame:
+    """Raw JBlanked rows -> calendar rows. With a zone their time is `exact`; without one they
+    carry their DATE only (noon at home, time_q "date"), so they can still lend an actual to
+    the same release from another source but never decide its time."""
+    if raw is None or not len(raw):
+        return _rows(pd.DataFrame(columns=ROW_COLS))
+    df = raw.copy()
+    if zone:
+        df["t"] = localize_wall(df["wall"], zone).to_numpy()
+        df["time_q"] = "exact"
+    else:
+        zones = df["currency"].map(HOME_TZ).fillna("UTC")
+        day = pd.to_datetime(df["wall"]).dt.strftime("%Y-%m-%d")
+        df["t"] = _home_instant(day, pd.Series("12:00", index=df.index), zones)
+        df["time_q"] = "date"
+    return _rows(df)
 
 
 # ══ FRED (official US release dates) ═════════════════════════════════════════════════════════
 FRED_BASE = "https://api.stlouisfed.org/fred"
 # FRED release (by NAME, resolved to an id at run time so a wrong id cannot creep in) -> the
-# Forex Factory titles it publishes, all high impact. GDP is three titles by month: the first
-# estimate comes the month after a quarter ends, the second a month later, the third after that.
+# series whose FIRST PRINT is that release's headline, and the Forex Factory titles it carries.
+#
+# WHY FIRST PRINTS. FRED's release calendar lists every day FRED's data for a release CHANGED,
+# not only the headline publication: CPI's February seasonal-factor revisions, retail sales' April
+# annual revision, payrolls' August benchmark preview ... about one phantom date a year per
+# release, each of which would have become a "CPI at 8:30" critical event. A series observation's
+# first realtime_start (output_type=4) is the day it was FIRST published: exactly one per period,
+# the headline day. Checked 2022-2025 against the archive: identical dates.
+# The FOMC is not here: FRED's "FOMC Press Release" changes almost every business day (3,894
+# dates since 2014). Rate decisions come from the Fed's own calendar (fomc_rows).
 FRED_RELEASES: Dict[str, tuple] = {
-    "Consumer Price Index": ("CPI m/m", "Core CPI m/m", "CPI y/y", "Core CPI y/y"),
-    "Producer Price Index": ("PPI m/m", "Core PPI m/m"),
-    "Employment Situation": ("Non-Farm Employment Change", "Unemployment Rate",
-                             "Average Hourly Earnings m/m"),
-    "Advance Monthly Sales for Retail and Food Services": ("Retail Sales m/m",
-                                                           "Core Retail Sales m/m"),
-    "Personal Income and Outlays": ("Core PCE Price Index m/m", "Personal Spending m/m"),
-    "Gross Domestic Product": ("GDP q/q",),
-    "FOMC Press Release": ("Federal Funds Rate", "FOMC Statement"),
+    "Consumer Price Index": (("CPIAUCSL",),
+                             ("CPI m/m", "Core CPI m/m", "CPI y/y", "Core CPI y/y")),
+    "Producer Price Index": (("PPIFIS", "PPIFGS"), ("PPI m/m", "Core PPI m/m")),
+    "Employment Situation": (("PAYEMS",), ("Non-Farm Employment Change", "Unemployment Rate",
+                                           "Average Hourly Earnings m/m")),
+    "Advance Monthly Sales for Retail and Food Services": (("RSAFS",), ("Retail Sales m/m",
+                                                                        "Core Retail Sales m/m")),
+    "Personal Income and Outlays": (("PCEPI",), ("Core PCE Price Index m/m",
+                                                 "Personal Spending m/m")),
+    "Gross Domestic Product": (("GDP",), ("GDP q/q",)),
 }
 _GDP_BY_MONTH = {1: "Advance", 4: "Advance", 7: "Advance", 10: "Advance",
                  2: "Prelim", 5: "Prelim", 8: "Prelim", 11: "Prelim",
@@ -377,6 +407,8 @@ def fred_release_ids(key: str) -> Dict[str, int]:
 
 
 def fred_release_dates(key: str, release_id: int) -> List[str]:
+    """FRED's release calendar, past and SCHEDULED (see FRED_RELEASES on why the past part is
+    not trusted for headline days)."""
     out, offset = [], 0
     while True:
         js = _fred("release/dates", key, release_id=release_id, limit=10000, offset=offset,
@@ -389,20 +421,78 @@ def fred_release_dates(key: str, release_id: int) -> List[str]:
             return sorted(set(out))
 
 
+def fred_first_prints(key: str, series: str, start: str = "1999-01-01") -> List[str]:
+    """The day each observation of `series` was FIRST published. A date shared by more than 3
+    observations is the start of FRED's vintage history, not a publication, and is dropped (two
+    months published together after the 2025 shutdown share a date legitimately)."""
+    js = _fred("series/observations", key, series_id=series, output_type=4,
+               observation_start=start)
+    days = pd.Series([o["realtime_start"] for o in js.get("observations", [])])
+    if days.empty:
+        return []
+    n = days.value_counts()
+    return sorted(set(days[days.map(n) <= 3]))
+
+
+def fred_vintage_dates(key: str, series: str) -> List[str]:
+    js = _fred("series/vintagedates", key, series_id=series, limit=10000)
+    return sorted(set(js.get("vintage_dates", [])))
+
+
+def _one_per_month(future: List[str], past: List[str]) -> List[str]:
+    """A monthly release's scheduled dates, one per month: where FRED schedules two, the one
+    nearest the release's usual day of that month (from its first prints) is the headline."""
+    if not future:
+        return []
+    hist = pd.to_datetime(pd.Series(past)) if past else pd.Series([], dtype="datetime64[ns]")
+    usual = hist.groupby(hist.dt.month).apply(lambda d: d.dt.day.median()) if len(hist) else {}
+    out = []
+    f = pd.to_datetime(pd.Series(future))
+    for _, g in f.groupby(f.dt.to_period("M")):
+        if len(g) == 1:
+            out.append(g.iloc[0])
+            continue
+        want = usual.get(g.iloc[0].month, 15) if len(usual) else 15
+        out.append(g.iloc[(g.dt.day - want).abs().argmin()])
+    return [d.strftime("%Y-%m-%d") for d in out]
+
+
+def fred_headline_dates(key: str, name: str, release_id: int, series: tuple) -> Dict[str, str]:
+    """{date: GDP stage or ""} -- the release's headline days: first prints for the past, the
+    official schedule (one per month) after the last first print."""
+    past = sorted(set(d for s in series for d in fred_first_prints(key, s)))
+    sched = fred_release_dates(key, release_id)
+    last = max(past) if past else "1999-12-31"
+    future = [d for d in sched if d > last]
+    out = {d: "" for d in past}
+    if name == "Gross Domestic Product":
+        out = {d: "Advance" for d in past}
+        vint = fred_vintage_dates(key, series[0])
+        for a in past:                      # the next two vintages are the 2nd and 3rd estimates
+            nxt = [v for v in vint if a < v <= str((pd.Timestamp(a) + pd.Timedelta(days=80))
+                                                  .date())][:2]
+            for stage, v in zip(("Prelim", "Final"), nxt):
+                out.setdefault(v, stage)
+        out.update({d: _GDP_BY_MONTH[pd.Timestamp(d).month] for d in future})
+    else:
+        out.update({d: "" for d in _one_per_month(future, past)})
+    return out
+
+
 def fred_rows(key: str, *, pause: float = 0.6) -> pd.DataFrame:
-    """Every FRED_RELEASES date as rows at its official New York time."""
+    """Every FRED_RELEASES headline day as rows at its official New York time."""
     ids = fred_release_ids(key)
     low = {k.lower(): v for k, v in ids.items()}
     missing = [n for n in FRED_RELEASES if n.lower() not in low]
     if missing:
         raise SourceError(f"FRED has no release named {missing}; update FRED_RELEASES")
     rec = []
-    for name, titles in FRED_RELEASES.items():
-        for d in fred_release_dates(key, low[name.lower()]):
+    for name, (series, titles) in FRED_RELEASES.items():
+        for d, stage in fred_headline_dates(key, name, low[name.lower()], series).items():
             day = pd.Timestamp(d)
             for title in titles:
                 if title == "GDP q/q":
-                    title = f"{_GDP_BY_MONTH[day.month]} GDP q/q"
+                    title = f"{stage} GDP q/q"
                 hhmm = official_time("USD", title, day)
                 if hhmm is None:
                     continue
@@ -410,4 +500,53 @@ def fred_rows(key: str, *, pause: float = 0.6) -> pd.DataFrame:
                 rec.append(dict(t=t, time_q="official", currency="USD", title=title,
                                 impact="high", source="fred"))
         time.sleep(pause)                      # FRED allows 120 requests a minute
+    return _rows(pd.DataFrame(rec, columns=ROW_COLS))
+
+
+# ══ THE FED'S OWN FOMC CALENDAR ══════════════════════════════════════════════════════════════
+FOMC_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+_MONTHS = {m: i for i, m in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july", "august", "september",
+     "october", "november", "december"), start=1)}
+_MON3 = {k[:3]: v for k, v in _MONTHS.items()}
+
+
+def fetch_fomc(*, timeout: float = 30) -> str:
+    r = _get(FOMC_URL, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (quant-news)"})
+    if r.status_code != 200 or "FOMC Meetings" not in r.text:
+        raise SourceError(f"Fed FOMC calendar: HTTP {r.status_code}")
+    return r.text
+
+
+def parse_fomc(html: str) -> pd.DataFrame:
+    """The Fed's meeting calendar (federalreserve.gov, about five years back and two ahead) ->
+    rows at the official New York times: the rate decision and statement at 14:00 on the LAST
+    day of the meeting, the press conference at 14:30, and the economic projections at 14:00 for
+    the meetings marked *. A notation vote or a cancelled meeting is not a decision day."""
+    import re
+    rec = []
+    sections = re.split(r"(\d{4}) FOMC Meetings", html)
+    for k in range(1, len(sections) - 1, 2):
+        year, body = int(sections[k]), sections[k + 1]
+        months = re.findall(r'fomc-meeting__month[^>]*>\s*<strong>([^<]+)</strong>', body)
+        dates = re.findall(r'fomc-meeting__date[^>]*>([^<]+)</div>', body)
+        for mon, day in zip(months, dates):
+            txt = " ".join(day.split())
+            if re.search(r"notation|cancel", txt, re.I):
+                continue
+            m = re.match(r"(\d{1,2})(?:-(\d{1,2}))?(\*)?", txt)
+            if not m:
+                continue
+            last = int(m.group(2) or m.group(1))
+            mon_last = mon.split("/")[-1].strip().lower()
+            month = _MONTHS.get(mon_last) or _MON3.get(mon_last[:3])
+            if month is None:
+                continue
+            d = f"{year}-{month:02d}-{last:02d}"
+            for title, hhmm in (("Federal Funds Rate", "14:00"), ("FOMC Statement", "14:00"),
+                                ("FOMC Press Conference", "14:30")) + (
+                    (("FOMC Economic Projections", "14:00"),) if m.group(3) else ()):
+                t = pd.Timestamp(f"{d} {hhmm}").tz_localize("America/New_York").tz_convert("UTC")
+                rec.append(dict(t=t, time_q="official", currency="USD", title=title,
+                                impact="high", source="fed"))
     return _rows(pd.DataFrame(rec, columns=ROW_COLS))
