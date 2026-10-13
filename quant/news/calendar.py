@@ -378,7 +378,7 @@ def _stale(store: NewsStore) -> bool:
         return True
     built = out.stat().st_mtime_ns
     return any(store.path(n).is_file() and store.path(n).stat().st_mtime_ns > built
-               for n in ("archive", "directions", "feed_log", "jblanked", "fred"))
+               for n in ("archive", "directions", "feed_log", "jblanked", "fred", "fomc"))
 
 
 def load_events(start=None, end=None, *, coverage=None, store: Optional[NewsStore] = None,
@@ -388,7 +388,7 @@ def load_events(start=None, end=None, *, coverage=None, store: Optional[NewsStor
     file is newer than it. `timed_only` drops rows whose time is not known (date / allday)."""
     store = store or NewsStore()
     if _stale(store):
-        if not any(store.exists(n) for n in ("archive", "feed_log", "jblanked", "fred")):
+        if not any(store.exists(n) for n in ("archive", "feed_log", "jblanked", "fred", "fomc")):
             return pd.DataFrame(columns=EVENT_COLS)
         ev = build_events(store)
     else:

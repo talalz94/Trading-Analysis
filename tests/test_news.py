@@ -385,24 +385,99 @@ def test_jblanked_actuals_take_the_printed_units(jb_actual, jb_fc, jb_prev, ff_f
         assert abs(e.surprise) < abs(e.forecast_v) * 5            # same units, not 1000x off
 
 
-def test_fred_dates_become_official_times_with_daylight_saving(monkeypatch):
-    def fake(path, key, timeout=30, **p):
-        if path == "releases":
-            return {"count": len(sources.FRED_RELEASES),
-                    "releases": [{"name": n, "id": i} for i, n in enumerate(sources.FRED_RELEASES)]}
-        rid = p["release_id"]
-        name = list(sources.FRED_RELEASES)[rid]
-        days = {"Consumer Price Index": ["2024-01-11", "2024-07-11"],
-                "Gross Domestic Product": ["2024-07-25", "2024-08-29", "2024-09-26"]}.get(name, [])
-        return {"count": len(days), "release_dates": [{"date": d} for d in days]}
-    monkeypatch.setattr(sources, "_fred", fake)
+def _fake_fred(path, key, timeout=30, **p):
+    names = list(sources.FRED_RELEASES)
+    if path == "releases":
+        return {"count": len(names), "releases": [{"name": n, "id": i} for i, n in enumerate(names)]}
+    if path == "series/observations":
+        first = {"CPIAUCSL": ["2024-01-11", "2024-02-13", "2024-07-11"] + ["2010-01-01"] * 5,
+                 "PAYEMS": ["2024-08-02", "2025-12-16", "2025-12-16"],   # two months at once
+                 "GDP": ["2024-07-25"]}.get(p["series_id"], [])
+        return {"observations": [{"realtime_start": d} for d in first]}
+    if path == "series/vintagedates":
+        return {"vintage_dates": ["2024-07-25", "2024-08-29", "2024-09-26", "2024-10-30"]}
+    if path == "release/dates":
+        sched = {"Consumer Price Index": ["2024-02-09", "2027-02-05", "2027-02-11", "2027-03-11"],
+                 "Gross Domestic Product": ["2027-01-28"]}.get(names[p["release_id"]], [])
+        return {"count": len(sched), "release_dates": [{"date": d} for d in sched]}
+    raise AssertionError(path)
+
+
+def test_fred_headline_days_are_first_prints_and_one_scheduled_day_a_month(monkeypatch):
+    monkeypatch.setattr(sources, "_fred", _fake_fred)
     r = sources.fred_rows("k", pause=0)
     cpi = r[r.title == "CPI m/m"]
-    assert [et(t) for t in cpi.t] == ["2024-01-11 08:30", "2024-07-11 08:30"]
-    assert cpi.t.iloc[0].hour == 13 and cpi.t.iloc[1].hour == 12              # EST vs EDT
-    gdp = r[r.title.str.contains("GDP")]
-    assert gdp.title.tolist() == ["Advance GDP q/q", "Prelim GDP q/q", "Final GDP q/q"]
+    # not the Feb 9 seasonal revision, not the vintage-start artifact, and of the two scheduled
+    # Feb 2027 days the one nearest February's usual (the 13th)
+    assert [et(t)[:10] for t in cpi.t] == ["2024-01-11", "2024-02-13", "2024-07-11",
+                                            "2027-02-11", "2027-03-11"]
+    assert {et(t)[11:] for t in cpi.t} == {"08:30"}
+    assert cpi.t.iloc[0].hour == 13 and cpi.t.iloc[2].hour == 12              # EST vs EDT
+    nfp = r[r.title == "Non-Farm Employment Change"]
+    assert [et(t)[:10] for t in nfp.t] == ["2024-08-02", "2025-12-16"]
+    gdp = r[r.title.str.contains("GDP")].sort_values("t")
+    assert list(zip(gdp.t.dt.strftime("%Y-%m-%d"), gdp.title)) == [
+        ("2024-07-25", "Advance GDP q/q"), ("2024-08-29", "Prelim GDP q/q"),
+        ("2024-09-26", "Final GDP q/q"), ("2027-01-28", "Advance GDP q/q")]
     assert (r.time_q == "official").all() and (r.source == "fred").all()
+    assert not r.title.str.contains("FOMC|Funds").any()        # the Fed's own calendar does that
+
+
+FOMC_PAGE = """
+<h4><a id="x">2026 FOMC Meetings</a></h4>
+<div class="fomc-meeting__month col-xs-5"><strong>January</strong></div>
+<div class="fomc-meeting__date col-xs-4">27-28</div>
+<div class="fomc-meeting__month col-xs-5"><strong>March</strong></div>
+<div class="fomc-meeting__date col-xs-4">17-18*</div>
+<div class="fomc-meeting__month col-xs-5"><strong>Apr/May</strong></div>
+<div class="fomc-meeting__date col-xs-4">30-1</div>
+<div class="fomc-meeting__month col-xs-5"><strong>August</strong></div>
+<div class="fomc-meeting__date col-xs-4">24 (notation vote)</div>
+<h4><a id="y">2025 FOMC Meetings</a></h4>
+<div class="fomc-meeting__month col-xs-5"><strong>December</strong></div>
+<div class="fomc-meeting__date col-xs-4">9-10*</div>
+"""
+
+
+def test_the_feds_calendar_gives_decision_days_at_the_official_times():
+    r = sources.parse_fomc(FOMC_PAGE)
+    dec = r[r.title == "Federal Funds Rate"]
+    assert [et(t) for t in dec.t] == ["2025-12-10 14:00", "2026-01-28 14:00", "2026-03-18 14:00",
+                                      "2026-05-01 14:00"]
+    assert dec.t.iloc[1].hour == 19 and dec.t.iloc[2].hour == 18               # EST vs EDT
+    pc = r[r.title == "FOMC Press Conference"]
+    assert {et(t)[11:] for t in pc.t} == {"14:30"} and len(pc) == 4
+    proj = r[r.title == "FOMC Economic Projections"]
+    assert [et(t)[:10] for t in proj.t] == ["2025-12-10", "2026-03-18"]      # the * meetings
+    assert (r.source == "fed").all() and (r.time_q == "official").all()
+    assert len(sources.parse_fomc(FOMC_PAGE * 3)) == len(r)          # a meeting listed twice
+
+
+def test_a_fed_page_that_parses_to_almost_nothing_is_refused(tmp_path, monkeypatch):
+    from quant.news import update
+    monkeypatch.setattr(sources, "fetch_fomc", lambda **k: FOMC_PAGE)
+    with pytest.raises(sources.SourceError, match="layout"):
+        update.update_fomc(NewsStore(tmp_path))
+    assert not NewsStore(tmp_path).exists("fomc")
+
+
+def test_a_jblanked_key_without_credits_is_left_alone_for_a_day(tmp_path, monkeypatch):
+    from quant.news import update
+    st = NewsStore(tmp_path)
+
+    def refuse(*a, **k):
+        raise sources.SourceError("JBlanked week: HTTP 401 'This endpoint requires credits'")
+    monkeypatch.setattr(sources, "fetch_jb", refuse)
+    now = pd.Timestamp("2026-10-14 10:00", tz="UTC")
+    with pytest.raises(sources.SourceError):
+        update.update_jb(st, "k", now)
+    assert not update.jb_has_credits(st, now + pd.Timedelta(hours=23))
+    assert update.jb_has_credits(st, now + pd.Timedelta(hours=25))
+    monkeypatch.setattr(update, "keys", lambda: {"fred": None, "jblanked": "k"})
+    monkeypatch.setattr(update, "update_feed", lambda *a, **k: "feed: ok")
+    monkeypatch.setattr(update, "update_fomc", lambda *a, **k: "fomc: ok")
+    out = update.update_all(st, now + pd.Timedelta(hours=1), rebuild=False)
+    assert any("no credits" in x for x in out)
 
 
 def test_a_missing_fred_release_is_named_not_skipped(monkeypatch):
@@ -421,8 +496,11 @@ def test_one_source_failing_does_not_stop_the_others(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise sources.SourceError("FRED down")
     monkeypatch.setattr(sources, "fred_rows", boom)
+    def fed_down(**k):
+        raise sources.SourceError("Fed calendar: HTTP 503")
+    monkeypatch.setattr(sources, "fetch_fomc", fed_down)
     out = update.update_all(NewsStore(tmp_path), pd.Timestamp("2026-10-13 10:00", tz="UTC"))
     assert any(s.startswith("feed: 1 events") for s in out)
-    assert any("fred: FAILED" in s for s in out)
+    assert any("fred: FAILED" in s for s in out) and any("fomc: FAILED" in s for s in out)
     assert any("jblanked: skipped" in s for s in out)
     assert len(load_events(store=NewsStore(tmp_path))) == 1

@@ -22,6 +22,9 @@ from .calendar import NewsStore, build_events
 
 FEED_MIN_INTERVAL = pd.Timedelta(minutes=30)       # the feed rate-limits eager callers
 FRED_MIN_INTERVAL = pd.Timedelta(hours=12)         # release dates change rarely
+FOMC_MIN_INTERVAL = pd.Timedelta(hours=12)         # the Fed's calendar, the same
+NO_CREDITS_PAUSE = pd.Timedelta(hours=24)          # JBlanked said "requires credits": ask again
+                                                   # tomorrow, not every 5 minutes
 
 
 def keys() -> Dict[str, Optional[str]]:
@@ -56,12 +59,42 @@ def update_jb(store: NewsStore, key: str, now=None, *, kind: str = "week", days_
     if last and now - pd.Timestamp(last) < pd.Timedelta(seconds=sources.JB_MIN_INTERVAL_S):
         return "jblanked: waiting (one request per 5 minutes)"
     store.set_meta(jb_request=now.isoformat())
-    items = sources.fetch_jb(key, kind=kind, start=now - pd.Timedelta(days=days_back),
-                             end=now + pd.Timedelta(days=days_ahead))
+    try:
+        items = sources.fetch_jb(key, kind=kind, start=now - pd.Timedelta(days=days_back),
+                                 end=now + pd.Timedelta(days=days_ahead))
+    except sources.SourceError as e:
+        if "credits" in str(e).lower():
+            store.set_meta(jb_no_credits=now.isoformat())
+        raise
+    store.set_meta(jb_no_credits=None)
     raw = sources.parse_jb(items)
     store.merge_jb(raw)
     store.set_meta(jb_ok=now.isoformat(), jb_last_count=len(raw))
     return f"jblanked: {len(raw)} events"
+
+
+def jb_has_credits(store: NewsStore, now=None) -> bool:
+    """False for a day after JBlanked last answered "requires credits"."""
+    now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    t = store.meta().get("jb_no_credits")
+    return t is None or now - pd.Timestamp(t) >= NO_CREDITS_PAUSE
+
+
+def update_fomc(store: NewsStore, now=None, *, force: bool = False) -> str:
+    """The Fed's own meeting calendar (no key). A page that parses to fewer than 20 rows has
+    changed its layout, and is refused rather than allowed to empty the store."""
+    now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    ago = _ago(store.meta(), "fomc", now)
+    if not force and ago is not None and ago < FOMC_MIN_INTERVAL:
+        return "fomc: fresh"
+    rows = sources.parse_fomc(sources.fetch_fomc())
+    if len(rows) < 20:
+        raise sources.SourceError(f"the Fed's calendar parsed to only {len(rows)} rows -- has "
+                                  f"its page layout changed? ({sources.FOMC_URL})")
+    store.write("fomc", rows)
+    store.set_meta(fomc_ok=now.isoformat())
+    n = int((rows["title"] == "Federal Funds Rate").sum())
+    return f"fomc: {n} rate decisions {rows['t'].min():%Y} .. {rows['t'].max():%Y}"
 
 
 def update_fred(store: NewsStore, key: str, now=None, *, force: bool = False) -> str:
@@ -81,12 +114,14 @@ def update_all(store: Optional[NewsStore] = None, now=None, *, rebuild: bool = T
     store = store or NewsStore()
     k = keys()
     out = []
-    steps = [("feed", lambda: update_feed(store, now))]
+    steps = [("feed", lambda: update_feed(store, now)), ("fomc", lambda: update_fomc(store, now))]
     if k["fred"]:
         steps.append(("fred", lambda: update_fred(store, k["fred"], now)))
     else:
         out.append("fred: skipped (no FRED_API_KEY in .env)")
-    if k["jblanked"]:
+    if k["jblanked"] and not jb_has_credits(store, now):
+        out.append("jblanked: skipped (the key has no credits -- jblanked.com/api/billing)")
+    elif k["jblanked"]:
         steps.append(("jblanked", lambda: update_jb(store, k["jblanked"], now)))
     else:
         out.append("jblanked: skipped (no JBLANKED_API_KEY in .env)")

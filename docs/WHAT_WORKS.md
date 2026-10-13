@@ -331,8 +331,7 @@ to where it stood before the news. `experiments/nq_news_reversion.py`:
   10:59.
 - **Everything else** is the open test's: price-scaled 25/38, 3 losses end the day, NQ costs.
 
-The calendar currently reaches Nov 2021 – Apr 2025: 302 news days and 1,723 trades. FRED and
-JBlanked keys extend it to Sept 2026, and the run is the same command.
+**With the complete calendar** (every red-folder release, Nov 2021 – Apr 2025: 302 news days):
 
 | arm | trades | R gross | R net | train | forward |
 |---|---|---|---|---|---|
@@ -343,13 +342,27 @@ JBlanked keys extend it to Sept 2026, and the run is the same command.
 | big surprises only ("outsiders") | 161 | -0.155 | -0.216 | -0.217 | -0.204 |
 | metronome TOWARD the pre-news price | 2,245 | -0.018 | -0.073 | -0.082 | -0.048 |
 | metronome AWAY from it | 2,370 | +0.024 | -0.033 | -0.024 | -0.066 |
-| his rules on QUIET days (no US high news) | 1,514 | -0.012 | -0.071 | -0.066 | -0.098 |
+| his rules on QUIET days (no US high news) | 1,518 | -0.013 | -0.072 | -0.066 | -0.103 |
+
+**Over the whole span** (2022Q1 – 2026Q3, 309 news days). This uses the releases the official sources
+cover throughout: FRED's CPI, PPI, payrolls, retail sales, PCE and GDP, plus the Fed's own
+decisions. Both halves use one definition.
+
+| arm | trades | R gross | R net | train | forward | quarters + |
+|---|---|---|---|---|---|---|
+| his rules, official 8:30 days | 1,814 | -0.018 | **-0.069** (t -2.4) | -0.099 | -0.029 | 7/19 |
+| CPI / PPI / payrolls days only | 1,015 | -0.017 | -0.067 | -0.096 | -0.033 | 6/19 |
+| metronome TOWARD the pre-news price | 2,389 | +0.013 | -0.038 | -0.082 | +0.014 | 7/19 |
+| metronome AWAY from it | 2,345 | -0.010 | -0.062 | -0.042 | -0.091 | 7/19 |
+| big surprises only (to Apr 2025) | 136 | -0.129 | -0.191 | -0.190 | -0.204 | 2/9 |
 
 - **It loses, and before costs too.** -0.035R gross means the reversion is not there to be paid
   for.
-- **News days are no better than quiet days** (-0.091 vs -0.071). The 8:29 price is not special on
-  news days.
-- **His entries add nothing**: -0.020 train, -0.006 forward against the metronome.
+- **News days are no better than quiet days** with the complete calendar (-0.091 vs -0.072). The
+  8:29 price is not special on news days. (The whole-span quiet days, -0.100, include lesser red
+  releases the later period cannot see, so they are not a clean comparison.)
+- **His entries add nothing**: against the metronome they are -0.020 train and -0.006 forward on
+  the complete calendar, and -0.017 / -0.043 over the whole span.
 - **Toward vs away flips between halves**: away is better in train, toward in forward. So there is
   no consistent bias.
 - **His one checkable claim holds in direction**: "outsiders" (a surprise of 1.5 times the

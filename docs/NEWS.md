@@ -30,11 +30,17 @@ The two optional keys go in `.env` (git-ignored), and you create them yourself:
 
 | key | where | what it adds |
 |---|---|---|
-| `FRED_API_KEY` | fredaccount.stlouisfed.org → API Keys | official US release dates, past and scheduled |
-| `JBLANKED_API_KEY` | jblanked.com → profile → API key | **actual** values as they come out, plus Apr 2025 → now history (`python -m quant.news backfill-jb`) |
+| `FRED_API_KEY` (pick API **version 1**) | fredaccount.stlouisfed.org → API Keys | official US headline dates, past and scheduled |
+| `JBLANKED_API_KEY` | jblanked.com → profile → API key | **actual** values, but only with **paid credits** |
 
-Everything works without them. Without JBlanked there are no result emails and no history after
-April 2025. Without FRED, US dates come from Forex Factory only.
+Everything works without them. Without FRED, US dates after April 2025 come only from this week's
+feed.
+
+**JBlanked needs paid credits.** Checked 2026-10-13 with a free key: its `range`, `week` and
+`today` calendar endpoints all answer HTTP 401, "This endpoint requires credits". So without
+credits there are no result emails and no actual values after April 2025. The monitor notices the
+refusal and leaves the key alone for a day rather than asking every 5 minutes, and
+`python -m quant.alerts news` says why results are off.
 
 ## Where the news comes from, and how far each source is trusted
 
@@ -43,7 +49,8 @@ April 2025. Without FRED, US dates come from Forex Factory only.
 | Forex Factory weekly feed | this week, every currency: exact time, impact, forecast, previous | **exact**: the time carries its own offset. No actuals. |
 | Forex Factory archive (scraped by a third party, research only) | 2007-01 → 2025-04: impact, actual, forecast, previous | **dates right, clock repaired** (below) |
 | JBlanked API (Forex Factory data) | actuals, by date range | its timestamps have no zone (stored raw). See *JBlanked's clock* below. |
-| FRED (St. Louis Fed) | official US release dates | official; dates only, so the time is the official one |
+| FRED (St. Louis Fed) | official US **headline** dates for CPI, PPI, payrolls, retail sales, PCE, GDP | official; dates only, so the time is the official one. See *FRED's calendar* below |
+| The Fed's own calendar (federalreserve.gov) | every FOMC meeting 2021 → 2027, no key | official: decision 14:00, press conference 14:30, projections at the marked meetings |
 
 **The Forex Factory website is not scraped.** Its calendar and news pages sit behind a Cloudflare
 bot check: a plain request gets "403 Just a moment…". The weekly feed is Forex Factory's own
@@ -80,6 +87,20 @@ nothing assumes it:
 - **Units.** JBlanked's bare numbers are put into Forex Factory's printed units by the ratio of
   their forecasts. "254" or "254000" beside "140K" both become "254K".
 - **Status.** `python -m quant.news status` shows the zone chosen and why (`jb_zone_evidence`).
+
+**FRED's calendar.** FRED lists every day its data for a release *changed*, not only the headline
+publication. That adds about one false date a year per release: CPI's February seasonal-factor
+revisions, retail sales' April annual revision, payrolls' August benchmark preview. Its "FOMC Press
+Release" changes almost every business day (3,894 dates since 2014).
+- **The fix:** each headline day is taken from the series' **first print**
+  (`series/observations`, `output_type=4`): CPIAUCSL, PPIFIS/PPIFGS, PAYEMS, RSAFS, PCEPI and GDP.
+  GDP's second and third estimates come from its next two vintages. Future days come from FRED's
+  schedule, one per month.
+- **Checked against the archive, 2022 – April 2025:** identical dates for every release, no extras
+  and none missing. The 2025 shutdown comes out right: September's CPI on 24 Oct, no October CPI,
+  November's on 18 Dec, payrolls on 20 Nov and 16 Dec.
+- **Fed decisions:** these come from the Fed's own page instead. Its 26 decisions in 2022–Apr 2025
+  match the archive exactly.
 
 **The merge** keys a release on currency + title + its day in the home zone. Each field is then
 taken from the most trusted source that has it:

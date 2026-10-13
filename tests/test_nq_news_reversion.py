@@ -79,3 +79,25 @@ def test_entries_are_toward_the_pre_news_price_inside_the_window():
     assert ms.tolist() == [False, True, True, False, False, True]   # every 5 min from 8:31
     away_s, away_l = nr.arm_entries(s, days, "metro_away", sig)
     assert away_l.tolist() == [False, True, True, False, False, True] and not away_s[:3].any()
+
+
+def test_the_official_scope_keeps_only_releases_covered_through_the_whole_span():
+    cal = pd.DataFrame([
+        ev("2025-06-11 08:30"),                                            # CPI: official
+        ev("2025-06-12 08:30", "Unemployment Claims", "high"),             # not official
+        ev("2025-06-18 14:00", "Federal Funds Rate"),                       # the Fed: official
+    ])
+    off = nr.news_days(cal, nr._official_titles())
+    assert [str(d) for d in off.index] == ["2025-06-11", "2025-06-18"]
+    assert off.loc[off.index[0], "red830"] and not off.loc[off.index[1], "red830"]
+    assert len(nr.news_days(cal)) == 3
+
+
+def test_the_complete_scope_ends_where_the_archive_ends():
+    rows = [dict(ev("2025-04-03 08:30"), source="ff_archive"),
+            dict(ev("2025-04-04 08:30", "Non-Farm Employment Change"), source="ff_archive"),
+            dict(ev("2025-05-13 08:30"), source="fred")]
+    cal = pd.DataFrame(rows)
+    first, last = nr.coverage(cal)
+    assert (str(first), str(last)) == ("2025-04-03", "2025-04-04")
+    assert str(nr.coverage(cal, complete=False)[1]) == "2025-05-13"

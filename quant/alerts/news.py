@@ -162,6 +162,10 @@ class LiveNews:
                 update.update_fred(self.store, key, now)
             except Exception as e:
                 errors["news fred"] = f"{type(e).__name__}: {e}"
+        try:
+            update.update_fomc(self.store, now)
+        except Exception as e:
+            errors["news fomc"] = f"{type(e).__name__}: {e}"
         return errors
 
     def poll_results(self, now) -> Dict[str, str]:
@@ -176,8 +180,10 @@ class LiveNews:
             return {"news results": f"{type(e).__name__}: {e}"}
 
     def results_available(self) -> bool:
+        """A JBlanked key that has credits -- a key without them is told "requires credits" by
+        every calendar endpoint, so asking every 5 minutes would only fill the log."""
         from quant.news import update
-        return bool(update.keys()["jblanked"])
+        return bool(update.keys()["jblanked"]) and update.jb_has_credits(self.store)
 
     def events(self, start, end) -> pd.DataFrame:
         from quant.news.calendar import load_events
