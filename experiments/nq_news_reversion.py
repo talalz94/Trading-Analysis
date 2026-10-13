@@ -31,8 +31,14 @@ Nulls:
 z is each release's surprise over the size of its OWN past surprises (quant.news.surprise_z), so a
 day is called an outsider only from information older than it.
 
-The calendar comes from quant.news: today the archive covers 2022-01 .. 2025-04; with FRED and
-JBlanked keys in .env it reaches 2026-09 and the forward half fills in. The coverage is printed.
+TWO SCOPES, because the calendar is not equally complete everywhere:
+  complete   every red-folder release (claims, durable goods, Empire ...) is known only while the
+             archive runs, 2021-11 .. 2025-04. The arms above, as registered.
+  official   2021-11 .. 2026-09 on the releases the OFFICIAL sources cover through the whole span
+             -- FRED's CPI, PPI, payrolls, retail sales, PCE and GDP days plus the Fed's own
+             decisions -- so both halves use ONE definition. A "quiet" day here has none of those,
+             though it may hold a lesser red release (claims) the later period cannot see.
+             Surprises exist only while the archive runs, so the outsider arms stop there.
 Train 2022Q1-2024Q2 / forward 2024Q3-2026Q3, as in the open test.
 
 Run:  python -m experiments.nq_news_reversion      (needs data/nas100_1m from the open test)
@@ -46,6 +52,8 @@ from experiments import nq_open_reversion as nq
 
 OUT = nq.Path(__file__).resolve().parent / "results_nq_news_reversion.csv"
 OUT_Q = nq.Path(__file__).resolve().parent / "results_nq_news_reversion_quarters.csv"
+OUT_FULL = nq.Path(__file__).resolve().parent / "results_nq_news_reversion_official.csv"
+OUT_FULL_Q = nq.Path(__file__).resolve().parent / "results_nq_news_reversion_official_quarters.csv"
 
 NEWS_MIN = 8 * 60 + 30
 FAIR_MIN = NEWS_MIN - 1                       # the 8:29 candle: its close is the pre-news price
@@ -54,17 +62,31 @@ DAY_START, DAY_END = 8 * 60, 16 * 60
 APLUS = {"CPI m/m", "Core CPI m/m", "CPI y/y", "Core CPI y/y", "PPI m/m", "Core PPI m/m",
          "Non-Farm Employment Change"}
 OUTSIDER_Z = 1.5
+
+
+def _official_titles() -> set:
+    """Every title the official sources carry through the whole span (see the docstring)."""
+    from quant.news.sources import FRED_RELEASES
+    out = {"Federal Funds Rate", "FOMC Statement", "FOMC Press Conference",
+           "FOMC Economic Projections"}
+    for _, titles in FRED_RELEASES.values():
+        for t in titles:
+            out |= ({f"{s} GDP q/q" for s in ("Advance", "Prelim", "Final")}
+                    if t == "GDP q/q" else {t})
+    return out
 ARMS = ("news_all", "news_aplus", "news_from_open", "priced_in", "outsiders",
         "metro_toward", "metro_away", "quiet_days")
 
 
 # ── which days ───────────────────────────────────────────────────────────────────────────────
-def news_days(events: pd.DataFrame) -> pd.DataFrame:
+def news_days(events: pd.DataFrame, titles=None) -> pd.DataFrame:
     """One row per New York date with US high/critical news: whether any was at 8:30 (`red830`),
     whether CPI/PPI/payrolls were (`aplus`), and the largest |surprise z| among the 8:30 ones
-    (`max_z`, NaN when none has a z)."""
+    (`max_z`, NaN when none has a z). `titles` keeps only those releases (the official scope)."""
     ev = events[(events["currency"] == "USD") & events["level"].isin(["high", "critical"])
                 & events["time_q"].isin(["exact", "official", "typical"])].copy()
+    if titles is not None:
+        ev = ev[ev["title"].isin(titles)]
     et = pd.to_datetime(ev["t"], utc=True).dt.tz_convert("America/New_York")
     ev["day"] = et.dt.date
     ev["at830"] = (et.dt.hour * 60 + et.dt.minute) == NEWS_MIN
@@ -136,30 +158,46 @@ def arm_entries(s: pd.DataFrame, days: pd.DataFrame, arm: str, sig: dict):
 
 
 # ── running and judging ──────────────────────────────────────────────────────────────────────
-def coverage(events: pd.DataFrame) -> tuple:
-    """First and last day the calendar has US high-impact 8:30 events for."""
-    d = news_days(events)
+def coverage(events: pd.DataFrame, titles=None, complete: bool = True) -> tuple:
+    """First and last day the calendar can speak for. `complete`: only while the ARCHIVE runs,
+    since every red-folder release is known only there; otherwise as far as `titles` reach."""
+    d = news_days(events, titles)
     d = d[d["red830"]]
-    return (min(d.index), max(d.index)) if len(d) else (None, None)
+    if not len(d):
+        return None, None
+    last = max(d.index)
+    if complete and "source" in events.columns:
+        arch = events[events["source"].astype(str).str.contains("ff_archive")]
+        if len(arch):
+            last = min(last, pd.to_datetime(arch["t"], utc=True).max()
+                       .tz_convert("America/New_York").date())
+    return min(d.index), last
 
 
-def run(events: pd.DataFrame = None) -> pd.DataFrame:
+def run(events: pd.DataFrame = None, scope: str = "complete") -> pd.DataFrame:
+    """`scope` "complete" (every red release, to the archive's end) or "official" (the releases
+    the official sources cover, the whole span) -- see the module docstring."""
     from quant.news import load_events
+    if scope not in ("complete", "official"):
+        raise ValueError(f"scope must be complete | official, got {scope!r}")
     if events is None:
         events = load_events("2021-11-01", "2026-10-01")
-    days = news_days(events)
-    first, last = coverage(events)
+    titles = _official_titles() if scope == "official" else None
+    days = news_days(events, titles)
+    first, last = coverage(events, titles, complete=(scope == "complete"))
     s = sessions(nq.load())
     # only days the calendar can speak for: a "quiet" day after its last date is merely unknown
     s = s[(s["day"] >= first) & (s["day"] <= last)].reset_index(drop=True)
+    last = min(last, max(s["day"]))
     sig = nq.entry_signals(s)
     trades = {arm: nq.simulate(s, *arm_entries(s, days, arm, sig), arm=arm) for arm in ARMS}
     table = nq.summarize(trades)
-    table.insert(0, "calendar", f"{first} .. {last}")
-    table.to_csv(OUT)
+    table.insert(0, "calendar", f"{scope}: {first} .. {last}")
+    out, out_q = (OUT, OUT_Q) if scope == "complete" else (OUT_FULL, OUT_FULL_Q)
+    table.to_csv(out)
     q = pd.concat([t.groupby("quarter")["R"].agg(["mean", "size"]).add_prefix(a + "_")
                    for a, t in trades.items() if len(t)], axis=1)
-    q.to_csv(OUT_Q)
+    q.to_csv(out_q)
     run.trades = trades
     return table
 
@@ -185,8 +223,10 @@ def verdict(table: pd.DataFrame) -> str:
 
 
 if __name__ == "__main__":
-    tbl = run()
-    with pd.option_context("display.width", 220, "display.max_columns", 30):
-        print(tbl.drop(columns="calendar"))
-    print()
-    print(verdict(tbl))
+    for sc in ("complete", "official"):
+        tbl = run(scope=sc)
+        with pd.option_context("display.width", 220, "display.max_columns", 30):
+            print(tbl.drop(columns="calendar"))
+        print()
+        print(verdict(tbl))
+        print()

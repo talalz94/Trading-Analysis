@@ -2294,51 +2294,21 @@ on the charts. docs/NEWS.md is the guide. What was found on the way:
     -1.5σ; after rewinding to 12:00 that day the actual is gone and the marker stays.
 
 
-### RESUME HERE -- "finish news setup" paused mid-task (2026-10-13)
+### News setup finished (2026-10-14)
 
-The user has added BOTH keys to `.env` (`FRED_API_KEY`, `JBLANKED_API_KEY`).
-
-**Done and tested:**
-- **JBlanked is stored raw.** Its zone is decided at every build with the tie guard and the
-  broker-time (NY+7) candidate, and actuals are put in Forex Factory's units. 5 rules
-  mutation-checked; 815 tests passed with this in.
-- **JBlanked is NOT free for the calendar.** With a free key the `range`, `week` AND `today`
-  endpoints all answer HTTP 401: "This endpoint requires credits". So there are no live actuals
-  and no history without buying credits. That is the user's decision; ask them. The options:
-  - buy credits (price behind their login at jblanked.com/api/billing);
-  - US-only actuals computed from FRED series (slower, and needs care: rounding of m/m from index
-    levels);
-  - no result emails.
-  - Live polling now uses `kind="week"`. Either way, the alerts should stop polling for a day
-    after a "requires credits" answer: TODO, not done.
-- **FRED key works.** But FRED's release calendar contains phantom non-headline dates, about one
-  per release per year: CPI Feb seasonal revisions, retail Apr revisions, NFP Aug benchmark
-  preview. FRED's "FOMC Press Release" (rid 101) changes almost DAILY (3,894 dates), so it is
-  useless for decision dates. The first FRED download (with those phantoms) is PARKED outside
-  the repo, and `data/news/fred.parquet` is absent on purpose.
-
-**Written but NOT yet tested or run** (in `quant/news/sources.py`, all in the WIP commit):
-- `fred_rows` rewritten to use each series' FIRST-PRINT dates (`series/observations`,
-  `output_type=4`: CPIAUCSL, PPIFIS+PPIFGS, PAYEMS, RSAFS, PCEPI, GDP). GDP adds Prelim/Final from
-  `series/vintagedates`. Future dates come from the schedule, one per month (`_one_per_month`).
-- `fetch_fomc` / `parse_fomc`: the Fed's own calendar page (federalreserve.gov, 2021-2027).
-  Rate decision and statement 14:00 ET, press conference 14:30, projections at the * meetings.
-  Source name "fed"; the calendar reads store file `fomc`.
-
-**Next steps, in order:**
-1. Fix `tests/test_news.py::test_fred_dates_become_official_times_with_daylight_saving`. Its fake
-   `_fred` must also answer `series/observations` and `series/vintagedates`. Add tests for:
-   - first prints dropping a vintage-start date shared by >3 observations;
-   - `_one_per_month`;
-   - `parse_fomc` on a saved snippet: last day of "Apr/May 30-1", "*", notation votes skipped.
-2. Add `update_fomc` (twice a day, like FRED) to `update_all` and to `LiveNews.refresh`.
-   Include "fomc" in `calendar._stale` and in the `load_events` source list (only "fred" is
-   there now).
-3. Run `python -m quant.news update`. Check FRED first prints against the archive 2022-2025,
-   release by release: they must be identical, with no extras. Also check the 2025 shutdown
-   dates (Sep CPI on 24 Oct 2025; Oct+Nov payrolls together on 16 Dec 2025).
-4. Rerun `python -m experiments.nq_news_reversion`. The calendar should now reach 2026-09 for
-   8:30 days. Outsider z still stops at 2025-04 without actuals. Update WHAT_WORKS.md, the result
-   CSVs (force-add) and the test count in CLAUDE.md.
-5. Ask the user about JBlanked credits, then finish the alerts "no credits" back-off.
-6. Full suite, then commit.
+Both keys are in `.env`.
+- **FRED headline days from first prints:** identical to the archive 2022–2025, and the 2025
+  shutdown comes out right.
+- **FOMC decisions from the Fed's own calendar page:** 56 decisions 2021–2027, and the 26 in the
+  archive's span match exactly.
+- **JBlanked:** every calendar endpoint needs paid credits. The monitor now remembers a "requires
+  credits" answer and leaves the key alone for a day. Whether to buy credits is the user's call.
+- **News-day test rerun in two scopes** (complete calendar to Apr 2025; official releases to Sep
+  2026): the verdict holds on the whole span, -0.069R a trade, entries no better than the
+  metronome. See WHAT_WORKS.md.
+- **Gotchas:**
+  - FRED's `output_type=4` needs `realtime_start=1776-07-04`, `realtime_end=9999-12-31`, or it
+    answers "No vintage dates exist" for today's window.
+  - FRED's WEBSITE times out for scripted requests from here; its API does not.
+- **Mutation-checked:** 7 rules (artifacts, one per month, first prints vs calendar, notation
+  votes, broken Fed page, no-credits memory, complete-scope end).

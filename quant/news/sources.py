@@ -425,8 +425,10 @@ def fred_first_prints(key: str, series: str, start: str = "1999-01-01") -> List[
     """The day each observation of `series` was FIRST published. A date shared by more than 3
     observations is the start of FRED's vintage history, not a publication, and is dropped (two
     months published together after the 2025 shutdown share a date legitimately)."""
+    # output_type=4 reads the WHOLE publication history, so the real-time window must span it
+    # (the default, today only, is refused: "No vintage dates exist for the specified period")
     js = _fred("series/observations", key, series_id=series, output_type=4,
-               observation_start=start)
+               observation_start=start, realtime_start="1776-07-04", realtime_end="9999-12-31")
     days = pd.Series([o["realtime_start"] for o in js.get("observations", [])])
     if days.empty:
         return []
@@ -549,4 +551,5 @@ def parse_fomc(html: str) -> pd.DataFrame:
                 t = pd.Timestamp(f"{d} {hhmm}").tz_localize("America/New_York").tz_convert("UTC")
                 rec.append(dict(t=t, time_q="official", currency="USD", title=title,
                                 impact="high", source="fed"))
-    return _rows(pd.DataFrame(rec, columns=ROW_COLS))
+    out = pd.DataFrame(rec, columns=ROW_COLS).drop_duplicates(["t", "title"])
+    return _rows(out.sort_values("t"))
