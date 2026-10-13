@@ -187,15 +187,24 @@ def arm_signals(s: pd.DataFrame, arm: str, sig: dict):
 
 
 def run_arm(s: pd.DataFrame, arm: str, sig: dict) -> pd.DataFrame:
-    """The engine, then the three-losses rule. With one position at a time, dropping a session's
-    trades after its third loss in a row is exactly the same as having stopped there."""
+    """The engine, then the three-losses rule (see `simulate`)."""
+    es, el = arm_signals(s, arm, sig)
+    return simulate(s, es, el, arm=arm, target_fair=(arm == "target_fair"),
+                    three_loss=(arm != "no_3loss"))
+
+
+def simulate(s: pd.DataFrame, es, el, *, arm: str = "", target_fair: bool = False,
+             three_loss: bool = True) -> pd.DataFrame:
+    """Trade the entries `es` (short) / `el` (long) with his stop, target, costs and one position
+    at a time, flat at each session's last bar; then the three-losses rule. With one position at a
+    time, dropping a session's trades after its third loss in a row is exactly the same as having
+    stopped there. Shared with experiments/nq_news_reversion.py."""
     from quant.engine import BacktestConfig, run_backtest
     from quant.engine.config import Signals
-    es, el = arm_signals(s, arm, sig)
     d = s.copy()
     stop = STOP_PTS * d["scale"]
     d["stop_l"], d["stop_s"] = d["close"] - stop, d["close"] + stop
-    if arm == "target_fair":
+    if target_fair:
         d["tgt_l"] = d["tgt_s"] = d["fair"]
     else:
         d["tgt_l"], d["tgt_s"] = (d["close"] + TARGET_PTS * d["scale"],
@@ -218,7 +227,7 @@ def run_arm(s: pd.DataFrame, arm: str, sig: dict) -> pd.DataFrame:
     tr["day"] = d["day"].to_numpy()[tr["entry_i"].to_numpy(int)]
     tr["quarter"] = pd.PeriodIndex(pd.to_datetime(tr["day"]), freq="Q").astype(str)
     tr["arm"] = arm
-    if arm != "no_3loss":
+    if three_loss:
         keep, run_, last_day = [], 0, None
         for day, r in zip(tr["day"], tr["R"]):
             if day != last_day:
