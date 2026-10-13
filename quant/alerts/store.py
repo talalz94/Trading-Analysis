@@ -111,15 +111,16 @@ class State:
 
     # ── events ─────────────────────────────────────────────────────────────────────────────
     def add_event(self, *, alert, category, priority, market, tf, bar_time, close_time, what,
-                  side, price, detail, created, late) -> bool:
-        """True if new; False if this exact event was already recorded."""
+                  side, price, detail, created, late, status="new") -> bool:
+        """True if new; False if this exact event was already recorded. `status="skipped"`
+        records an event that must never be mailed (a news reminder overtaken by a later one)."""
         cur = self.db.execute(
             "INSERT OR IGNORE INTO events (id, alert, category, priority, market, tf, bar_time,"
-            " close_time, what, side, price, detail, created, late) VALUES"
-            " (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " close_time, what, side, price, detail, created, late, status) VALUES"
+            " (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (event_id(alert, market, tf, bar_time, what), alert, category, priority, market, tf,
              iso(bar_time), iso(close_time), what, side, float(price), json.dumps(detail),
-             iso(created), int(late)))
+             iso(created), int(late), status))
         return cur.rowcount == 1
 
     def last_event_bar(self, alert, market, tf) -> Optional[pd.Timestamp]:

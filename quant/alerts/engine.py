@@ -164,8 +164,9 @@ def refresh_bars(cfg, state, feed, markets, now, report) -> List[str]:
     return ok
 
 
-def detect(cfg, state, markets, now, report):
-    """Judge every new final bar of `markets`; record events and advance cursors."""
+def detect(cfg, state, markets, now, report, news_note=None):
+    """Judge every new final bar of `markets`; record events and advance cursors. `news_note`
+    (from the news step) adds "news: USD CPI m/m in 12 min" to an alert closing near news."""
     d = cfg.delivery
     late_after = pd.Timedelta(minutes=d.catchup_max_age_minutes)
     for (m, tf), alerts in cfg.pairs().items():
@@ -197,12 +198,15 @@ def detect(cfg, state, markets, now, report):
                     if cool and prev is not None and bar - prev < cool:
                         continue
                     close_time = bar + _tf(tf)
+                    detail = ({k: v for k, v in h.items() if k not in ("i", "what", "side")}
+                              | {"tv": cfg.markets[m].tv})
+                    nn = news_note(close_time) if news_note else ""
+                    if nn:
+                        detail["note"] = f"{detail['note']} · {nn}" if detail.get("note") else nn
                     if state.add_event(
                             alert=a.name, category=a.category, priority=a.priority, market=m,
                             tf=tf, bar_time=bar, close_time=close_time, what=h["what"],
-                            side=h.get("side", ""), price=row["close"],
-                            detail={k: v for k, v in h.items() if k not in ("i", "what", "side")}
-                            | {"tv": cfg.markets[m].tv},
+                            side=h.get("side", ""), price=row["close"], detail=detail,
                             created=now, late=now - close_time > late_after):
                         report.events += 1
                         prev = bar
@@ -234,9 +238,20 @@ def deliver(cfg, state, notifier, now, report):
         report.sent += 1
 
 
-def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None) -> TickReport:
+def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -> TickReport:
+    """`news` is the calendar the NEWS block reads (quant.alerts.news.LiveNews, kept by the
+    runner across ticks); built here when the block is on and none is given."""
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     report = TickReport()
+    note = None
+    if cfg.news.on:
+        from .news import LiveNews, news_step
+        try:
+            # no transaction around it: it fetches over the network, and every write it makes is
+            # an INSERT OR IGNORE that is safe to repeat after a crash
+            note = news_step(cfg, state, news or LiveNews(state.root / "news"), now, report)
+        except Exception as e:                         # news must never stop the candle alerts
+            report.errors["news"] = f"{type(e).__name__}: {e}"
     # an alert switched OFF (or a market / timeframe taken out of it) loses its cursor, so
     # switching it back on starts from that moment instead of mailing everything in between.
     # A PC that was off keeps its cursors -- that gap IS caught up, as "while offline".
@@ -245,7 +260,7 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None) -> TickRepor
     due = _due(cfg, state, now)
     if due:
         ok = refresh_bars(cfg, state, feed, due, now, report)
-        detect(cfg, state, ok, now, report)
+        detect(cfg, state, ok, now, report, news_note=note)
     deliver(cfg, state, notifier, now, report)
     state.put("heartbeat", iso(now))
     return report

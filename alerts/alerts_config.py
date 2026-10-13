@@ -9,6 +9,7 @@ ALERTS — WHAT TO WATCH, AND WHEN TO EMAIL YOU.  THIS FILE IS YOURS.
   §1 MARKETS     which instruments
   §2 ALERTS      what to look for -- each one has an on/off switch
   §3 DELIVERY    when to email
+  §4 NEWS        economic-calendar reminders and results   (python -m quant.alerts news)
 """
 
 # ══ §1  MARKETS ═════════════════════════════════════════════════════════════════════════════════
@@ -126,3 +127,23 @@ DELIVERY = dict(
     digest_minutes=15,               # normal alerts: at most one email this often
     catchup_max_age_minutes=30,      # found later than this after its candle closed (PC was off)
 )                                    #   -> listed under "While offline", never sent as urgent
+
+# ══ §4  NEWS ════════════════════════════════════════════════════════════════════════════════════
+#   Driven by the economic calendar, not by candles. See what it covers right now:
+#       python -m quant.alerts news
+#   ~24 emails a week as set (measured on 2024's calendar): ~19 reminders + results, ~4 evening
+#   previews, 1 weekly outlook. Results need JBLANKED_API_KEY in .env; without it they are skipped.
+
+NEWS = dict(
+    on=True,
+    currencies={"USD": "medium", "EUR": "high", "GBP": "high", "JPY": "high"},
+    #   more:   "AUD" "CAD" "CHF" "NZD" "CNY", or "*" for every currency not named
+    #   levels: "low" "medium" "high" "critical" -- the LOWEST kept for that currency
+    #           (critical = CPI, payrolls, rate decisions ...: `python -m quant.alerts list`)
+    timezone="Asia/Karachi",                                # the times in your news emails
+    week_ahead="Sun 20:00",                                 # the week's high + critical news
+    day_ahead="20:00",                                      # tomorrow's covered news, each evening
+    remind_before={"critical": (60, 15), "high": (15,)},    # minutes before the release
+    results="high",                    # actual vs forecast, and what it means for the currency
+    warn_alerts=30,                    # a candle alert within 30 min of high news says so
+)                                      #   (None turns week_ahead / day_ahead / results off)
