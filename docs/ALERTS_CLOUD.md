@@ -163,6 +163,9 @@ ALERT_SMTP_PASSWORD=yourappsixteenletters
 ALERT_EMAIL_TO=you@gmail.com
 ```
 
+For news **results** by email, add the same `JBLANKED_API_KEY=...` line as on your PC. It is
+optional, and so is `FRED_API_KEY=...`, which gives official US dates beyond this week.
+
 Tip: create a **second** Gmail App Password called *quant alerts cloud*. You can then cut the
 server off without touching your PC.
 

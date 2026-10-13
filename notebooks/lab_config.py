@@ -4,7 +4,7 @@ THE LAB — which strategy, which window, and how it is drawn.  THIS FILE IS YOU
 The strategy's rules live in notebooks/strategies/<STRATEGY>.py. This file never states a trading
 setting, and the lab refuses a setting found in both, so each value has exactly one home.
 
-  §1 which and when   §2 gaps   §3 S/R   §4 chart   §5 rewind
+  §1 which and when   §2 gaps   §3 S/R   §4 chart   §5 rewind   §6 news
 
 If Jupyter offers "File Changed", pick RELOAD.
 """
@@ -48,3 +48,7 @@ MAX_TRADE_PICKER = 40
 # ── §5  REWIND ───────────────────────────────────────────────────────────────────────────────
 REWIND = True                        # click a candle in the browser; everything clips to it
 AS_OF  = None                        # or "2026-06-05 20:00" to rebuild on truncated data
+
+# ── §6  NEWS — economic releases along the bottom of the chart (docs/NEWS.md) ────────────────
+NEWS      = {"USD": "medium", "EUR": "high", "GBP": "high", "JPY": "high"}   # None = no strip
+NEWS_SHOW = "high"                   # opens on: "critical" | "high" (+critical) | "medium" | "all"

@@ -209,6 +209,14 @@ class FvgLab:
                    f"{'  (AS OF)' if _get(c, 'AS_OF', None) else ''}  ·  "
                    f"{'/'.join((c.TF,) + tuple(_get(c, 'FVG_TFS', ())))} fair value gaps"
                    f"  ·  {len(self.trades)} trades"))
+        cov = _get(c, "NEWS", None)              # a view setting; off for configs predating it
+        if cov:
+            from ..news import load_events
+            t = pd.to_datetime(self.D["t"])
+            kw.update(news=load_events(t.min() - pd.Timedelta(days=1),
+                                       t.max() + pd.Timedelta(days=1), coverage=cov),
+                      news_show=_get(c, "NEWS_SHOW", "high"),
+                      news_tz=_get(c, "NEWS_TZ", "Asia/Karachi"))
         kw.update(overrides)
         return pattern_figure(self.D, **kw)
 

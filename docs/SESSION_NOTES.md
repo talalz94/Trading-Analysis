@@ -2220,3 +2220,58 @@ Gotchas, for anyone extending it:
 - **Not tested yet:** his "A+" news-day reversion to the pre-news price (it needs a CPI/PPI/NFP
   calendar), the opening continuation, and his discretion.
 
+### The economic calendar (`quant.news`), and the news-day test (2026-10-13)
+
+The user asked for news as a feature: criticality, actual/forecast/previous, sentiment, use in
+research and alerts (e.g. a reminder the day before critical news), and a TradingView-style strip
+on the charts. docs/NEWS.md is the guide. What was found on the way:
+
+- **Forex Factory's website cannot be scraped.**
+  - Calendar and news pages answer "403 Just a moment…" (`cf-mitigated: challenge`).
+  - Getting past that means defeating a bot check, which is not done here.
+  - The weekly export (`nfs.faireconomy.media/ff_calendar_thisweek.json`) is open. It has exact
+    times with their offset, impact, forecast and previous, but no actual and no other week.
+  - The XML version has the same events with times in UTC.
+- **The scraped archive (Hugging Face, Tropstan/Forex_Factory_Calendar) has two clock faults,
+  and its dates are right.**
+  1. **Scraped in Tehran time.** Iran abolished daylight saving in 2022, but 2023–25 rows are still
+     stamped +04:30, so they read an hour early (claims at 7:30, ISM 9:00). Re-reading the wall
+     time in true `Asia/Tehran` puts every one on its official minute.
+  2. **30% of rows are at 00:00.** Forex Factory prints a time only on a group's first row, and
+     the scrape was re-sorted.
+     - Their date is right: all 24 CPI dates of 2023–24 checked.
+     - My first measure of "8:30 releases stamped at 15:30 New York" was an artefact. Midnight in
+       Tehran is 15:30 New York the previous day.
+  3. **The hour Tehran's clocks went back happens twice.** The first pass (daylight time) is
+     taken, which puts the 21 Sep 2022 FOMC press conference on its official 14:30.
+- **FF's "usual effect" text** gives each event's direction ("'Actual' less than 'Forecast' is good
+  for currency"). The hand-written rules in `catalog.direction` match it on 376/376 events with
+  values. That matters because the cloud monitor has no archive.
+- **Sizes:**
+  - archive CSV 68 MB; stored repaired 1.4 MB, with directions 10 KB;
+  - the merged calendar (83k events) is 3.6 MB and builds in ~5 s. It was 18 s until categories,
+    directions and values were computed per DISTINCT title/value rather than per row.
+- **JBlanked** (free key, one request per 5 minutes) serves Forex Factory's calendar WITH actuals
+  by date range. Its timestamps carry no zone, and its README suggests GMT+3. The zone is
+  calibrated against the feed (`calibrate_jb_zone`) and refused unless 90% of matches agree.
+  **Not yet verified on real data: no key yet.**
+- **FRED** release names are matched by NAME at run time (a wrong id cannot creep in). **Not yet
+  verified on real data: no key yet.**
+- **Gaps until the keys exist:** the calendar has no actuals after 2025-04-07 and no dates for
+  2025-04 .. 2026-10, so the lab's June 2026 window shows no news strip yet. The news-day test runs
+  on Nov 2021 – Apr 2025 for now; with the keys, rerun
+  `python -m quant.news update && python -m quant.news backfill-jb && python -m
+  experiments.nq_news_reversion` and the forward half fills in.
+- **The news-day test** (verdict in WHAT_WORKS.md): -0.091R a trade, negative before costs,
+  news days no better than quiet days. Big-surprise days are worse, as JJ says, but that is 28 days.
+- **Alerts:** news notices are events in the same SQLite table (alert name `news`, reserved).
+  - A digest window that crosses midnight (20:00 + 6 h) needs the PREVIOUS day's slot. The first
+    version missed that, and a test caught it.
+  - Emails without news were proved byte-identical to before on 300 random cases.
+- **Chart:** the strip sits on an overlay axis fixed at [0, 1], and its menu is appended LAST. The
+  cascades address `updatemenus[1]/[2]/[4]` by index, so they keep working.
+  - Rewind keeps the schedule (known in advance) and clips only the actuals, which live on
+    invisible markers of their own.
+  - Verified in a browser: the 11 Jul 2024 CPI hover reads A -0.1% vs F 0.1%, "worse for USD",
+    -1.5σ; after rewinding to 12:00 that day the actual is gone and the marker stays.
+

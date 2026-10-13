@@ -18,7 +18,7 @@ data layer designed to grow to other providers and asset classes (crypto, FX, eq
 - [Indicators](#indicator-system) · [Strategies](#strategy-framework)
 - [Stop loss](#stop-loss-configuration) · [Take profit](#take-profit-configuration)
 - [Backtesting model](#backtesting-model) · [Optimization](#optimization) · [Visualization](#visualization)
-- [Email alerts](#email-alerts) · [Troubleshooting](#troubleshooting)
+- [Email alerts](#email-alerts) · [Economic calendar](#economic-calendar) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -589,6 +589,27 @@ indices, crypto CFDs, bonds and stocks. The full menu is
 [`docs/ALERTS_CATALOGUE.md`](docs/ALERTS_CATALOGUE.md); setup and robustness details are in
 [`docs/ALERTS.md`](docs/ALERTS.md). None of these has a **measured directional edge**
 (`docs/WHAT_WORKS.md`). An alert brings a chart to your attention; it is not a trade signal.
+
+---
+
+## Economic calendar
+
+`quant.news` knows what is released when, how much it matters (low / medium / high / **critical**),
+what was forecast and what came out, the surprise and what it means for the currency. Its sources
+are Forex Factory's weekly feed, a repaired 2007–2025 archive, and, with free keys, JBlanked for
+actuals and FRED for official US dates. It feeds:
+- research: `load_events`, `news_features`, `news_blackout`;
+- the alerts: week-ahead, day-ahead, reminders and results by email;
+- the charts: a release strip with a criticality dropdown, `pattern_figure(news=...)`.
+
+```bash
+python -m quant.news import-archive   # once, for research (68 MB in, 1.4 MB kept)
+python -m quant.news update           # this week's calendar (+ FRED / JBlanked with keys)
+python -m quant.news show --days 7    # the coming week, in your time zone
+python -m quant.alerts news           # what the alerts cover and when each reminder goes
+```
+
+Full guide: [`docs/NEWS.md`](docs/NEWS.md).
 
 ---
 
