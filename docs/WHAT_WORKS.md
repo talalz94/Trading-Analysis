@@ -309,15 +309,52 @@ Data: Dukascopy NAS100 1m, 1,243 days, 2022Q1–2026Q3.
   -0.015 forward). The win rate is 38.5% where 40.8% is needed after costs.
 - **Negative every year 2022–2026**, both price-scaled and at his literal fixed 25/38 points.
 - **Not tested:**
-  - his A+ setup, reversion to the pre-news price on 8:30 CPI/PPI days (it needs a news calendar);
   - the opening continuation trade;
   - his discretion (moving fair price, "wick rejection" entries).
+  - His A+ setup is tested below.
 - The away-metronome's +0.009 forward is not a finding. It was a null, t 0.45, and negative in
   train.
 - **What this does NOT say:** whether the method pays on prop firms. With many accounts and losses
   capped at evaluation fees, a firm's payout rules can turn a small negative edge per trade into
   payouts. That is a bet on the firm's rules, not on the market. These trades carry no edge of
   their own.
+
+### His "A+" setup: the expected-news reversion (2026-10-13) — negative even before costs
+
+His favourite trade, the one he risks most on. On 8:30 a.m. New York "red folder" days (CPI,
+PPI …) the news is "priced in", so the huge candle off the release is "unfair" and price returns
+to where it stood before the news. `experiments/nq_news_reversion.py`:
+- **News days** come from the new economic calendar (`quant.news`, docs/NEWS.md): days with a US
+  high/critical release at 8:30, about 100 a year.
+- **Fair price** is the 8:29 close.
+- **Entries** use his displacement / break-of-structure rules toward it, on candles from 8:31 to
+  10:59.
+- **Everything else** is the open test's: price-scaled 25/38, 3 losses end the day, NQ costs.
+
+The calendar currently reaches Nov 2021 – Apr 2025: 302 news days and 1,723 trades. FRED and
+JBlanked keys extend it to Sept 2026, and the run is the same command.
+
+| arm | trades | R gross | R net | train | forward |
+|---|---|---|---|---|---|
+| his rules, every 8:30 red day | 1,723 | -0.035 | **-0.091** (t -3.1) | -0.103 | -0.054 |
+| CPI / PPI / payrolls days only | 738 | -0.027 | -0.083 | -0.096 | -0.046 |
+| entering only from 9:30 | 1,490 | -0.009 | -0.065 | -0.070 | -0.050 |
+| small surprises only (\|z\| < 1.5, "priced in") | 1,554 | -0.027 | -0.082 | -0.094 | -0.051 |
+| big surprises only ("outsiders") | 161 | -0.155 | -0.216 | -0.217 | -0.204 |
+| metronome TOWARD the pre-news price | 2,245 | -0.018 | -0.073 | -0.082 | -0.048 |
+| metronome AWAY from it | 2,370 | +0.024 | -0.033 | -0.024 | -0.066 |
+| his rules on QUIET days (no US high news) | 1,514 | -0.012 | -0.071 | -0.066 | -0.098 |
+
+- **It loses, and before costs too.** -0.035R gross means the reversion is not there to be paid
+  for.
+- **News days are no better than quiet days** (-0.091 vs -0.071). The 8:29 price is not special on
+  news days.
+- **His entries add nothing**: -0.020 train, -0.006 forward against the metronome.
+- **Toward vs away flips between halves**: away is better in train, toward in forward. So there is
+  no consistent bias.
+- **His one checkable claim holds in direction**: "outsiders" (a surprise of 1.5 times the
+  release's usual size or more, judged only from earlier releases) are much worse. But that is 28
+  days, and avoiding them still leaves -0.082R.
  Stop moves in particular convert more of the trades that would have
 reached 3R into breakeven exits than they rescue from the stop -- the breakeven-at-1R result again.
 
@@ -366,6 +403,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | Squeeze release, EMA-gradient extremes | ✗ worse than random | Phase 2 |
 | WaveTrend cross, RSI divergence (confirmed *and* zero-lag), VWAP reversion | ✗ | Beat the null only by clawing back cost drag, still negative |
 | **Reversion to the New York open** (Nasdaq 100 1m, JJ Simon's "fair pricing theory") | ✗ no bias | Toward-the-open metronome -0.080R vs away +0.009R forward; his displacement/structure entries = the metronome; -0.08R a trade after NQ costs, negative every year 2022-26 |
+| **Reversion to the pre-news price on 8:30 news days** (his "A+" setup) | ✗ | -0.091R a trade, -0.035R even before costs; news days no better than quiet days; his entries = the metronome |
 | Hour-of-day / weekday filters | ✗ | No quarter-to-quarter persistence; trained pick ranked 110/127 out-of-sample |
 | Higher timeframe as a cure | ✗ | `real − null` is negative at every symbol × timeframe and gets **worse** higher up |
 | Support/resistance-break family (the original setup) | ✗ | Parameter spike with negative neighbours; 1 of 36 survivors where chance predicts ~4 |

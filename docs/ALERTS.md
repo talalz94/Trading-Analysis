@@ -25,6 +25,7 @@ needs no restart.
 8. [Adding a new kind of alert](#8-adding-a-new-kind-of-alert)
 9. [Files and commands](#9-files-and-commands)
 10. [Known limits](#10-known-limits)
+11. [News](#11-news)
 
 ---
 
@@ -306,6 +307,7 @@ quant/alerts/config.py         reads and checks the config (fresh each tick)
             compose.py         the email (text + HTML, categories in config order)
             notify.py          Gmail SMTP from .env; FileNotifier / ListNotifier
             runner.py          the loop, the lock, the log, `status`
+            news.py            the NEWS block: reminders, previews, results (section 11)
 scripts/install_alerts_task.ps1   the scheduled task on this PC (install / -Uninstall)
 scripts/install_alerts_linux.sh   the systemd service on a Linux server (install, update, --uninstall)
 requirements-alerts.txt        what a server needs: numpy pandas numba pyarrow scipy requests
@@ -321,6 +323,7 @@ python -m quant.alerts test-email   # prove the .env settings
 python -m quant.alerts tick         # one pass, then exit (refuses while the monitor runs)
 python -m quant.alerts run          # the monitor loop (what the scheduled task starts)
 python -m quant.alerts status
+python -m quant.alerts news         # the covered calendar and when each reminder will go
 ```
 
 ## 10. Known limits
@@ -347,3 +350,37 @@ python -m quant.alerts status
   If both refuse, use Dukascopy's `BTC/USD`, which trades 24/7 and sits within ~0.03% of Binance's
   price. Its candle-pattern alerts do not always match Binance's chart: 60 of 108 hourly alerts
   matched over 20 days.
+
+## 11. News
+
+The `NEWS` block (§4 of `alerts/alerts_config.py`) adds notices driven by the economic calendar
+rather than by candles:
+- the week ahead, on Sunday evening;
+- tomorrow's releases, every evening;
+- reminders 60 and 15 minutes before critical releases, and 15 before high ones;
+- the actual against the forecast once it is out;
+- a release that moved.
+
+Each notice goes once. A reminder is never sent after its release, and a preview found too late is
+dropped. An outage or a broken calendar never stops a candle alert. A candle alert that closes
+within 30 minutes of high news says so in its note.
+
+```python
+NEWS = dict(
+    on=True,
+    currencies={"USD": "medium", "EUR": "high", "GBP": "high", "JPY": "high"},
+    timezone="Asia/Karachi",
+    week_ahead="Sun 20:00", day_ahead="20:00",
+    remind_before={"critical": (60, 15), "high": (15,)},
+    results="high", warn_alerts=30,
+)
+```
+
+- **Volume:** about 24 emails a week as shipped, measured on 2024's calendar.
+- **Results** need `JBLANKED_API_KEY` in `.env`. Without it the rest still works.
+- **Where the calendar lives:** the monitor keeps its own small copy in `alerts/state/news/`, and
+  refreshes Forex Factory's weekly feed every 30 minutes.
+- **Dry run:** `python -m quant.alerts news` shows what is covered and when each reminder will go.
+
+The sources, criticality levels and sentiment rules are explained in [NEWS.md](NEWS.md).
+

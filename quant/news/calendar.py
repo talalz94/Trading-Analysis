@@ -251,6 +251,8 @@ def merge_rows(rows: pd.DataFrame, directions: Optional[pd.DataFrame] = None,
 
 def finish(ev: pd.DataFrame, directions: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Derived columns: level, category, numbers, surprise, its z-score, direction, sentiment."""
+    if not len(ev):                             # an empty calendar is a calendar, not an error
+        return pd.DataFrame(columns=EVENT_COLS)
     ev = ev.copy()
     ev["impact"] = ev["impact"].fillna("none")
     ev["level"] = [criticality(c, ti, im) for c, ti, im in

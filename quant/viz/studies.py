@@ -493,8 +493,15 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    max_fvg_picker: int = 6, fvg_extend: bool = True,
                    fvg_show=("bull", "bear"),
                    sr_frames=None, tf_sr=None, max_sr_picker: int = 6,
-                   rewind: bool = False, rejected=None, max_missed_picker: int = 8):
+                   rewind: bool = False, rejected=None, max_missed_picker: int = 8,
+                   news=None, news_show: str = "high", news_tz: str = "Asia/Karachi"):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
+
+    `news` is a calendar from `quant.news.load_events` (already narrowed to the currencies you
+    want): a TradingView-style strip of releases along the bottom edge, coloured by level, with a
+    `News: critical | high+ | medium+ | all | off` dropdown under the chart that `news_show`
+    opens on; hover times read in `news_tz`. It is APPENDED after everything else, so a chart
+    without it is unchanged -- quant/viz/news.py has the details, including how rewind treats it.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
     GEOMETRY: the pivots the shape is built from, the upper and lower trendlines through them, the
@@ -2168,6 +2175,18 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         margin=dict(l=50, r=210, t=104 + (66 if missed_picker else 0), b=40),
         title_x=0.5, title_xanchor="center", title_y=0.985, title_yanchor="top")
     fig.update_yaxes(side="right")
+
+    if news is not None and len(news):
+        # LAST, after every axis setting above: `update_yaxes` would otherwise reach the strip's
+        # own [0, 1] axis too. Its menu goes on the END of updatemenus, so the cascades that
+        # address `updatemenus[1]` / `[2]` / `[4]` by index still find what they expect.
+        from .news import add_news_strip
+        _tc = d[time_col] if time_col in d.columns else None
+        _xtz = (_tc.dt.tz if _tc is not None and pd.api.types.is_datetime64_any_dtype(_tc)
+                else None)
+        add_news_strip(fig, news, t_min=tv[0],
+                       t_max=pd.Timestamp(tv[-1]) + bar_interval(d, time_col=time_col),
+                       show=news_show, tz=news_tz, x_tz=_xtz, rewind=rewind)
     return fig
 
 
