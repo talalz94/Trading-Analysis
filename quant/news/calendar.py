@@ -10,7 +10,9 @@ ONE calendar from four sources: store them, merge them, read them back.
                                   also carries `last_seen`, and meta.json the latest fetch of each
                                   feed week: an event missing from its week's latest fetch was
                                   MOVED or CANCELLED, and is left out of the calendar
-      jblanked.parquet            actuals and forecasts from JBlanked, newest per event
+      jblanked.parquet            JBlanked RAW: its naive wall times as sent. The zone is decided
+                                  at every build from all the evidence (calibrate_jb_zone) and
+                                  recorded in meta.json as jb_zone / jb_zone_evidence
       fred.parquet                official US release dates
       events.parquet              the merged calendar (rebuilt when any input is newer)
       meta.json                   when each source was last asked, and JBlanked's zone
@@ -19,16 +21,19 @@ THE MERGE. Rows describe the same release when they share (currency, title, day 
 currency's home zone). Each field is then taken from the most trusted source that HAS it:
   time      the best time_q (exact > official > typical > date), then feed > JBlanked > archive
   impact    feed > JBlanked > archive > FRED
-  forecast  the feed's LAST observation made BEFORE the release, else JBlanked, else archive --
-            a forecast revised after the number came out is not what the market expected
-  actual    JBlanked > archive (the feed has none)
-  previous  JBlanked > feed > archive
+  forecast  the feed's LAST observation made BEFORE the release, else the archive, else
+            JBlanked -- a forecast revised after the number came out is not what the market
+            expected, and JBlanked's bare numbers carry no unit
+  actual    JBlanked > archive (the feed has none); a JBlanked actual is put in the printed
+            forecast's units ("254" or "254000" beside "140K" both become "254K")
+  previous  feed > archive > JBlanked
 A field no source has stays empty; nothing is filled in by guessing.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -37,7 +42,7 @@ import pandas as pd
 
 from . import catalog
 from .catalog import HOME_TZ, RANK, criticality, parse_coverage
-from .sources import ROW_COLS, TIME_Q
+from .sources import JB_RAW_COLS, NY7, ROW_COLS, TIME_Q, jb_rows, localize_wall
 from .values import parse_values, sentiment, surprise_z
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,14 +51,14 @@ DEFAULT_ROOT = ROOT / "data" / "news"
 EVENT_COLS = ["t", "time_q", "currency", "title", "impact", "level", "category",
               "actual", "forecast", "previous", "actual_v", "forecast_v", "previous_v",
               "surprise", "surprise_z", "direction", "sentiment", "source", "key"]
-_SRC_RANK = {"ff_feed": 0, "jblanked": 1, "ff_archive": 2, "fred": 3}
+_SRC_RANK = {"ff_feed": 0, "jblanked": 1, "ff_archive": 2, "fred": 3, "fed": 4}
 _TQ_RANK = {q: i for i, q in enumerate(TIME_Q)}
 
 
 class NewsStore:
     """The files above, written atomically (temp file + rename), read with a small cache."""
 
-    FILES = ("archive", "directions", "feed_log", "jblanked", "fred", "events")
+    FILES = ("archive", "directions", "feed_log", "jblanked", "fred", "fomc", "events")
 
     def __init__(self, root=None):
         self.root = Path(root) if root is not None else DEFAULT_ROOT
@@ -135,6 +140,20 @@ class NewsStore:
                 weeks[str(w)] = now.isoformat()
             self.set_meta(feed_weeks=weeks)
         return len(new)
+
+    def merge_jb(self, raw: pd.DataFrame, *, prefer: str = "new") -> int:
+        """Upsert raw JBlanked rows by (currency, title, wall time). Returns the stored count."""
+        old = self.read("jblanked")
+        if old is not None and len(old) and "wall" not in old.columns:
+            old = None                                # a pre-raw file: superseded, not merged
+        both = [raw, old] if prefer == "new" else [old, raw]
+        out = pd.concat([b for b in both if b is not None and len(b)], ignore_index=True)
+        if not len(out):
+            return 0
+        k = out["currency"] + "|" + out["title"].str.lower() + "|" + out["wall"].astype(str)
+        out = out[~k.duplicated(keep="first")].sort_values("wall").reset_index(drop=True)
+        self.write("jblanked", out[JB_RAW_COLS])
+        return len(out)
 
     def merge_into(self, name: str, rows: pd.DataFrame, *, prefer: str = "new"):
         """Upsert `rows` into a store file by event key; `prefer` new or old on a clash."""
@@ -235,10 +254,15 @@ def merge_rows(rows: pd.DataFrame, directions: Optional[pd.DataFrame] = None,
         sub = sub[sub[col].notna() & sub["_rk"].lt(99)]
         return sub.drop_duplicates("key", keep="first").set_index("key")[col]
 
-    ev["impact"] = pick("impact", ["ff_feed", "jblanked", "ff_archive", "fred"])
+    ev["impact"] = pick("impact", ["ff_feed", "jblanked", "ff_archive", "fred", "fed"])
     ev["actual"] = pick("actual", ["jblanked", "ff_archive"])
-    ev["forecast"] = pick("forecast", ["ff_feed", "jblanked", "ff_archive"])
-    ev["previous"] = pick("previous", ["jblanked", "ff_feed", "ff_archive"])
+    # Forex Factory's PRINTED values first ("245K", "0.3%"); JBlanked's bare numbers only where
+    # nothing printed exists -- they carry no unit (see _rescale_jb)
+    ev["forecast"] = pick("forecast", ["ff_feed", "ff_archive", "jblanked"])
+    ev["previous"] = pick("previous", ["ff_feed", "ff_archive", "jblanked"])
+    _jb = r[r["source"] == "jblanked"].drop_duplicates("key").set_index("key")
+    if len(_jb):
+        ev = _rescale_jb(ev, _jb)
     # which sources spoke, as a bit mask summed over DISTINCT (key, source) -- a Python join per
     # key cost 6 s on the archive
     bit = r["source"].map({s: 1 << i for s, i in _SRC_RANK.items()}).fillna(0).astype(int)
@@ -247,6 +271,49 @@ def merge_rows(rows: pd.DataFrame, directions: Optional[pd.DataFrame] = None,
     ev["source"] = mask.map(lambda m: "+".join(n for i, n in enumerate(names) if m >> i & 1))
     ev = ev.reset_index()
     return finish(ev, directions)
+
+
+def _decimals(s) -> int:
+    m = re.search(r"\.(\d+)", str(s or ""))
+    return len(m.group(1)) if m else 0
+
+
+def _rescale_jb(ev: pd.DataFrame, jb: pd.DataFrame) -> pd.DataFrame:
+    """JBlanked sends bare numbers; Forex Factory prints units ("245K", "0.3%"). An actual
+    taken from JBlanked is put in the units of the forecast it will be compared with: the scale
+    is the ratio of the PRINTED forecast (or previous) to JBlanked's own number for it, which must
+    be a power of 1000 -- so it is right whether JBlanked sends 254 or 254000 for "254K". With no
+    printed number to compare against, its actual is left as sent."""
+    from .values import _MULT
+    ev = ev.copy()                                     # indexed by key, and returned so
+    keys = ev.index.intersection(jb.index)
+    for k in keys:
+        a_jb = parse_values([jb.at[k, "actual"]])[0]
+        if not np.isfinite(a_jb) or ev.at[k, "actual"] != jb.at[k, "actual"]:
+            continue                                   # the actual came from somewhere else
+        scale, ref_txt = np.nan, None
+        for col in ("forecast", "previous"):
+            shown, own = ev.at[k, col], jb.at[k, col]
+            if shown is None or own is None or (isinstance(shown, float) and np.isnan(shown)):
+                continue
+            s_v, o_v = parse_values([shown])[0], parse_values([own])[0]
+            if np.isfinite(s_v) and np.isfinite(o_v) and o_v != 0 and s_v != 0:
+                lg = np.log(abs(s_v / o_v)) / np.log(1000.0)
+                if abs(lg - round(lg)) < 0.02 and s_v / o_v > 0:
+                    scale, ref_txt = 1000.0 ** round(lg), str(shown)
+                    break
+        if not np.isfinite(scale):
+            continue
+        m = re.search(r"(%+|[KkMBT])\s*$", ref_txt)
+        unit = (m.group(1)[:1] if m else "")
+        div = _MULT.get(unit.upper(), 1.0) if unit != "%" else 1.0
+        v = a_jb * scale / div
+        dec = max(_decimals(ref_txt), _decimals(ev.at[k, "previous"]))
+        txt = f"{v:.{dec}f}"
+        if abs(float(txt) - v) > 1e-9:               # the printed precision would lose digits
+            txt = f"{v:.3f}".rstrip("0").rstrip(".")
+        ev.at[k, "actual"] = txt + unit
+    return ev
 
 
 def finish(ev: pd.DataFrame, directions: Optional[pd.DataFrame] = None) -> pd.DataFrame:
@@ -281,16 +348,24 @@ def finish(ev: pd.DataFrame, directions: Optional[pd.DataFrame] = None) -> pd.Da
 
 
 def build_events(store: Optional[NewsStore] = None) -> pd.DataFrame:
-    """Merge every source the store holds and save the result as events.parquet."""
+    """Merge every source the store holds and save the result as events.parquet. JBlanked's
+    zone is decided here, every time, from everything the store knows (calibrate_jb_zone)."""
     store = store or NewsStore()
     parts = []
-    for name in ("archive", "fred", "jblanked"):
+    for name in ("archive", "fred", "fomc"):
         df = store.read(name)
         if df is not None and len(df):
             parts.append(df[[c for c in ROW_COLS if c in df.columns]])
     log = store.read("feed_log")
     if log is not None and len(log):
         parts.append(log[ROW_COLS + ["fetched_at", "last_seen"]])
+    raw = store.read("jblanked")
+    if raw is not None and len(raw) and "wall" in raw.columns:
+        ref = pd.concat([p[p["time_q"] == "exact"][["t", "currency", "title", "time_q"]]
+                         for p in parts if len(p)], ignore_index=True) if parts else None
+        zone, why = calibrate_jb_zone(raw, ref, explain=True)
+        store.set_meta(jb_zone=zone, jb_zone_evidence=why)
+        parts.append(jb_rows(raw, zone))
     rows = pd.concat(parts, ignore_index=True) if parts else None
     ev = merge_rows(rows, store.read("directions"), store.meta().get("feed_weeks"))
     store.write("events", ev)
@@ -344,32 +419,77 @@ def select(events: pd.DataFrame, coverage) -> pd.DataFrame:
 
 
 # ══ JBLANKED'S ZONE ══════════════════════════════════════════════════════════════════════════
-JB_ZONE_CANDIDATES = ("UTC", "Etc/GMT-2", "Etc/GMT-3", "Europe/Athens", "Europe/Moscow",
+JB_ZONE_CANDIDATES = (NY7, "Europe/Athens", "Etc/GMT-3", "Etc/GMT-2", "Europe/Moscow", "UTC",
                       "America/New_York", "Asia/Karachi")
+# a year of walls at a release hour, every day: two candidates that convert ANY of them
+# differently are different zones, however well they agree on the data at hand
+_PROBE = pd.Series(pd.date_range("2025-01-01 15:30", "2025-12-31 15:30", freq="D"))
 
 
-def calibrate_jb_zone(jb_walls: pd.DataFrame, reference: pd.DataFrame, *,
-                      min_matches: int = 5, min_agree: float = 0.9) -> Optional[str]:
-    """Which zone JBlanked's naive timestamps are in: the candidate under which the most
-    matched events land on the reference's exact time. `reference` = feed rows (exact times).
-    None unless at least `min_matches` events match and `min_agree` of them agree -- a wrong
-    zone would shift every release, so an unconvincing answer is no answer."""
-    ref = reference[reference["time_q"] == "exact"]
-    if not len(jb_walls) or not len(ref):
-        return None
-    ref = ref.assign(_k=ref["currency"] + "|" + ref["title"].str.lower())
-    jb = jb_walls.assign(_k=jb_walls["currency"] + "|" + jb_walls["title"].str.lower())
-    best, best_share, best_n = None, 0.0, 0
+def _official_reference(jb: pd.DataFrame) -> pd.DataFrame:
+    """The official New York time of every US release JBlanked lists that has one -- ground
+    truth in EVERY season, from JBlanked's own dates (its wall date is the New York date for
+    every release between 7 a.m. and 5 p.m. there)."""
+    from .catalog import official_time
+    us = jb[jb["currency"] == "USD"]
+    rec = []
+    for title, wall in zip(us["title"], us["wall"]):
+        d = pd.Timestamp(wall).date()
+        hhmm = official_time("USD", title, d)
+        if hhmm:
+            rec.append(dict(t=pd.Timestamp(f"{d} {hhmm}").tz_localize("America/New_York")
+                            .tz_convert("UTC"), currency="USD", title=title, time_q="exact"))
+    return pd.DataFrame(rec, columns=["t", "currency", "title", "time_q"])
+
+
+def calibrate_jb_zone(jb: pd.DataFrame, reference: Optional[pd.DataFrame] = None, *,
+                      min_matches: int = 5, min_agree: float = 0.9, explain: bool = False):
+    """Which zone JBlanked's naive `wall` times are in.
+
+    Every candidate converts the walls; a conversion AGREES when it lands on the exact time of the
+    same (currency, title) in the reference -- the weekly feed, the archive's timed rows, and the
+    official US release times on JBlanked's own dates (any season). The answer must
+      - match at least `min_matches` releases and agree on `min_agree` of them, and
+      - be UNIQUE: if another candidate scores within 2 points and would convert some day of the
+        year differently (Athens and broker time agree except in the weeks when US and EU clocks
+        change on different Sundays), the data cannot tell them apart yet, and the answer is None.
+    None leaves JBlanked's rows dated but untimed, which is safe: the feed or the official time
+    decides the time, and JBlanked lends only the number. `explain=True` returns (zone, why)."""
+    def done(z, why):
+        return (z, why) if explain else z
+    if jb is None or not len(jb):
+        return done(None, "no JBlanked rows")
+    refs = [_official_reference(jb)]
+    if reference is not None and len(reference):
+        refs.append(reference[reference["time_q"] == "exact"][["t", "currency", "title"]])
+    refs = [x for x in refs if len(x)]
+    if not refs:
+        return done(None, "nothing to compare with")
+    ref = pd.concat(refs, ignore_index=True)
+    ref = ref.assign(_k=ref["currency"] + "|" + ref["title"].str.lower(),
+                     t=pd.to_datetime(ref["t"], utc=True))
+    ref = ref.drop_duplicates(["_k", "t"])
+    jbk = jb.assign(_k=jb["currency"] + "|" + jb["title"].str.lower())
+    jbk = jbk[jbk["_k"].isin(set(ref["_k"]))]
+    score = {}
     for z in JB_ZONE_CANDIDATES:
-        t = jb["wall"].dt.tz_localize(z, ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
-        m = pd.merge_asof(jb.assign(t=t).dropna(subset=["t"]).sort_values("t"),
+        t = localize_wall(jbk["wall"], z)
+        m = pd.merge_asof(jbk.assign(t=t.to_numpy()).dropna(subset=["t"]).sort_values("t"),
                           ref[["t", "_k"]].sort_values("t").rename(columns={"t": "t_ref"}),
                           left_on="t", right_on="t_ref", by="_k",
                           tolerance=pd.Timedelta(hours=14), direction="nearest")
         m = m.dropna(subset=["t_ref"])
-        if len(m) < min_matches:
-            continue
-        share = float((m["t"] == m["t_ref"]).mean())
-        if share > best_share:
-            best, best_share, best_n = z, share, len(m)
-    return best if best_share >= min_agree and best_n >= min_matches else None
+        if len(m) >= min_matches:
+            score[z] = (float((m["t"] == m["t_ref"]).mean()), len(m))
+    if not score:
+        return done(None, f"fewer than {min_matches} releases to compare")
+    best = max(score, key=lambda z: (score[z][0], score[z][1]))
+    share, n = score[best]
+    if share < min_agree:
+        return done(None, f"best {best} agrees on only {share:.0%} of {n}")
+    rivals = [z for z, (s, _) in score.items() if z != best and s >= share - 0.02
+              and not localize_wall(_PROBE, z).equals(localize_wall(_PROBE, best))]
+    if rivals:
+        return done(None, f"{best} and {rivals} agree on all {n} releases so far; they differ "
+                          f"in some weeks of the year, so the data cannot choose yet")
+    return done(best, f"{best}: {share:.1%} of {n} releases on the reference minute")

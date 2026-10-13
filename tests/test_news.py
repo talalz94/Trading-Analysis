@@ -289,16 +289,100 @@ def test_coverage_decides_what_the_grid_sees():
 
 
 # ── JBlanked's zone and FRED ────────────────────────────────────────────────────────────────
-def test_jblanked_zone_is_found_only_when_the_evidence_is_convincing():
-    ref = pd.DataFrame([row(t, "ff_feed", title=f"E{i}") for i, t in enumerate(
-        ["2026-01-14 13:30", "2026-01-15 13:30", "2026-07-14 12:30", "2026-07-15 12:30",
-         "2026-07-16 14:00", "2026-01-16 15:00"])])
-    walls = pd.DataFrame({"currency": "USD", "title": ref.title,
-                          "wall": ref.t.dt.tz_convert("Europe/Athens").dt.tz_localize(None)})
-    assert calibrate_jb_zone(walls, ref) == "Europe/Athens"
-    assert calibrate_jb_zone(walls.iloc[:3], ref) is None          # too few to trust
-    noisy = walls.assign(wall=walls.wall + pd.to_timedelta([0, 1, 2, 3, 4, 5], unit="h"))
-    assert calibrate_jb_zone(noisy, ref) is None                    # nothing agrees
+def _walls(times_utc, zone, titles=None, cur="USD"):
+    """JBlanked-style raw rows: the instants written as naive wall time in `zone`."""
+    t = pd.to_datetime(pd.Series(times_utc), utc=True)
+    if zone == sources.NY7:
+        wall = t.dt.tz_convert("America/New_York").dt.tz_localize(None) + pd.Timedelta(hours=7)
+    else:
+        wall = t.dt.tz_convert(zone).dt.tz_localize(None)
+    return pd.DataFrame({"wall": wall, "currency": cur,
+                         "title": titles if titles is not None else [f"E{i}" for i in range(len(t))]})
+
+
+SUMMER = ["2025-07-14 12:30", "2025-07-15 12:30", "2025-07-16 14:00", "2025-06-10 12:30",
+          "2025-06-11 12:30", "2025-08-12 12:30"]
+WINTER = ["2025-01-14 13:30", "2025-01-15 13:30", "2025-12-10 13:30", "2025-02-12 13:30"]
+SPLIT = ["2025-03-12 12:30", "2025-03-20 12:30", "2025-10-29 12:30"]    # US and EU clocks differ
+
+
+def test_broker_time_is_new_york_plus_seven_in_both_seasons():
+    w = pd.Series(pd.to_datetime(["2025-07-15 15:30", "2025-01-15 15:30", "2025-03-12 15:30"]))
+    ny = sources.localize_wall(w, sources.NY7).dt.tz_convert("America/New_York")
+    assert ny.dt.strftime("%H:%M").tolist() == ["08:30"] * 3
+    raw = sources.parse_jb([{"Name": "Core CPI m/m", "Currency": "USD", "Impact": "High",
+                             "Date": "2024.02.08 15:30:00", "Actual": 0.4, "Forecast": 0.4,
+                             "Previous": 0.2}])
+    assert raw.wall[0] == pd.Timestamp("2024-02-08 15:30") and raw.actual[0] == "0.4"
+    assert raw.impact[0] == "high" and raw.title[0] == "Core CPI m/m"
+
+
+@pytest.mark.parametrize("true_zone", [sources.NY7, "Europe/Athens", "Etc/GMT-3"])
+def test_jblanked_zone_is_chosen_only_once_the_data_separates_the_candidates(true_zone):
+    every = SUMMER + WINTER + SPLIT
+    ref = pd.DataFrame([row(t, "ff_feed", title=f"E{i}") for i, t in enumerate(every)])
+    walls = _walls(every, true_zone)
+    assert calibrate_jb_zone(walls, ref) == true_zone
+    # summer alone: broker time, Athens, Moscow and GMT+3 all read the same -- no answer
+    n = len(SUMMER)
+    zone, why = calibrate_jb_zone(walls.iloc[:n], ref.iloc[:n], explain=True)
+    assert zone is None and "cannot choose" in why
+    # summer and winter, but no week when US and EU clocks differ: broker time vs Athens is open
+    if true_zone != "Etc/GMT-3":
+        m = len(SUMMER) + len(WINTER)
+        assert calibrate_jb_zone(walls.iloc[:m], ref.iloc[:m]) is None
+
+
+def test_jblanked_zone_refuses_thin_or_noisy_evidence():
+    every = SUMMER + WINTER + SPLIT
+    ref = pd.DataFrame([row(t, "ff_feed", title=f"E{i}") for i, t in enumerate(every)])
+    walls = _walls(every, sources.NY7)
+    assert calibrate_jb_zone(walls.iloc[:3], ref) is None                     # too few
+    noisy = walls.assign(wall=walls.wall + pd.to_timedelta(range(len(walls)), unit="h"))
+    assert calibrate_jb_zone(noisy, ref) is None                               # nothing agrees
+
+
+def test_official_us_times_calibrate_jblanked_with_no_other_reference():
+    days = ["2025-01-15", "2025-03-12", "2025-03-20", "2025-07-15", "2025-10-29", "2025-12-10"]
+    t = [pd.Timestamp(f"{d} 08:30").tz_localize("America/New_York") for d in days]
+    walls = _walls(t, sources.NY7, titles=["CPI m/m"] * len(t))
+    assert calibrate_jb_zone(walls, None) == sources.NY7
+
+
+def test_an_untimed_jblanked_row_lends_its_number_and_never_its_time(tmp_path):
+    st = NewsStore(tmp_path)
+    st.write("archive", sources._rows(pd.DataFrame([
+        row("2025-07-15 12:30", "ff_archive", forecast="0.3%", previous="0.1%")])))
+    # one JBlanked row, an HOUR off in its own clock -- and too little evidence to calibrate
+    st.merge_jb(pd.DataFrame([dict(wall=pd.Timestamp("2025-07-15 16:30"), currency="USD",
+                                   title="CPI m/m", impact="high", actual="0.4",
+                                   forecast="0.3", previous="0.1", source="jblanked")]))
+    ev = build_events(st)
+    assert len(ev) == 1
+    e = ev.iloc[0]
+    assert e.t == pd.Timestamp("2025-07-15 12:30", tz="UTC") and e.actual == "0.4%"
+    assert st.meta()["jb_zone"] is None
+
+
+@pytest.mark.parametrize("jb_actual, jb_fc, jb_prev, ff_fc, ff_prev, want", [
+    ("254000", "140000", "100000", "140K", "100K", "254K"),     # JBlanked sends raw units
+    ("254", "140", "100", "140K", "100K", "254K"),              # ... or Forex Factory's
+    ("0.4", "0.3", "0.2", "0.3%", "0.2%", "0.4%"),
+    ("2.75", "2.5", "2.25", "2.50%", "2.25%", "2.75%"),
+    ("-1.2", None, "0.5", None, "0.5B", "-1.2B"),               # only a previous to go by
+    ("254", None, None, None, None, "254"),                     # nothing to go by: as sent
+])
+def test_jblanked_actuals_take_the_printed_units(jb_actual, jb_fc, jb_prev, ff_fc, ff_prev, want):
+    rows = pd.DataFrame([
+        row("2026-10-02 12:30", "ff_feed", title="Non-Farm Employment Change", forecast=ff_fc,
+            previous=ff_prev, fetched_at=pd.Timestamp("2026-10-01", tz="UTC")),
+        row("2026-10-02 12:30", "jblanked", title="Non-Farm Employment Change", actual=jb_actual,
+            forecast=jb_fc, previous=jb_prev)])
+    e = merge_rows(rows).iloc[0]
+    assert e.actual == want
+    if ff_fc:
+        assert np.isclose(e.actual_v - e.forecast_v, e.surprise)
+        assert abs(e.surprise) < abs(e.forecast_v) * 5            # same units, not 1000x off
 
 
 def test_fred_dates_become_official_times_with_daylight_saving(monkeypatch):

@@ -170,7 +170,7 @@ class LiveNews:
         if not key:
             return {}
         try:
-            update.update_jb(self.store, key, now, days_back=1, days_ahead=1)
+            update.update_jb(self.store, key, now, kind="week")     # free with a key
             return {}
         except Exception as e:
             return {"news results": f"{type(e).__name__}: {e}"}

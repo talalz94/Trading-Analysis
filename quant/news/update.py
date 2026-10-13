@@ -46,38 +46,22 @@ def update_feed(store: NewsStore, now=None, *, force: bool = False) -> str:
     return f"feed: {len(rows)} events this week, {n} new or changed"
 
 
-def update_jb(store: NewsStore, key: str, now=None, *, days_back: int = 3,
+def update_jb(store: NewsStore, key: str, now=None, *, kind: str = "week", days_back: int = 3,
               days_ahead: int = 7) -> str:
-    """One request: JBlanked's calendar around now. Calibrates its zone against the feed first
-    if that has not been done."""
+    """One request: JBlanked's calendar, stored RAW (its zone is decided when the calendar is
+    built, from everything the store knows). `kind="week"` (this week, with the actuals out so
+    far) is what a FREE key may ask for; "range" (days_back .. days_ahead) needs paid credits."""
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     last = store.meta().get("jb_request")
     if last and now - pd.Timestamp(last) < pd.Timedelta(seconds=sources.JB_MIN_INTERVAL_S):
         return "jblanked: waiting (one request per 5 minutes)"
     store.set_meta(jb_request=now.isoformat())
-    items = sources.fetch_jb(key, kind="range", start=now - pd.Timedelta(days=days_back),
+    items = sources.fetch_jb(key, kind=kind, start=now - pd.Timedelta(days=days_back),
                              end=now + pd.Timedelta(days=days_ahead))
-    zone = calibrate(store, items)
-    rows = sources.parse_jb(items, zone)
-    if len(rows):
-        store.merge_into("jblanked", rows)
-    store.set_meta(jb_ok=now.isoformat())
-    return f"jblanked: {len(rows)} events (zone {zone or 'UNKNOWN -- dates only'})"
-
-
-def calibrate(store: NewsStore, items) -> Optional[str]:
-    """JBlanked's zone: the stored one, or found now against the feed log's exact times."""
-    zone = store.meta().get("jb_zone")
-    if zone:
-        return zone
-    log = store.read("feed_log")
-    if log is None or not len(log):
-        return None
-    from .calendar import calibrate_jb_zone
-    zone = calibrate_jb_zone(sources.jb_walls(items), log)
-    if zone:
-        store.set_meta(jb_zone=zone)
-    return zone
+    raw = sources.parse_jb(items)
+    store.merge_jb(raw)
+    store.set_meta(jb_ok=now.isoformat(), jb_last_count=len(raw))
+    return f"jblanked: {len(raw)} events"
 
 
 def update_fred(store: NewsStore, key: str, now=None, *, force: bool = False) -> str:
@@ -150,6 +134,8 @@ def backfill_jb(store: Optional[NewsStore] = None, start="2025-04-01", end=None,
     Resumable: months already stored are skipped. Returns rows stored."""
     store = store or NewsStore()
     key = keys()["jblanked"]
+    # NOTE: the date-range endpoint needs paid JBlanked credits (a free key gets HTTP 401
+    # "This endpoint requires credits"); the free key covers only this week (update_jb)
     end = pd.Timestamp.now(tz="UTC") if end is None else pd.Timestamp(end, tz="UTC")
     a = pd.Timestamp(start, tz="UTC")
     done = set(store.meta().get("jb_backfilled", []))
@@ -167,9 +153,8 @@ def backfill_jb(store: Optional[NewsStore] = None, start="2025-04-01", end=None,
                     time.sleep(left + 1)
             store.set_meta(jb_request=pd.Timestamp.now(tz="UTC").isoformat())
             items = sources.fetch_jb(key, kind="range", start=a, end=b)
-            rows = sources.parse_jb(items, calibrate(store, items))
-            if len(rows):
-                store.merge_into("jblanked", rows, prefer="old")
+            rows = sources.parse_jb(items)
+            store.merge_jb(rows, prefer="old")
             total += len(rows)
             done.add(tag)
             store.set_meta(jb_backfilled=sorted(done))
