@@ -53,14 +53,20 @@ def main(argv=None) -> int:
             return 0
         now = pd.Timestamp.now(tz="UTC")
         live = LiveNews(a.state / "news")
-        for k, v in live.refresh(now).items():
+        print("refreshing the calendar (the first time takes about a minute) ...")
+        for k, v in {**live.refresh(now), **live.background(now)}.items():
             print(f"  {k}: {v}")
         from quant.news import update as _u
-        why = ("no JBLANKED_API_KEY in .env" if not _u.keys()["jblanked"]
-               else "the JBlanked key has no credits")
+        k = _u.keys()
+        us = "US from the agencies" if k["fred"] else "US OFF (no FRED_API_KEY in .env)"
+        asked = live.store.meta().get("jb_request")
+        other = ("other currencies OFF (no JBLANKED_API_KEY)" if not k["jblanked"] else
+                 "other currencies OFF (the JBlanked key has no credits)"
+                 if not _u.jb_has_credits(live.store) else
+                 "other currencies from JBlanked" if asked else
+                 "other currencies from JBlanked IF its key has credits (not asked yet)")
         print(f"times in {cfg.news.timezone}; results "
-              + ("on" if live.results_available() and cfg.news.results else
-                 f"OFF ({why})" if cfg.news.results else "off"))
+              + (f"on: {us}; {other}" if cfg.news.results else "off"))
         rows = upcoming_table(live, cfg, now, days=a.days)
         print("\n".join(rows) if rows else f"nothing covered in the next {a.days:g} days")
         return 0
