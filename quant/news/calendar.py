@@ -141,6 +141,38 @@ class NewsStore:
             self.set_meta(feed_weeks=weeks)
         return len(new)
 
+    def import_feed_log(self, other: pd.DataFrame, *, min_events: int = 20) -> int:
+        """Merge ANOTHER store's feed log into this one -- the cloud monitor's, which logs the
+        feed every 30 minutes and never sleeps, into a PC that missed the weeks it was off. The
+        feed only ever shows the current week, so a week nobody fetched is lost for good: its
+        forecasts exist nowhere else. Every observation from either log is kept once (key +
+        fetch time), each event's last_seen is the later of the two, and feed_weeks is rebuilt
+        from the fetches big enough to speak for their week. Returns how many were new."""
+        if other is None or not len(other):
+            return 0
+        old = self.read("feed_log")
+        o = other.copy()
+        for c in ("t", "fetched_at", "last_seen"):
+            o[c] = pd.to_datetime(o[c], utc=True)
+        both = pd.concat([x for x in (old, o) if x is not None and len(x)], ignore_index=True)
+        seen = both.groupby("key")["last_seen"].transform("max")
+        out = (both.assign(last_seen=seen)
+               .drop_duplicates(["key", "fetched_at"], keep="first")
+               .sort_values(["fetched_at", "t"]).reset_index(drop=True))
+        added = len(out) - (0 if old is None else len(old))
+        self.write("feed_log", out)
+        # a fetch speaks for its week only when it was a full answer (log_feed's rule)
+        size = out.groupby("fetched_at")["key"].transform("size")
+        full = out[size >= min_events]
+        weeks = dict(self.meta().get("feed_weeks", {}))
+        if len(full):
+            per_week = full.groupby(feed_week(full["t"]).astype(str).to_numpy())["fetched_at"].max()
+            for w, f in per_week.items():
+                if w not in weeks or pd.Timestamp(weeks[w]) < f:
+                    weeks[w] = f.isoformat()
+        self.set_meta(feed_weeks=weeks)
+        return added
+
     def merge_jb(self, raw: pd.DataFrame, *, prefer: str = "new") -> int:
         """Upsert raw JBlanked rows by (currency, title, wall time). Returns the stored count."""
         old = self.read("jblanked")

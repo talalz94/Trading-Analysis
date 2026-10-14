@@ -1,5 +1,9 @@
 """
-python -m quant.news update              refresh the feed (+ FRED, JBlanked when keys are in .env)
+python -m quant.news update [--log FILE] refresh the feed (+ FRED, the US actuals, JBlanked when keys
+                                         are in .env); --log appends what happened, for the
+                                         scheduled task (scripts/install_news_task.ps1)
+python -m quant.news import-log FILE     merge another machine's feed_log.parquet (the cloud
+                                         monitor's) -- the weeks this one missed, forecasts and all
 python -m quant.news import-archive      the 2007-2025 archive, once (~68 MB download, ~1.4 MB kept)
 python -m quant.news backfill-jb [FROM]  JBlanked month by month (one request per 5 minutes)
 python -m quant.news show [--days N] [--past N] [--level high] [--cur USD,EUR]
@@ -45,7 +49,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m quant.news", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("update")
+    u = sub.add_parser("update")
+    u.add_argument("--log", help="append the outcome to this file (for the scheduled task)")
+    il = sub.add_parser("import-log")
+    il.add_argument("path", help="another store's feed_log.parquet")
     a = sub.add_parser("import-archive")
     a.add_argument("--csv", help="a CSV already downloaded (else it is downloaded and deleted)")
     b = sub.add_parser("backfill-jb")
@@ -62,6 +69,8 @@ def main(argv=None):
     o.add_argument("--validate", action="store_true",
                    help="compare every number with the archive's, title by title")
     o.add_argument("--force", action="store_true", help="ignore the 6-hour minimum interval")
+    o.add_argument("--refetch", action="store_true",
+                   help="read everything since --since again (to reach further back)")
     args = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(errors="replace")
@@ -72,7 +81,24 @@ def main(argv=None):
     from .calendar import NewsStore
     st = NewsStore()
     if args.cmd == "update":
-        print("\n".join(update.update_all(st)))
+        try:
+            lines = update.update_all(st)
+        except Exception as e:                     # recorded, so a silent task leaves a trace
+            lines = [f"update FAILED {type(e).__name__}: {e}"]
+        print("\n".join(lines))
+        if args.log:
+            from pathlib import Path
+            log = Path(args.log)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            stamp = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC")
+            with log.open("a", encoding="utf-8") as f:
+                f.write("".join(f"{stamp}  {line}\n" for line in lines))
+            if log.stat().st_size > 1_000_000:     # keep the newer half: a log, not data
+                tail = log.read_text(encoding="utf-8")[-500_000:]
+                log.write_text(tail[tail.find("\n") + 1:], encoding="utf-8")
+    elif args.cmd == "import-log":
+        other = pd.read_parquet(args.path)
+        print(f"{st.import_feed_log(other)} new feed observations merged from {args.path}")
     elif args.cmd == "import-archive":
         print(update.import_archive(st, args.csv, keep_download=bool(args.csv)))
     elif args.cmd == "backfill-jb":
@@ -85,8 +111,8 @@ def main(argv=None):
         key = update.keys()["fred"]
         if not key:
             sys.exit("FRED_API_KEY is not in .env")
-        print(update.update_official(st, key, start=args.since, force=args.force,
-                                     log=lambda m: print("  " + m)))
+        print(update.update_official(st, key, start=args.since, force=args.force or args.refetch,
+                                     refetch=args.refetch, log=lambda m: print("  " + m)))
         if args.validate:
             from .official import validate
             off, arc = st.read("official"), st.read("archive")

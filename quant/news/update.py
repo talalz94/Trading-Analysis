@@ -189,7 +189,7 @@ def _due_specs(store: NewsStore, after: dict, now) -> list:
 
 
 def update_official(store: NewsStore, key: str, now=None, *, start="2022-01-01",
-                    force: bool = False, log=None) -> str:
+                    force: bool = False, refetch: bool = False, log=None) -> str:
     """The agencies' history since `start`, incremental: only releases newer than the last one
     stored per series are fetched, and between the daily full sweeps only the series the calendar
     says have released since (~25 requests the first time and once a day, ~0-3 otherwise)."""
@@ -205,7 +205,9 @@ def update_official(store: NewsStore, key: str, now=None, *, start="2022-01-01",
     full = force or full_ago is None or full_ago >= OFFICIAL_FULL_INTERVAL
     old = store.read("official")
     after = {}
-    if old is not None and len(old):
+    # refetch: ignore what is stored and read everything since `start` again -- the way to reach
+    # further back, since the history otherwise resumes from the newest stored release
+    if old is not None and len(old) and not refetch:
         h = old[old["via"].fillna("history") != "live"] if "via" in old.columns else old
         last = h.assign(day=_ny_day(h["t"]).to_numpy()).groupby("series")["day"].max()
         after = last.to_dict()
