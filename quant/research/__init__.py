@@ -32,6 +32,7 @@ from .fvg_lab import FvgLab, fvg_lab
 from .variant import variant
 from .compare import Arms, compare_runs, run_arms, trade_diff
 from .rejected import rejected_setups
+from .market_view import MarketView, market_view
 
 __all__ = ["FvgLab", "fvg_lab", "variant", "compare_runs", "trade_diff", "run_arms", "Arms",
-           "rejected_setups"]
+           "rejected_setups", "MarketView", "market_view"]
