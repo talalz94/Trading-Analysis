@@ -144,15 +144,23 @@ official sources; nothing is scraped from behind a bot check.
   - FRED sometimes posts days late (the Philly Fed of 17 Nov 2022 is stamped Sunday the 27th): a
     weekend posting keeps only its date and is tied back to the release up to 14 days earlier;
   - December's y/y comes out in January, so the live BLS request reaches two years back.
-- **A live number counts only when it is new:** BLS's reply must carry a LATER month than the last
-  one published, and FRED's latest value must have been posted on the release day. An unchanged
-  reply can never be mistaken for the release.
+- **A live number counts only when it is new**, from either source: its month must be LATER than
+  the last one published, and from FRED the series must also list a new version dated the release
+  day (`series/vintagedates`). FRED's values themselves cannot say when they were published: by
+  default every one carries TODAY's date.
+- **Tested live on the CPI of 14 Oct 2026**, and the first version failed. The BLS API answered
+  HTTP 503 at 8:30, the collector fell back to FRED, and the old check (that "today" date) passed
+  AUGUST's numbers off as September's: 0.4% for 0.6%, the meaning reversed on three of four lines.
+  The rule above replaced it, a test now replays that morning, and the same release through the
+  real servers now gives 0.6% / 0.3% / 3.7% / 2.6% from the BLS and from FRED alike. The
+  reminders (11:30, 12:15 UTC) and the day-ahead (15:00) went to the second.
 - **Cost:** the whole history since 2022 takes about a minute (four series fetched at once; one
   shared pacer keeps every request inside FRED's 120 a minute). The alerts monitor keeps only 150
   days: about 35 s on its first run, which it does AFTER that tick's candle emails are out. After
   that, every 6 hours only the series whose release the calendar shows since the last stored one
   (usually none), and every series once a day. At a release, one poll every 45 s for up to 3 h, at
-  most 25 s of requests per poll, BLS capped at 20 a day without its key (it allows 25). A source
+  most 25 s of requests per poll (the titles asked at once), run AFTER the tick's candle emails
+  are out, BLS capped at 20 a day without its key (it allows 25). A source
   that fails is not asked again for 30 minutes (the feed: 5). Plain HTTP, no browser, nothing new
   to install: the cloud server runs it as it is.
 - **Limits:** US only. ISM, consumer confidence, the Michigan surveys and similar private releases

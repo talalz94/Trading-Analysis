@@ -23,7 +23,7 @@ import json
 import math
 import socket
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 
@@ -44,6 +44,7 @@ class TickReport:
     events: int = 0
     queued: int = 0
     sent: int = 0
+    after: List[Callable] = field(default_factory=list)   # news work to run once candles are out
 
 
 def _tf(tf) -> pd.Timedelta:
@@ -263,6 +264,15 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
         ok = refresh_bars(cfg, state, feed, due, now, report)
         detect(cfg, state, ok, now, report, news_note=note)
     deliver(cfg, state, notifier, now, report)
+    if report.after:
+        # news results still waiting for their number: asked only now that the candle emails are
+        # out, and whatever came in is sent in this same tick
+        for fn in report.after:
+            try:
+                fn()
+            except Exception as e:
+                report.errors["news results"] = f"{type(e).__name__}: {e}"
+        deliver(cfg, state, notifier, now, report)
     if cfg.news.on and hasattr(news, "background"):
         # the slow fetches nothing in this tick waits for -- after the candle emails are out
         try:

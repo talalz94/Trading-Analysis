@@ -470,11 +470,20 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
         pending: list = []
         still: set = set()
         if results(timed):
-            report.errors.update(news.poll_results(now, pd.concat(pending, ignore_index=True)))
-            # read again: a poll that just landed the number sends it THIS tick
-            again = news.events(now - RESULT_WINDOW, now + pd.Timedelta(minutes=1))
-            still.clear()
-            results(select(again, nc.currencies) if len(again) else again)
+            asked = pd.concat(pending, ignore_index=True)
+
+            def poll_then_send():
+                """Ask the sources, then send what came in -- run by tick() AFTER this tick's
+                candle emails are out: at a release the agencies can take 20-40 s to answer
+                (14 Oct 2026: the BLS answered 503 after 12 s), and that is exactly when a
+                candle alert must not wait."""
+                report.errors.update(news.poll_results(now, asked))
+                again = news.events(now - RESULT_WINDOW, now + pd.Timedelta(minutes=1))
+                still.clear()
+                results(select(again, nc.currencies) if len(again) else again)
+                state.put("news_waiting", json.dumps(sorted(still)))
+
+            report.after.append(poll_then_send)
         state.put("news_waiting", json.dumps(sorted(still)))
 
     # ── day ahead ─────────────────────────────────────────────────────────────────────────
