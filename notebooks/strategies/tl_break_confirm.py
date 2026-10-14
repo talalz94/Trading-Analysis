@@ -82,6 +82,12 @@ COSTS = dict(initial_cash=10_000, fee_bps=8, slippage_bps=1.5,
              sizing_mode="risk_pct_equity", sizing_value=1.0,
              exit_enabled=False, max_open_trades=1)
 
+# 2.8  news — no NEW trade from `before` minutes ahead of a covered release to `after` minutes
+#      past it (bar closes; open trades are left alone). None = off. "critical" = CPI, payrolls,
+#      the Fed, PCE, PPI, retail sales, GDP: the releases the calendar covers through every
+#      quarter (docs/NEWS.md). Measured: see docs/WHAT_WORKS.md before switching it on.
+NEWS_BLACKOUT = None                 # e.g. dict(before=30, after=30, coverage={"USD": "critical"})
+
 # ── §3  FAIR VALUE GAPS — what the rules know about gaps (the lab draws these) ──────────────────
 FVG_TFS          = ("15m", "1h", "4h")   # detected (and drawn). May be finer than TF
 FVG_MITIGATION   = "ce"              # "touch" | "ce" (midpoint) | "full" — when a gap dies
@@ -110,4 +116,6 @@ COMPARE = {
     "fvg exit":        dict(USE_TP_MOVE=False, USE_FVG_EXIT=True),
     "both":            dict(USE_TP_MOVE=True,  USE_FVG_EXIT=True),
     "no confirmation": dict(TL_CONFIRM_N=0, TL_CONFIRM_CANCEL=False),
+    "news blackout 30/30": dict(NEWS_BLACKOUT=dict(before=30, after=30,
+                                                   coverage={"USD": "critical"})),
 }

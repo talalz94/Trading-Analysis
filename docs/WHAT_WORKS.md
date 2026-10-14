@@ -319,6 +319,24 @@ Data: Dukascopy NAS100 1m, 1,243 days, 2022Q1–2026Q3.
   payouts. That is a bet on the firm's rules, not on the market. These trades carry no edge of
   their own.
 
+### A news blackout on the trendline strategy (2026-10-14) — too rare to matter
+
+`NEWS_BLACKOUT` in `notebooks/strategies/tl_break_confirm.py` means no new trade from 30 minutes
+before to 30 minutes after a USD critical release: CPI, payrolls, the Fed, PCE, PPI, retail sales,
+GDP. Those are the releases the calendar covers in every quarter. One arm, fixed before the run,
+judged by `experiments/evaluate.py` over 19 quarters on BTC 5m.
+
+| | trades | R / trade | train dR/trade | fwd dR/trade | t/trade |
+|---|---|---|---|---|---|
+| strategy as set | 1,194 | -0.157 | | | |
+| news blackout 30/30 | 1,183 (-11) | | +0.023 | -0.007 | 0.93 |
+
+- **It touches 11 trades in four and a half years.** Critical US news falls inside this strategy's
+  entries too rarely to change anything.
+- The train gain (+15.1R over 9 quarters) does not carry forward (-3.6R). Per trade it is t 0.93.
+- It stays OFF. It is not harmful, just unmeasurable. A wider window or more currencies would be a
+  new arm with its own chance baseline, not a re-run of this one.
+
 ### His "A+" setup: the expected-news reversion (2026-10-13) — negative even before costs
 
 His favourite trade, the one he risks most on. On 8:30 a.m. New York "red folder" days (CPI,
@@ -416,6 +434,7 @@ two to six percentage points — is the whole result. Nothing in the search clos
 | Squeeze release, EMA-gradient extremes | ✗ worse than random | Phase 2 |
 | WaveTrend cross, RSI divergence (confirmed *and* zero-lag), VWAP reversion | ✗ | Beat the null only by clawing back cost drag, still negative |
 | **Reversion to the New York open** (Nasdaq 100 1m, JJ Simon's "fair pricing theory") | ✗ no bias | Toward-the-open metronome -0.080R vs away +0.009R forward; his displacement/structure entries = the metronome; -0.08R a trade after NQ costs, negative every year 2022-26 |
+| **News blackout** (no new trade 30 min either side of USD critical news), trendline strategy | ✗ no effect | 11 of 1,194 trades touched; +0.023R/trade train, -0.007 forward, t 0.93 |
 | **Reversion to the pre-news price on 8:30 news days** (his "A+" setup) | ✗ | -0.091R a trade, -0.035R even before costs; news days no better than quiet days; his entries = the metronome |
 | Hour-of-day / weekday filters | ✗ | No quarter-to-quarter persistence; trained pick ranked 110/127 out-of-sample |
 | Higher timeframe as a cure | ✗ | `real − null` is negative at every symbol × timeframe and gets **worse** higher up |
