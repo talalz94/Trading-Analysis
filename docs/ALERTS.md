@@ -377,7 +377,17 @@ NEWS = dict(
 ```
 
 - **Volume:** about 24 emails a week as shipped, measured on 2024's calendar.
-- **Results** need `JBLANKED_API_KEY` in `.env`. Without it the rest still works.
+- **Reminders can go hours ahead.** Each level takes any minutes from 1 to 2880 (two days), so
+  `remind_before={"critical": (1440, 60, 15)}` adds a reminder 24 hours before every critical
+  release. Same-minute releases still share one email.
+- **Results** for US releases need `FRED_API_KEY` in `.env`. CPI, PPI, payrolls, unemployment and
+  hourly earnings come from the BLS about a minute after 8:30. Retail sales, PCE, GDP, claims,
+  durable goods, JOLTS and the regional surveys come when FRED posts them, usually within the
+  hour, and the Fed's rate from its statement at 14:00. Results for other currencies need
+  JBlanked's paid credits. Without either key the rest still works.
+- **A late result goes only if it was awaited.** A number is asked for for 3 hours. One that lands
+  more than an hour after its release is mailed only if the monitor was already waiting for it,
+  never after the PC was off.
 - **Where the calendar lives:** the monitor keeps its own small copy in `alerts/state/news/`, and
   refreshes Forex Factory's weekly feed every 30 minutes.
 - **Dry run:** `python -m quant.alerts news` shows what is covered and when each reminder will go.

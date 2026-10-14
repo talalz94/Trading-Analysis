@@ -596,15 +596,18 @@ indices, crypto CFDs, bonds and stocks. The full menu is
 
 `quant.news` knows what is released when, how much it matters (low / medium / high / **critical**),
 what was forecast and what came out, the surprise and what it means for the currency. Its sources
-are Forex Factory's weekly feed, a repaired 2007–2025 archive, and, with free keys, JBlanked for
-actuals and FRED for official US dates. It feeds:
+are Forex Factory's weekly feed, a repaired 2007–2025 archive, and, with a free FRED key,
+official US dates and **the US actuals from the agencies themselves** (BLS, FRED, the Fed:
+identical to Forex Factory's printed numbers on 900 of 901 releases checked). JBlanked adds other
+currencies' actuals with paid credits. It feeds:
 - research: `load_events`, `news_features`, `news_blackout`;
 - the alerts: week-ahead, day-ahead, reminders and results by email;
 - the charts: a release strip with a criticality dropdown, `pattern_figure(news=...)`.
 
 ```bash
 python -m quant.news import-archive   # once, for research (68 MB in, 1.4 MB kept)
-python -m quant.news update           # this week's calendar (+ FRED / JBlanked with keys)
+python -m quant.news update           # this week's calendar (+ FRED / US actuals / JBlanked)
+python -m quant.news official --validate   # once: US actuals since 2022, checked vs the archive
 python -m quant.news show --days 7    # the coming week, in your time zone
 python -m quant.alerts news           # what the alerts cover and when each reminder goes
 ```
