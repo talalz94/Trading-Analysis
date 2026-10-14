@@ -2384,3 +2384,26 @@ themselves are open, free and official: `quant/news/official.py`, docs/NEWS.md h
   sources. Also from that morning: the poll made one tick take 40 s, so it now runs after the
   candle emails (TickReport.after) and its number is sent in the same tick; and the titles are asked
   in parallel (FRED alone: all four CPI numbers in 18 s instead of two in 25).
+
+### Market view notebook, the news task, and how far back (2026-10-15)
+
+- **`notebooks/market_view.ipynb` + `market_view_config.py`**: any instrument's latest 2 days on 1m
+  (BTC, ETH, NASDAQ = Dukascopy E_NQ-100, SP500, DOW, GOLD, SILVER, OIL, USDJPY, EURUSD, GBPUSD),
+  trendlines / S/R / FVGs from 1m 5m 15m 1h 4h, the news strip, no strategy
+  (`quant/research/market_view.py`). The window counts CANDLES back from the latest CLOSED one, and
+  the forming candle is dropped from every timeframe. Opens on OPEN_WITH (15m/1h/4h lines and gaps,
+  1h/4h zones): the 1m layer alone has ~600 gaps in two days of BTC and buried the price.
+- **First loads fill the cache gap.** The caches ended Jul-Sep 2026: BTC 1m took 5.7 min (51 days),
+  BTC's other timeframes 2.5 min, NAS100 31 s, gold 71 s, USDJPY 56 s. After that a run is ~8 s to
+  load and ~14 s to draw.
+- **The `quant-news` scheduled task is installed** (scripts/install_news_task.ps1): `update --log`
+  at logon + every 6 h, StartWhenAvailable. First run ok (result 0). Forecasts live only in the
+  week's feed; `import-log` merges the cloud monitor's feed log for weeks the PC missed.
+- **How far back, measured:** the archive 2007-01 -> 2025-04 (every currency); US actuals stored
+  2022+; `official --since 2015-01-01 --refetch` (new) read 3,317 releases in 134 s and matched FF
+  on 1,861 of 1,873 in 2015-2021. Kept at 2022 on purpose: the agencies win the merge, so a backfill
+  would overwrite FF's own print where they differ. Fed decisions only from 2021 (the Fed's page).
+- **Gotchas:** the Binance fetcher resets its logger's level on every call, so quieting it needs a
+  logging FILTER; FRED refuses a first-prints request whose real-time span holds more than ~2,000
+  vintages (weekly claims since 1990), fine from 2015; the browser pane cannot open file:// URLs --
+  serve reports/ with the `reports` launch config instead.

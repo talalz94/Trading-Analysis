@@ -29,6 +29,39 @@ Once, with the FRED key set: the **US actuals since 2022** from the agencies tha
 After that it keeps itself current (`update` and the alerts monitor fetch only what is new).
 
 ```bash
+powershell -ExecutionPolicy Bypass -File scripts\install_news_task.ps1
+```
+Once: a Windows scheduled task that runs `update` at logon and every 6 hours, and catches up after
+the PC was off (`-Uninstall` removes it; its log is `data/news/update.log`). It matters for the
+FORECASTS: the feed shows only the current week, so a week nothing fetched is gone for good. On
+the cloud the alerts monitor does the same every 30 minutes, and `python -m quant.news import-log
+<its feed_log.parquet>` merges the weeks your PC missed (docs/ALERTS_CLOUD.md, "Forecasts your PC
+missed").
+
+### How far back
+
+| what | from | to | source |
+|---|---|---|---|
+| dates, impact, forecast, previous, actual — every currency | Jan 2007 | Apr 2025 | the archive (83k events, 10 currencies) |
+| US release dates | 1999 | the scheduled ones a year ahead | FRED |
+| Fed meetings | Jan 2021 | 2027 | the Fed's calendar page |
+| US actuals | Jan 2022 (stored) | now | the agencies |
+| forecasts | Oct 2026 | now, kept as long as the feed is fetched | the weekly feed |
+
+- **The US actuals reach back to 2015, tested.** `python -m quant.news official --since 2015-01-01
+  --refetch` read 3,317 releases in 134 s, and 2015-2021 matched Forex Factory's printed actuals on
+  1,861 of 1,873: one durable-goods release (2018), one claims week (2017) and April 2020's payrolls
+  (-20,500K against FF's -20,537K) differ. The Fed's rate needs the decision days, which the Fed's
+  calendar page gives only from 2021. FRED keeps dated versions much further back for some series
+  (CPI 1972, payrolls 1955, unemployment 1960, retail sales 2001) -- untested before 2015.
+- **The store stays at 2022+ on purpose.** Before 2022 the archive already has Forex Factory's own
+  numbers, and the agencies' number wins the merge, so a backfill would REPLACE FF's print on the
+  few releases where the two differ.
+- **The gap is forecasts from May 2025 to Oct 2026.** No permitted source has them: the archive
+  ends in April 2025, and Forex Factory's past weeks are behind its bot check. Releases in that span
+  have their actual but no forecast, so no surprise or sentiment.
+
+```bash
 python -m quant.news show --days 7
 ```
 This prints the next 7 days in Pakistan time, filtered by the default coverage.

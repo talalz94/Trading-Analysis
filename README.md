@@ -173,6 +173,9 @@ notebooks look at them:
 - [`notebooks/evaluate.ipynb`](notebooks/evaluate.ipynb) — the strategy named in `evaluate_config.py`
   and its arms over 19 quarters, chosen on train and judged on forward. Run this before believing a
   window.
+- [`notebooks/market_view.ipynb`](notebooks/market_view.ipynb) — no strategy: the latest two days of
+  any instrument (BTC, Nasdaq futures, gold, USDJPY ... `INSTRUMENT` in `market_view_config.py`) on
+  a 1-minute chart, with trendlines, S/R zones and fair value gaps from 1m to 4h and the news strip.
 
 A new idea is a toggle in a strategy file plus an arm in its `COMPARE`; a new strategy is a copied
 file. See [`docs/NOTEBOOK_GUIDE.md`](docs/NOTEBOOK_GUIDE.md). The numbered notebooks are the history:
