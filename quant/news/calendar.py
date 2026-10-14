@@ -51,14 +51,14 @@ DEFAULT_ROOT = ROOT / "data" / "news"
 EVENT_COLS = ["t", "time_q", "currency", "title", "impact", "level", "category",
               "actual", "forecast", "previous", "actual_v", "forecast_v", "previous_v",
               "surprise", "surprise_z", "direction", "sentiment", "source", "key"]
-_SRC_RANK = {"ff_feed": 0, "jblanked": 1, "ff_archive": 2, "fred": 3, "fed": 4}
+_SRC_RANK = {"ff_feed": 0, "official": 1, "jblanked": 2, "ff_archive": 3, "fred": 4, "fed": 5}
 _TQ_RANK = {q: i for i, q in enumerate(TIME_Q)}
 
 
 class NewsStore:
     """The files above, written atomically (temp file + rename), read with a small cache."""
 
-    FILES = ("archive", "directions", "feed_log", "jblanked", "fred", "fomc", "events")
+    FILES = ("archive", "directions", "feed_log", "jblanked", "fred", "fomc", "official", "events")
 
     def __init__(self, root=None):
         self.root = Path(root) if root is not None else DEFAULT_ROOT
@@ -207,6 +207,61 @@ def feed_week(t) -> pd.Series:
 
 
 # ══ THE MERGE ════════════════════════════════════════════════════════════════════════════════
+def _align_official(r: pd.DataFrame, days: int = 14) -> pd.DataFrame:
+    """Tie an official number to its release when FRED dated it late. An official row with no row
+    of another source on its New York day takes the time of the latest such release of the same
+    title up to `days` earlier that has no official number of its own."""
+    off = r["source"] == "official"
+    if not off.any() or off.all():
+        return r
+    r = r.copy()
+    ny = pd.to_datetime(r["t"], utc=True).dt.tz_convert("America/New_York").dt.normalize()
+    r["_day"] = ny
+    for title, g in r[off].groupby("title"):
+        others = r[~off & (r["title"] == title) & (r["currency"] == g["currency"].iloc[0])]
+        if not len(others):
+            continue
+        lone = g[~g["_day"].isin(set(others["_day"]))]
+        if not len(lone):
+            continue
+        free = others[~others["_day"].isin(set(g["_day"]))].drop_duplicates("_day")
+        if not len(free):
+            continue
+        m = pd.merge_asof(lone[["_day"]].reset_index().sort_values("_day"),
+                          free[["_day", "t", "time_q"]].sort_values("_day")
+                          .rename(columns={"_day": "_to"}),
+                          left_on="_day", right_on="_to", direction="backward",
+                          tolerance=pd.Timedelta(days=days)).dropna(subset=["_to"])
+        m = m.drop_duplicates("_to")                  # one release takes one number
+        r.loc[m["index"].to_numpy(), "t"] = m["t"].to_numpy()
+        r.loc[m["index"].to_numpy(), "time_q"] = m["time_q"].to_numpy()
+    return r.drop(columns="_day")
+
+
+def _rated_before(impact: pd.Series, ev: pd.DataFrame, r: pd.DataFrame) -> pd.Series:
+    """An event no source rates on its own day takes the rating Forex Factory LAST gave the same
+    release (the first one after, when it was never rated before). Between the archive's end and
+    the feed's week only the agencies' numbers exist for claims, the regional surveys, durable
+    goods and JOLTS, and an unrated event is level "none" -- which no chart or alert shows."""
+    miss = impact.isna()
+    rated = r.loc[r["source"].isin(["ff_feed", "ff_archive"]) & r["impact"].notna(),
+                  ["t", "currency", "title", "impact"]]
+    if not miss.any() or not len(rated):
+        return impact
+    q = ev.loc[miss, ["t", "currency", "title"]].rename_axis("_k").reset_index()
+    q["t"] = pd.to_datetime(q["t"], utc=True)
+    rated = rated.rename(columns={"t": "_rt"}).sort_values("_rt")
+    rated["_rt"] = pd.to_datetime(rated["_rt"], utc=True)
+    q = q.sort_values("t")
+    out = impact.copy()
+    for how in ("backward", "forward"):
+        m = pd.merge_asof(q, rated, left_on="t", right_on="_rt", by=["currency", "title"],
+                          direction=how).dropna(subset=["impact"])
+        keep = out.loc[m["_k"]].isna().to_numpy()
+        out.loc[m["_k"].to_numpy()[keep]] = m["impact"].to_numpy()[keep]
+    return out
+
+
 def merge_rows(rows: pd.DataFrame, directions: Optional[pd.DataFrame] = None,
                feed_weeks: Optional[dict] = None) -> pd.DataFrame:
     """All sources' rows (feed rows carrying `fetched_at` / `last_seen`) -> the calendar.
@@ -222,6 +277,7 @@ def merge_rows(rows: pd.DataFrame, directions: Optional[pd.DataFrame] = None,
         latest = pd.to_datetime(feed_week(r["t"]).map(feed_weeks), utc=True)
         gone = feed & latest.notna() & (pd.to_datetime(r["last_seen"], utc=True) < latest)
         r = r[~gone].reset_index(drop=True)
+    r = _align_official(r.drop(columns=["key"], errors="ignore"))
     # numbered within each source and, for the feed, within each fetch (see event_keys)
     tag = r["source"].astype(str)
     if "fetched_at" in r:
@@ -254,8 +310,11 @@ def merge_rows(rows: pd.DataFrame, directions: Optional[pd.DataFrame] = None,
         sub = sub[sub[col].notna() & sub["_rk"].lt(99)]
         return sub.drop_duplicates("key", keep="first").set_index("key")[col]
 
-    ev["impact"] = pick("impact", ["ff_feed", "jblanked", "ff_archive", "fred", "fed"])
-    ev["actual"] = pick("actual", ["jblanked", "ff_archive"])
+    ev["impact"] = _rated_before(pick("impact", ["ff_feed", "jblanked", "ff_archive", "fred",
+                                                 "fed"]).reindex(ev.index), ev, r)
+    # the agencies' own number first: it IS what every calendar reprints (checked against the
+    # archive: identical on every US release 2022-2025)
+    ev["actual"] = pick("actual", ["official", "jblanked", "ff_archive"])
     # Forex Factory's PRINTED values first ("245K", "0.3%"); JBlanked's bare numbers only where
     # nothing printed exists -- they carry no unit (see _rescale_jb)
     ev["forecast"] = pick("forecast", ["ff_feed", "ff_archive", "jblanked"])
@@ -352,7 +411,7 @@ def build_events(store: Optional[NewsStore] = None) -> pd.DataFrame:
     zone is decided here, every time, from everything the store knows (calibrate_jb_zone)."""
     store = store or NewsStore()
     parts = []
-    for name in ("archive", "fred", "fomc"):
+    for name in ("archive", "fred", "fomc", "official"):
         df = store.read(name)
         if df is not None and len(df):
             parts.append(df[[c for c in ROW_COLS if c in df.columns]])
@@ -378,7 +437,8 @@ def _stale(store: NewsStore) -> bool:
         return True
     built = out.stat().st_mtime_ns
     return any(store.path(n).is_file() and store.path(n).stat().st_mtime_ns > built
-               for n in ("archive", "directions", "feed_log", "jblanked", "fred", "fomc"))
+               for n in ("archive", "directions", "feed_log", "jblanked", "fred", "fomc",
+                         "official"))
 
 
 def load_events(start=None, end=None, *, coverage=None, store: Optional[NewsStore] = None,
@@ -388,7 +448,8 @@ def load_events(start=None, end=None, *, coverage=None, store: Optional[NewsStor
     file is newer than it. `timed_only` drops rows whose time is not known (date / allday)."""
     store = store or NewsStore()
     if _stale(store):
-        if not any(store.exists(n) for n in ("archive", "feed_log", "jblanked", "fred", "fomc")):
+        if not any(store.exists(n) for n in ("archive", "feed_log", "jblanked", "fred", "fomc",
+                                             "official")):
             return pd.DataFrame(columns=EVENT_COLS)
         ev = build_events(store)
     else:

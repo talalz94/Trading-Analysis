@@ -405,7 +405,7 @@ def _fake_fred(path, key, timeout=30, **p):
 
 def test_fred_headline_days_are_first_prints_and_one_scheduled_day_a_month(monkeypatch):
     monkeypatch.setattr(sources, "_fred", _fake_fred)
-    r = sources.fred_rows("k", pause=0)
+    r = sources.fred_rows("k")
     cpi = r[r.title == "CPI m/m"]
     # not the Feb 9 seasonal revision, not the vintage-start artifact, and of the two scheduled
     # Feb 2027 days the one nearest February's usual (the 13th)
@@ -484,7 +484,7 @@ def test_a_missing_fred_release_is_named_not_skipped(monkeypatch):
     monkeypatch.setattr(sources, "_fred", lambda path, key, **p: {
         "count": 1, "releases": [{"name": "Consumer Price Index", "id": 10}]})
     with pytest.raises(sources.SourceError, match="no release named"):
-        sources.fred_rows("k", pause=0)
+        sources.fred_rows("k")
 
 
 def test_one_source_failing_does_not_stop_the_others(tmp_path, monkeypatch):

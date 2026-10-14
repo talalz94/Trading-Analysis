@@ -37,6 +37,7 @@ time_q says how the time was obtained, best first:
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Dict, Iterable, List, Optional
 
@@ -384,9 +385,26 @@ _GDP_BY_MONTH = {1: "Advance", 4: "Advance", 7: "Advance", 10: "Advance",
                  3: "Final", 6: "Final", 9: "Final", 12: "Final"}
 
 
+FRED_PER_SECOND = 2.0                     # FRED allows 120 requests a minute per key
+_fred_lock = threading.Lock()
+_fred_next = [0.0]
+
+
+def _fred_pace():
+    """Wait for this request's slot: at most FRED_PER_SECOND across EVERY thread, so callers may
+    fetch in parallel (to hide the network's latency) without ever exceeding FRED's limit."""
+    with _fred_lock:
+        now = time.monotonic()
+        slot = max(now, _fred_next[0])
+        _fred_next[0] = slot + 1.0 / FRED_PER_SECOND
+    if slot > now:
+        time.sleep(slot - now)
+
+
 def _fred(path, key, timeout=30, **params):
     if not key:
         raise SourceError("FRED: no API key (FRED_API_KEY in .env)")
+    _fred_pace()
     p = {"api_key": key, "file_type": "json", **params}
     r = _get(f"{FRED_BASE}/{path}", params=p, timeout=timeout)
     if r.status_code != 200:
@@ -481,16 +499,23 @@ def fred_headline_dates(key: str, name: str, release_id: int, series: tuple) -> 
     return out
 
 
-def fred_rows(key: str, *, pause: float = 0.6) -> pd.DataFrame:
-    """Every FRED_RELEASES headline day as rows at its official New York time."""
+def fred_rows(key: str, *, workers: int = 4) -> pd.DataFrame:
+    """Every FRED_RELEASES headline day as rows at its official New York time. `workers` releases
+    are asked at once; FRED's limit is kept by the pacer in _fred."""
+    from concurrent.futures import ThreadPoolExecutor
     ids = fred_release_ids(key)
     low = {k.lower(): v for k, v in ids.items()}
     missing = [n for n in FRED_RELEASES if n.lower() not in low]
     if missing:
         raise SourceError(f"FRED has no release named {missing}; update FRED_RELEASES")
+    names = list(FRED_RELEASES)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        dates = list(pool.map(lambda n: fred_headline_dates(key, n, low[n.lower()],
+                                                            FRED_RELEASES[n][0]), names))
     rec = []
-    for name, (series, titles) in FRED_RELEASES.items():
-        for d, stage in fred_headline_dates(key, name, low[name.lower()], series).items():
+    for name, got in zip(names, dates):
+        series, titles = FRED_RELEASES[name]
+        for d, stage in got.items():
             day = pd.Timestamp(d)
             for title in titles:
                 if title == "GDP q/q":
@@ -501,7 +526,6 @@ def fred_rows(key: str, *, pause: float = 0.6) -> pd.DataFrame:
                 t = pd.Timestamp(f"{d} {hhmm}").tz_localize(HOME_TZ["USD"]).tz_convert("UTC")
                 rec.append(dict(t=t, time_q="official", currency="USD", title=title,
                                 impact="high", source="fred"))
-        time.sleep(pause)                      # FRED allows 120 requests a minute
     return _rows(pd.DataFrame(rec, columns=ROW_COLS))
 
 
