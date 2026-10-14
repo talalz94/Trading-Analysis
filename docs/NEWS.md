@@ -18,8 +18,15 @@ repaired 1.4 MB copy in `data/news/`, and deletes the download.
 ```bash
 python -m quant.news update
 ```
-Run this whenever you like. It fetches this week's calendar, plus FRED and JBlanked when their
-keys are set.
+Run this whenever you like. It fetches this week's calendar, plus FRED, the US actuals and
+JBlanked when their keys are set.
+
+```bash
+python -m quant.news official --validate
+```
+Once, with the FRED key set: the **US actuals since 2022** from the agencies that publish them
+(about a minute, ~1,350 releases, 23 KB), compared title by title with the archive's numbers.
+After that it keeps itself current (`update` and the alerts monitor fetch only what is new).
 
 ```bash
 python -m quant.news show --days 7
@@ -30,17 +37,18 @@ The two optional keys go in `.env` (git-ignored), and you create them yourself:
 
 | key | where | what it adds |
 |---|---|---|
-| `FRED_API_KEY` (pick API **version 1**) | fredaccount.stlouisfed.org → API Keys | official US headline dates, past and scheduled |
-| `JBLANKED_API_KEY` | jblanked.com → profile → API key | **actual** values, but only with **paid credits** |
+| `FRED_API_KEY` (pick API **version 1**) | fredaccount.stlouisfed.org → API Keys | official US headline dates, past and scheduled, **and the US actuals** (below) |
+| `BLS_API_KEY` (optional) | data.bls.gov/registrationEngine | lifts the Bureau of Labor Statistics' limit from 25 to 500 requests a day; not needed |
+| `JBLANKED_API_KEY` | jblanked.com → profile → API key | actuals for **other currencies**, but only with **paid credits** |
 
 Everything works without them. Without FRED, US dates after April 2025 come only from this week's
-feed.
+feed, and there are no US actuals after April 2025.
 
 **JBlanked needs paid credits.** Checked 2026-10-13 with a free key: its `range`, `week` and
-`today` calendar endpoints all answer HTTP 401, "This endpoint requires credits". So without
-credits there are no result emails and no actual values after April 2025. The monitor notices the
-refusal and leaves the key alone for a day rather than asking every 5 minutes, and
-`python -m quant.alerts news` says why results are off.
+`today` calendar endpoints all answer HTTP 401, "This endpoint requires credits". The US actuals
+no longer depend on it (they come from the agencies); without credits there are simply no actuals
+for EUR, GBP, JPY and the rest after April 2025. The monitor notices the refusal and leaves the key
+alone for a day rather than asking every 5 minutes, and `python -m quant.alerts news` says why.
 
 ## Where the news comes from, and how far each source is trusted
 
@@ -51,6 +59,7 @@ refusal and leaves the key alone for a day rather than asking every 5 minutes, a
 | JBlanked API (Forex Factory data) | actuals, by date range | its timestamps have no zone (stored raw). See *JBlanked's clock* below. |
 | FRED (St. Louis Fed) | official US **headline** dates for CPI, PPI, payrolls, retail sales, PCE, GDP | official; dates only, so the time is the official one. See *FRED's calendar* below |
 | The Fed's own calendar (federalreserve.gov) | every FOMC meeting 2021 → 2027, no key | official: decision 14:00, press conference 14:30, projections at the marked meetings |
+| **The US agencies** (BLS, FRED's archive of past vintages, the Fed's statements) | **US actuals** for 21 titles, 2022 → now, and live at the release | official: they ARE the number every calendar reprints. Identical to the archive on every release checked (below) |
 
 **The Forex Factory website is not scraped.** Its calendar and news pages sit behind a Cloudflare
 bot check: a plain request gets "403 Just a moment…". The weekly feed is Forex Factory's own
@@ -102,6 +111,56 @@ Release" changes almost every business day (3,894 dates since 2014).
 - **Fed decisions:** these come from the Fed's own page instead. Its 26 decisions in 2022–Apr 2025
   match the archive exactly.
 
+**The US actuals, from the agencies** (`quant/news/official.py`). These are permitted, free,
+official sources; nothing is scraped from behind a bot check.
+
+| titles | history | live, at the release |
+|---|---|---|
+| CPI m/m and y/y, core CPI m/m and y/y, PPI and core PPI m/m, payrolls, unemployment rate, average hourly earnings | FRED | the BLS API, seconds after 8:30 (no key needed) |
+| retail sales and core retail, core PCE, personal spending, Advance / Prelim / Final GDP, claims, durable goods and core, JOLTS, Philly Fed, Empire State | FRED | FRED, when it posts (usually within the hour) |
+| Federal Funds Rate | FRED's target range, the day after each decision | the Fed's statement page at 14:00 |
+
+- **Read as published that day, never from today's revised data.** Payrolls in July 2024 printed
+  114K: 158,723 minus June *as revised in that same report* (158,609). From today's history the
+  same subtraction gives 85K. FRED keeps every past version of a series (ALFRED), and one request
+  per series returns all the versions needed.
+- **Printed the way Forex Factory prints them:** rounded half-up from the published levels, in its
+  units ("0.4%", "206K", "7.60M", "4.50%"), never "-0.0%".
+- **Checked against the archive, 2022 – April 2025: 900 of 901 releases identical**, every title
+  (claims 170 of 170, payrolls 40 of 40, CPI 39 of 39, all three GDP stages 13 of 13 …). The one
+  difference in the whole check is the Fed of 26 January 2022, which Forex Factory printed as
+  "<0.25%" and the Fed's range gives as 0.25%. `python -m quant.news official --validate` prints
+  the table.
+- **And after the archive ends:** the week of 12 Oct 2026, Forex Factory's own feed listed as
+  "previous" exactly the agencies' last number for all 11 covered US releases (CPI ×4, PPI ×2,
+  retail ×2, claims, Philly, Empire). Note it shows retail sales at 1.2%, the number AS RELEASED;
+  today's revised data says 1.1%, which is why history is read from the vintages.
+- **Edge cases, each from a real release:**
+  - two months published on one day (the 2025 shutdown catch-up: JOLTS for September and October
+    on 9 December) print the later month, as every calendar did;
+  - GDP's second estimate sometimes repeats the first (27 Nov 2024, 27 Feb 2025), and FRED then
+    records nothing that day, so the three stages are read on the release days from FRED's
+    calendar instead of counted from FRED's revisions;
+  - FRED sometimes posts days late (the Philly Fed of 17 Nov 2022 is stamped Sunday the 27th): a
+    weekend posting keeps only its date and is tied back to the release up to 14 days earlier;
+  - December's y/y comes out in January, so the live BLS request reaches two years back.
+- **A live number counts only when it is new:** BLS's reply must carry a LATER month than the last
+  one published, and FRED's latest value must have been posted on the release day. An unchanged
+  reply can never be mistaken for the release.
+- **Cost:** the whole history since 2022 takes about a minute (four series fetched at once; one
+  shared pacer keeps every request inside FRED's 120 a minute). The alerts monitor keeps only 150
+  days: about 35 s on its first run, which it does AFTER that tick's candle emails are out. After
+  that, every 6 hours only the series whose release the calendar shows since the last stored one
+  (usually none), and every series once a day. At a release, one poll every 45 s for up to 3 h, at
+  most 25 s of requests per poll, BLS capped at 20 a day without its key (it allows 25). A source
+  that fails is not asked again for 30 minutes (the feed: 5). Plain HTTP, no browser, nothing new
+  to install: the cloud server runs it as it is.
+- **Limits:** US only. ISM, consumer confidence, the Michigan surveys and similar private releases
+  have no free official feed, so they get no actual. Other currencies need JBlanked's credits.
+- **Forecasts are not an agency number.** They come only from Forex Factory: the archive to April
+  2025 and the weekly feed from now on (every fetch is logged). Releases between May 2025 and the
+  start of the log have their actual but no forecast, so no surprise or sentiment.
+
 **The merge** keys a release on currency + title + its day in the home zone. Each field is then
 taken from the most trusted source that has it:
 
@@ -109,7 +168,8 @@ taken from the most trusted source that has it:
 |---|---|
 | time | the best `time_q` first |
 | forecast | the feed's last observation **before** the release (a forecast revised afterwards is not what the market expected) |
-| actual | JBlanked, then the archive |
+| actual | the agencies, then JBlanked, then the archive |
+| impact | the feed, then the archive. A release no source rates on its own day (claims after April 2025, known only from the agencies) takes the rating Forex Factory **last** gave the same title, so it is not left at level "none", which no chart or alert shows |
 
 An event that drops out of its week's latest feed was moved or cancelled, and leaves the calendar.
 
@@ -168,7 +228,7 @@ news` for what it currently covers and when each reminder will go.
 | week ahead | once a week (Sunday 20:00 your time); waits up to 11 h for Forex Factory to publish the new week | normal |
 | day ahead | every evening (20:00); tomorrow's covered releases; no email when there are none | normal |
 | reminders | 60 and 15 min before critical, 15 before high; same-minute releases share one | urgent |
-| results | the actual vs the forecast, the surprise and its meaning, within ~5 min (JBlanked) | urgent |
+| results | the actual vs the forecast, the surprise and its meaning: about a minute after 8:30 for BLS releases, when FRED posts for the rest, 14:00-ish for the Fed (needs the FRED key) | urgent |
 | moved / removed | a covered high+ release that changed time or left the calendar | urgent if critical |
 | calendar stale | the feed has not updated for 6 h; once a day | normal |
 | on candle alerts | an alert closing within 30 min of high news says "news: USD CPI m/m in 12 min" | — |
@@ -179,6 +239,12 @@ How it behaves:
   ahead goes out ("in 3 min"). The others are recorded as skipped.
 - **Stale digests are dropped.** A preview found more than 6 h late (12 h for the week) is not
   sent at all.
+- **A result is fresh or it is not sent.** A number is asked for for 3 hours, because FRED can post
+  an hour late. One that arrives more than 60 minutes after its release still goes, but only if
+  the monitor was already waiting for it; the same number found after the PC was off is old news
+  and is not mailed.
+- **A release no source will ever answer** (ISM) does not hold up the rest of its group: CPI goes
+  as soon as CPI is in.
 - **News problems never stop candle alerts.** A failing or broken calendar only produces an
   error in the log.
 - **Volume:** about 24 emails a week with the shipped settings, measured on 2024's calendar.
@@ -199,7 +265,7 @@ In the lab notebook, set `NEWS` and `NEWS_SHOW` in `notebooks/lab_config.py`. Th
 - **Markers** pinned to the bottom edge, coloured and sized by level.
 - **A dotted line** at each critical and high release.
 - **Hover:** the time in your zone and in New York, with forecast, previous and, once out, the
-  actual and its meaning.
+  actual and its meaning. US actuals are there from 2022 to the latest release.
 - **A dropdown** under the chart, bottom right: `News: critical | high+ | medium+ | all | off`.
 - **Legend:** each level is also its own legend entry.
 

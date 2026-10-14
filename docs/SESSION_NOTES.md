@@ -2324,3 +2324,49 @@ Both keys are in `.env`.
   off. See WHAT_WORKS.md.
 - **Gotcha in the test:** `numpy.bool_ is True` is always False. Compare with `bool(x) == ...`.
 
+### US actuals from the agencies (2026-10-14)
+
+The user could not buy JBlanked credits and asked for a permitted source of the actual numbers
+("collecting data is one problem; bypassing anti-bot protection is another"). Checked by robots.txt
+and challenge pages: Forex Factory's site, Investing.com and Myfxbook sit behind bot checks;
+TradingView's calendar host disallows everything; Yahoo ignores the day and needs JavaScript;
+Nasdaq's calendar lacks CPI and NFP; Trading Economics' guest key is gone (410). The agencies
+themselves are open, free and official: `quant/news/official.py`, docs/NEWS.md has the guide.
+
+- **History from FRED's vintages (ALFRED), as published that day.** Payrolls July 2024 = 114K
+  (158,723 - June as revised IN THAT REPORT, 158,609); from today's data it reads 85K. One request
+  per series returns every vintage needed (`output_type=2` + `vintage_dates`, wide columns
+  `PAYEMS_20240705`).
+- **Validated: 900 of 901 identical** to the archive's printed actuals, every one of 21 titles, 2022 -
+  Apr 2025. The one: the Fed of Jan 2022, which FF printed "<0.25%".
+- **Live:** BLS API v1 (no key, 25 a day) for the BLS titles seconds after 8:30; FRED for the rest
+  when it posts; the Fed's statement page at 14:00. Replayed against the real servers on the latest
+  release of every title: identical to the stored history wherever nothing was revised since.
+- **Gotchas, each found on real data:**
+  - GDP's second estimate can repeat the first (27 Nov 2024, 27 Feb 2025), and FRED then records NO
+    vintage that day, so counting FRED's revisions put later stages one off. Stages come from the
+    release days in FRED's release calendar instead.
+  - FRED posts late sometimes: the Philly Fed of 17 Nov 2022 is stamped Sunday 27 Nov. Weekend rows
+    keep their date only and `calendar._align_official` ties them to the release up to 14 days back.
+  - The 2025 shutdown published two months on one day (JOLTS Sep+Oct on 9 Dec; CPI y/y and the
+    unemployment rate in December). The first version kept the OLDER month: four wrong numbers.
+  - Fed statements on a cut say "by 1/2 percentage point to 4-3/4 to 5 percent". The first regex
+    missed that wording, i.e. every live decision that moved the rate. Caught by the test.
+  - December's y/y is released in January: the live BLS request must reach two years back.
+  - After the archive ends, claims/Philly/Empire/durables/JOLTS existed only as agency rows with no
+    impact, so they were level "none" and invisible. An unrated event now takes FF's LAST rating.
+  - A test fixture patched `O.time.sleep`, i.e. the GLOBAL time.sleep, which silently disabled the
+    FRED pacer in the pacer's own test.
+- **Speed:** the monitor's first run went 138 s -> 58 s, the full history ~4 min -> 62 s (four
+  workers behind one thread-safe pacer at FRED's 2 requests a second; identical output).
+- **The monitor's order changed:** `LiveNews.refresh` (before the candle checks) is now the feed
+  only; FRED, the Fed's calendar and the agencies' history run in `LiveNews.background`, which
+  `engine.tick` calls AFTER the candle emails are delivered. The Fed's calendar goes first, because
+  the history reads its decision days (the first version had no rate on a fresh store).
+- **Results emails:** a number is asked for for 3 h (FRED can post an hour late), but one found more
+  than 60 min after its release is mailed only if the monitor was already waiting for it -- never
+  after the PC was off. A release no source answers (ISM) no longer holds up its group.
+- **News-day experiment rerun with the agencies' actuals first:** results files byte-identical.
+- **Forecasts stay Forex Factory's:** the archive to Apr 2025 and the weekly feed from 2026-10-11 on.
+  Releases in between have actuals but no forecast, hence no surprise or sentiment.
+- **Mutation-checked:** 28 rules in test_news_official.py, 4 in test_alerts_news.py.

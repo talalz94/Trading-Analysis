@@ -163,8 +163,10 @@ ALERT_SMTP_PASSWORD=yourappsixteenletters
 ALERT_EMAIL_TO=you@gmail.com
 ```
 
-For news **results** by email, add the same `JBLANKED_API_KEY=...` line as on your PC. It is
-optional, and so is `FRED_API_KEY=...`, which gives official US dates beyond this week.
+For news **results** by email, add the same `FRED_API_KEY=...` line as on your PC: it gives the
+US actuals (from the BLS, FRED and the Fed) and official US dates beyond this week. The server
+fetches the last 150 days of numbers on its first run (about a minute) and only what is new after
+that. `JBLANKED_API_KEY=...` adds other currencies' actuals, but only with paid credits.
 
 Tip: create a **second** Gmail App Password called *quant alerts cloud*. You can then cut the
 server off without touching your PC.
