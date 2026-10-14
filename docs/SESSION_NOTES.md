@@ -2312,3 +2312,15 @@ Both keys are in `.env`.
   - FRED's WEBSITE times out for scripted requests from here; its API does not.
 - **Mutation-checked:** 7 rules (artifacts, one per month, first prints vs calendar, notation
   votes, broken Fed page, no-credits memory, complete-scope end).
+
+### News blackout switch (2026-10-14)
+
+- **The switch:** `NEWS_BLACKOUT` in `notebooks/strategies/tl_break_confirm.py`, OFF, plus a COMPARE
+  arm "news blackout 30/30". It is applied in `fvg_lab._trade` as one more may-enter condition
+  beside the FVG veto. It is a RETRADE key.
+- **Coverage is USD "critical"** on purpose. After April 2025 the calendar has only the official
+  releases (FRED + the Fed), and "critical" is the level covered identically in all 19 quarters.
+- **19-quarter verdict:** 11 of 1,194 trades touched, t/trade 0.93. Too rare to matter; it stays
+  off. See WHAT_WORKS.md.
+- **Gotcha in the test:** `numpy.bool_ is True` is always False. Compare with `bool(x) == ...`.
+

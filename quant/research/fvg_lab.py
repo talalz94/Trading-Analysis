@@ -43,7 +43,35 @@ RETRADE_KEYS = EXIT_KEYS | frozenset({
     "TL_CONFIRM_FROM",
     "USE_FVG_VETO", "FVG_VETO_MODE", "FVG_VETO_TFS", "FVG_VETO_MAX_AGE", "FVG_VETO_MIN_SIZE",
     "FVG_VETO_MAX_DIST", "FVG_RULES",
+    "NEWS_BLACKOUT",
 })
+NEWS_BLACKOUT_KEYS = ("before", "after", "coverage")
+
+
+def news_clear_mask(D: pd.DataFrame, setting) -> np.ndarray:
+    """True on the bars a NEW trade may open under NEWS_BLACKOUT: not within `before` minutes
+    ahead of a covered release nor `after` minutes past it, counted from each bar's CLOSE
+    (quant.news.news_blackout). `setting` = dict(before=30, after=30, coverage={"USD":
+    "critical"}). The calendar is read for the frame's own span, plus a day each side.
+
+    A window the calendar does not cover is NOT "no news" -- it is unknown -- so a frame with no
+    covered release at all warns rather than pass silently as news-free."""
+    import warnings
+    from ..news import load_events, news_blackout
+    bad = sorted(set(setting) - set(NEWS_BLACKOUT_KEYS))
+    if bad:
+        raise ValueError(f"NEWS_BLACKOUT has unknown keys {bad}; it takes {NEWS_BLACKOUT_KEYS}")
+    tcol = "open_time" if "open_time" in D.columns else "t"
+    tt = pd.to_datetime(D[tcol], utc=True)
+    ev = load_events(tt.min() - pd.Timedelta(days=1), tt.max() + pd.Timedelta(days=1),
+                     coverage=setting.get("coverage", {"USD": "critical"}), timed_only=True)
+    if not len(ev):
+        warnings.warn(f"NEWS_BLACKOUT: the calendar has no covered release between "
+                      f"{tt.min():%Y-%m-%d} and {tt.max():%Y-%m-%d}, so nothing is blacked out "
+                      f"(python -m quant.news update)", stacklevel=3)
+    blocked = news_blackout(D, ev, before=float(setting.get("before", 30)),
+                            after=float(setting.get("after", 30)), time_col=tcol)
+    return ~blocked
 
 
 def per_tf(value, tf, default=0.0):
@@ -372,11 +400,21 @@ def _trade(c, base) -> FvgLab:
     vs = pd.Timestamp(c.VIEW_START, tz="UTC")
     in_window = raw(lambda d: (pd.to_datetime(d["t"]) >= vs).to_numpy(), "in_window")
 
+    # ---- NEWS BLACKOUT: no new trade around a covered release. None (the default for a config
+    # that predates it) adds no condition at all, so the entries are exactly what they were.
+    _nb = _get(c, "NEWS_BLACKOUT", None)
+    news_ok = None
+    if _nb:
+        _ok = news_clear_mask(D, _nb)
+        news_ok = raw(lambda d, ok=_ok: ok, "news_clear")
+
     def _filter(side, veto):
         # None means "no rule for this side", which is NOT the same as "nothing passes"
         extra = build_rules(c.ENTRY_RULES, side, chart_tf=c.TF,
                             combine=_get(c, "RULES_COMBINE", "all"))
         out = in_window if extra is None else (in_window & extra)
+        if news_ok is not None:
+            out = out & news_ok
         gap_rules = build_fvg_rules(_get(c, "FVG_RULES", None), side)
         if gap_rules is not None:
             out = out & gap_rules

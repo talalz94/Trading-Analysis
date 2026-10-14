@@ -133,6 +133,20 @@ f = news_features(df, ev)        # news_next_min, news_prev_min, news_day, news_
 mask = news_blackout(df, ev, before=30, after=30)    # True = within 30 min of covered news
 ```
 
+**In a strategy file** (`notebooks/strategies/<name>.py`):
+```python
+NEWS_BLACKOUT = dict(before=30, after=30, coverage={"USD": "critical"})   # None = off
+```
+- **What it does:** no new trade from `before` minutes ahead of a covered release to `after` minutes
+  past it, counted from each bar's close. Trades already open are left alone.
+- **How it runs:** it is a re-trade setting, so a COMPARE arm costs one simulation.
+- **When there is nothing to go on:** if the calendar covers nothing in the window, the lab warns
+  rather than treat the window as news-free.
+- **Why "critical":** those releases are covered the same way in every quarter. Lesser red releases
+  are known only to April 2025.
+- **Result:** measured on the trendline strategy, it touched 11 of 1,194 trades. Verdict in
+  WHAT_WORKS.md.
+
 **What is and is not lookahead:**
 - **Not lookahead:** "CPI in 40 minutes". The schedule is published in advance.
 - **Lookahead if used too early:** a release's actual. So `news_last_surprise_z` takes a release
