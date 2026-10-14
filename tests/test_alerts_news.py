@@ -218,6 +218,36 @@ def test_results_need_a_source_and_never_cover_old_releases(tmp_path):
     assert r2.subjects() == []
 
 
+def test_a_late_number_goes_only_if_it_was_awaited(tmp_path):
+    # FRED can post an hour after the release: a number that arrives 90 min late still goes,
+    # because this monitor was waiting for it -- but the same number found after the PC was off
+    # does not (the test above)
+    ev = calendar(rel("2026-10-14 12:30"))
+    r = Rig(tmp_path, events=ev, news_cfg=dict(remind_before={}))
+    r.tick("2026-10-14 12:35")
+    r.tick("2026-10-14 13:30")
+    assert r.subjects() == [] and len(r.news.polls) == 2
+    assert list(r.news.pending[-1]["title"]) == ["CPI m/m"]  # what to ask the agencies for
+    r.news.ev = calendar(rel("2026-10-14 12:30", actual="0.5%"))
+    r.tick("2026-10-14 14:00")
+    assert len(r.subjects()) == 1 and "0.5%" in r.subjects()[0]
+    r.tick("2026-10-14 14:05")
+    assert len(r.subjects()) == 1                            # once
+
+
+def test_a_release_no_source_answers_does_not_hold_up_its_group(tmp_path):
+    # ISM has no free official feed: CPI goes as soon as IT is in, not 20 min later
+    ev = calendar(rel("2026-10-14 12:30", actual="0.5%"),
+                  rel("2026-10-14 12:30", "ISM Thing"))
+    r = Rig(tmp_path, events=ev, news_cfg=dict(remind_before={}), unresolvable={"ISM Thing"})
+    r.tick("2026-10-14 12:33")
+    assert len(r.subjects()) == 1 and r.news.polls == []
+    # resolvable, it waits for the settle
+    r2 = Rig(tmp_path / "b", events=ev, news_cfg=dict(remind_before={}))
+    r2.tick("2026-10-14 12:33")
+    assert r2.subjects() == []
+
+
 # ── digests ─────────────────────────────────────────────────────────────────────────────────
 def test_the_day_ahead_goes_once_in_its_window_and_waits_for_the_calendar(tmp_path):
     ev = calendar(rel("2026-10-15 12:30"), rel("2026-10-15 07:00", "GDP m/m", cur="EUR"))
@@ -307,6 +337,20 @@ def test_a_news_failure_never_stops_a_candle_alert(tmp_path):
     rep = r.tick("2026-10-14 12:17")
     assert "calendar exploded" in rep.errors["news"]
     assert len(r.rows(alert="spike")) == 1 and len(r.mail.sent) == 1
+
+
+def test_slow_news_fetches_wait_until_the_candle_emails_are_out(tmp_path):
+    r = Rig(tmp_path, alerts=[SPIKE], spikes=["2026-10-14 12:10"])
+    seen = []
+
+    def background(now):
+        seen.append(len(r.mail.sent))
+        raise RuntimeError("FRED is down")
+    r.news.background = background
+    r.tick("2026-10-14 11:00")
+    rep = r.tick("2026-10-14 12:17")
+    assert seen == [0, 1]                  # the spike's email had gone before the fetch began
+    assert "FRED is down" in rep.errors["news background"] and len(r.mail.sent) == 1
 
 
 def test_news_and_signals_on_one_tick_share_one_email(tmp_path):

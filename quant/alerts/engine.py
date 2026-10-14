@@ -246,10 +246,11 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
     note = None
     if cfg.news.on:
         from .news import LiveNews, news_step
+        news = news or LiveNews(state.root / "news")
         try:
             # no transaction around it: it fetches over the network, and every write it makes is
             # an INSERT OR IGNORE that is safe to repeat after a crash
-            note = news_step(cfg, state, news or LiveNews(state.root / "news"), now, report)
+            note = news_step(cfg, state, news, now, report)
         except Exception as e:                         # news must never stop the candle alerts
             report.errors["news"] = f"{type(e).__name__}: {e}"
     # an alert switched OFF (or a market / timeframe taken out of it) loses its cursor, so
@@ -262,6 +263,12 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
         ok = refresh_bars(cfg, state, feed, due, now, report)
         detect(cfg, state, ok, now, report, news_note=note)
     deliver(cfg, state, notifier, now, report)
+    if cfg.news.on and hasattr(news, "background"):
+        # the slow fetches nothing in this tick waits for -- after the candle emails are out
+        try:
+            report.errors.update(news.background(now) or {})
+        except Exception as e:
+            report.errors["news background"] = f"{type(e).__name__}: {e}"
     state.put("heartbeat", iso(now))
     return report
 

@@ -50,7 +50,10 @@ WEEK_WINDOW = pd.Timedelta(hours=12)
 WEEK_WAIT = pd.Timedelta(hours=11)   # how long the week-ahead waits for the new week's calendar
 DAY_WAIT = pd.Timedelta(hours=5)
 STALE = pd.Timedelta(hours=6)
-RESULT_WINDOW = pd.Timedelta(minutes=60)
+RESULT_WINDOW = pd.Timedelta(hours=3)   # how long a missing number is asked for (FRED can post
+                                         # an hour after the release)
+RESULT_FRESH = pd.Timedelta(minutes=60)  # a number older than this goes out only if THIS monitor
+                                         # was already waiting for it -- never after an outage
 RESULT_SETTLE = pd.Timedelta(minutes=20)  # send a partial result after this if the rest never come
 
 
@@ -138,8 +141,13 @@ def parse_news(d: Optional[dict]) -> NewsConfig:
 # ══ THE CALENDAR THE MONITOR READS ═══════════════════════════════════════════════════════════
 class LiveNews:
     """The monitor's own small calendar store (alerts/state/news): Forex Factory's feed every 30
-    minutes, FRED twice a day (official US dates beyond this week, when its key is set), JBlanked
-    only while a covered release waits for its number."""
+    minutes, FRED twice a day (official US dates beyond this week, when its key is set), the US
+    actuals from the agencies, and JBlanked only while a covered release waits for its number.
+
+    Two speeds. `refresh` runs BEFORE the candle checks and does only what this tick's notices
+    need: the feed. `background` runs AFTER the candle emails are out and does the slow,
+    unhurried fetches (FRED's dates, the agencies' history, the Fed's calendar), so a daily sweep
+    of twenty requests never holds up a candle alert."""
 
     def __init__(self, root):
         from quant.news.calendar import NewsStore
@@ -156,33 +164,58 @@ class LiveNews:
         except Exception as e:
             errors["news feed"] = f"{type(e).__name__}: {e}"
             self.store.set_meta(feed_error=f"{now.isoformat()} {e}")
+        return errors
+
+    def background(self, now) -> Dict[str, str]:
+        from quant.news import update
+        errors = {}
+        # the Fed's calendar FIRST: the agencies' history reads its decision days for the rate
+        try:
+            update.update_fomc(self.store, now)
+        except Exception as e:
+            errors["news fomc"] = f"{type(e).__name__}: {e}"
         key = update.keys()["fred"]
         if key:
             try:
                 update.update_fred(self.store, key, now)
             except Exception as e:
                 errors["news fred"] = f"{type(e).__name__}: {e}"
-        try:
-            update.update_fomc(self.store, now)
-        except Exception as e:
-            errors["news fomc"] = f"{type(e).__name__}: {e}"
+            try:                           # the recent history: baselines + charts' actuals
+                update.update_official(self.store, key, now,
+                                       start=(now - pd.Timedelta(days=150)).date())
+            except Exception as e:
+                errors["news official"] = f"{type(e).__name__}: {e}"
         return errors
 
-    def poll_results(self, now) -> Dict[str, str]:
+    def poll_results(self, now, pending=None) -> Dict[str, str]:
+        """The agencies for US numbers (FRED key), JBlanked for the rest when it has credits."""
         from quant.news import update
-        key = update.keys()["jblanked"]
-        if not key:
-            return {}
-        try:
-            update.update_jb(self.store, key, now, kind="week")     # free with a key
-            return {}
-        except Exception as e:
-            return {"news results": f"{type(e).__name__}: {e}"}
+        k, errors = update.keys(), {}
+        if k["fred"] and pending is not None and len(pending):
+            try:
+                update.poll_official(self.store, k["fred"], pending, now)
+            except Exception as e:
+                errors["news official"] = f"{type(e).__name__}: {e}"
+        if k["jblanked"] and update.jb_has_credits(self.store, now):
+            try:
+                update.update_jb(self.store, k["jblanked"], now, kind="week")
+            except Exception as e:
+                errors["news results"] = f"{type(e).__name__}: {e}"
+        return errors
 
     def results_available(self) -> bool:
-        """A JBlanked key that has credits -- a key without them is told "requires credits" by
-        every calendar endpoint, so asking every 5 minutes would only fill the log."""
+        """US numbers need the FRED key (it holds the history the live numbers are checked
+        against); JBlanked counts only when its key has credits."""
         from quant.news import update
+        k = update.keys()
+        return bool(k["fred"]) or (bool(k["jblanked"]) and update.jb_has_credits(self.store))
+
+    def can_resolve(self, currency: str, title: str) -> bool:
+        """Is there a source that will ever give this release's number?"""
+        from quant.news import update
+        from quant.news.official import specs_by_title
+        if currency == "USD" and title in specs_by_title() and update.keys()["fred"]:
+            return True
         return bool(update.keys()["jblanked"]) and update.jb_has_credits(self.store)
 
     def events(self, start, end) -> pd.DataFrame:
@@ -205,8 +238,10 @@ class FakeNews:
     """A calendar for tests: fixed events, a fixed coverage end, and a record of every poll."""
 
     def __init__(self, events: pd.DataFrame, covered_until=None, results=True, fresh=True,
-                 age=pd.Timedelta(0)):
+                 age=pd.Timedelta(0), unresolvable=()):
         self.ev = events
+        self.unresolvable = set(unresolvable)
+        self.pending = []
         self.until = None if covered_until is None else pd.Timestamp(covered_until, tz="UTC")
         self.results = results
         self.fresh = fresh
@@ -216,12 +251,20 @@ class FakeNews:
     def refresh(self, now):
         return {}
 
-    def poll_results(self, now):
+    def background(self, now):
+        self.background_at = now
+        return {}
+
+    def poll_results(self, now, pending=None):
         self.polls.append(now)
+        self.pending.append(pending)
         return {}
 
     def results_available(self):
         return self.results
+
+    def can_resolve(self, currency, title):
+        return title not in self.unresolvable
 
     def events(self, start, end):
         e = self.ev
@@ -401,8 +444,15 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
                           & (frame["t"] > now - RESULT_WINDOW)]
             waiting = False
             for t, cur, g in _groups(frame):
+                gk = f"{cur}|{t.isoformat()}"
+                if now - t > RESULT_FRESH and gk not in was_waiting:
+                    continue                       # the PC was off when it came out: stale
                 have = g["actual"].notna()
-                if have.all() or (have.any() and now - t >= RESULT_SETTLE):
+                # a release no source will ever answer (ISM: no free official feed) is not
+                # waited for -- the rest of its group goes as soon as THEY are in
+                can = g["title"].map(lambda ti, c=cur: news.can_resolve(c, ti)).to_numpy(bool)
+                done = (have | ~can).all()
+                if have.any() and (done or now - t >= RESULT_SETTLE):
                     items = [_item(e) for e in g[have].to_dict("records")]
                     worse = sum(i["sentiment"] == "worse" for i in items)
                     better = sum(i["sentiment"] == "better" for i in items)
@@ -410,14 +460,22 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
                                  priority="urgent", now=now,
                                  side="bull" if better > worse else "bear" if worse > better else "",
                                  notice=_render("result", items, tz, now))
-                waiting |= not have.all()
+                if not done:
+                    waiting = True
+                    pending.append(g[~have & can])
+                    still.add(gk)
             return waiting
 
+        was_waiting = set(json.loads(state.get("news_waiting") or "[]"))
+        pending: list = []
+        still: set = set()
         if results(timed):
-            report.errors.update(news.poll_results(now))
+            report.errors.update(news.poll_results(now, pd.concat(pending, ignore_index=True)))
             # read again: a poll that just landed the number sends it THIS tick
             again = news.events(now - RESULT_WINDOW, now + pd.Timedelta(minutes=1))
+            still.clear()
             results(select(again, nc.currencies) if len(again) else again)
+        state.put("news_waiting", json.dumps(sorted(still)))
 
     # ── day ahead ─────────────────────────────────────────────────────────────────────────
     local = now.tz_convert(tz)
