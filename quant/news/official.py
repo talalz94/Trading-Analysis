@@ -329,18 +329,30 @@ def bls_levels(series: List[str], year: int, key: Optional[str] = None,
     return out
 
 
-def fred_now(key: str, series: str, obs_start,
-             timeout: float = 30) -> Tuple[pd.Series, Optional[str]]:
-    """The series as FRED has it now, and the day its LATEST observation was published -- which is
-    how a FRED number is known to be the release's: GDP's second estimate revises the same
-    quarter as the first, so "a later period" cannot tell them apart, but "published today" can."""
+def fred_now(key: str, series: str, obs_start, timeout: float = 30) -> pd.Series:
+    """The series as FRED has it now."""
     js = _fred("series/observations", key, series_id=series, timeout=timeout,
                observation_start=str(pd.Timestamp(obs_start).date()))
-    obs = js.get("observations", [])
-    s = pd.Series({pd.Timestamp(o["date"]): _num(o["value"]) for o in obs},
-                  dtype=float).sort_index()
-    last = max(obs, key=lambda o: o["date"])["realtime_start"] if obs else None
-    return s, last
+    return pd.Series({pd.Timestamp(o["date"]): _num(o["value"])
+                      for o in js.get("observations", [])}, dtype=float).sort_index()
+
+
+def fred_posted(key: str, series: str, day: str, timeout: float = 30) -> bool:
+    """Did FRED post a new version of `series` on `day` (the New York release day)?
+
+    Its observations CANNOT say: FRED's default real-time period is today, so every value comes
+    back with today as its realtime_start, whatever day it was published. Trusting that let the
+    previous release through -- 14 Oct 2026, the BLS API answered 503 at 8:30, and August's CPI
+    (0.4% m/m) was taken for September's (0.6%), its meaning reversed on three of four lines.
+    The series' list of vintage dates is the record of when it changed."""
+    try:
+        js = _fred("series/vintagedates", key, series_id=series, realtime_start=day,
+                   timeout=timeout)
+    except SourceError as e:
+        if "after today" in str(e):     # FRED's own date has not reached the release day yet
+            return False
+        raise
+    return day in js.get("vintage_dates", [])
 
 
 _FRACTION = re.compile(r"(\d+)(?:-(\d)/(\d))?|(\d)/(\d)")
@@ -387,8 +399,9 @@ def live(key: Optional[str], pending: pd.DataFrame, baseline: Dict[str, pd.Times
          budget: float = LIVE_BUDGET) -> Tuple[pd.DataFrame, List[str]]:
     """Look for the numbers of `pending` releases (rows with t, title) that have come out.
     `baseline` {title: the last period already published} -- a reply whose latest period is not
-    LATER than that is the old number, not the release. Returns (new rows, notes). Stops asking
-    once `budget` seconds have gone; what is left is asked for on the next poll."""
+    LATER than that is the old number, not the release, from the BLS and from FRED alike (FRED
+    must also have posted on the release day: fred_posted). Returns (new rows, notes). Stops
+    asking once `budget` seconds have gone; what is left is asked for on the next poll."""
     deadline = time.monotonic() + budget
     by_title = specs_by_title()
     rec, notes = [], []
@@ -404,40 +417,55 @@ def live(key: Optional[str], pending: pd.DataFrame, baseline: Dict[str, pd.Times
             levels = bls_levels(bls_ids, year, bls_key, timeout=LIVE_TIMEOUT)
         except Exception as e:
             notes.append(f"BLS: {type(e).__name__}: {e}")
-    for title, t in pend:
+    def one(title: str, t: pd.Timestamp):
+        """-> (row or None, note or None, skipped for time)."""
         spec = by_title[title]
         day = str(t.tz_convert(NY).date())
         if time.monotonic() > deadline:
-            notes.append("time budget spent -- the rest next poll")
-            break
+            return None, None, True
         try:
             if spec.how == "fed":
                 v, per = fed_decision(day, timeout=LIVE_TIMEOUT), pd.Timestamp(day)
                 if v is None:
-                    continue
+                    return None, None, False
             elif spec.bls and spec.bls in levels:
                 base = baseline.get(title)
                 if base is None:
-                    notes.append(f"{title}: no baseline period -- not accepted")
-                    continue
+                    return None, f"{title}: no baseline period -- not accepted", False
                 per, v = compute(levels[spec.bls], spec.how)
                 if per is None or not per > pd.Timestamp(base):
-                    continue                      # still the previous number
+                    return None, None, False      # still the previous number
             elif key:
-                s, published = fred_now(key, spec.fred, t - pd.DateOffset(months=15),
-                                        timeout=LIVE_TIMEOUT)
-                if published is None or published < day:
-                    continue                      # FRED has not posted this release yet
+                # BOTH tests, like the BLS path: FRED changed the series on the release day, AND
+                # what it now holds is a later period than the last one published (per title, so
+                # each GDP stage moves on a quarter too). A day's vintage alone could be a revision
+                base = baseline.get(title)
+                if base is None:
+                    return None, f"{title}: no baseline period -- not accepted", False
+                if not fred_posted(key, spec.fred, day, timeout=LIVE_TIMEOUT):
+                    return None, None, False      # FRED has not posted this release yet
+                s = fred_now(key, spec.fred, t - pd.DateOffset(months=15), timeout=LIVE_TIMEOUT)
                 per, v = compute(s, "lin" if spec.how == "gdp" else spec.how)
+                if per is None or not per > pd.Timestamp(base):
+                    return None, None, False      # posted today, but still the old period
             else:
-                continue
+                return None, None, False
         except Exception as e:
-            notes.append(f"{title}: {type(e).__name__}: {e}")
-            continue
+            return None, f"{title}: {type(e).__name__}: {e}", False
         r = _row(title, day, v, spec, per)
         if r:
             r["t"] = t
-            rec.append(r)
+        return r, None, False
+
+    # the titles are asked at once (FRED's pacer still spaces the requests): CPI's four, one
+    # after another, took 25 s on 14 Oct 2026 and left the y/y pair for the next poll
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(4, len(pend))) as pool:
+        got = list(pool.map(lambda x: one(*x), pend))
+    rec = [r for r, _, _ in got if r]
+    notes += [n for _, n, _ in got if n]
+    if any(late for _, _, late in got):
+        notes.append("time budget spent -- the rest next poll")
     return pd.DataFrame(rec, columns=ROW_COLS + ["period", "series"]), notes
 
 

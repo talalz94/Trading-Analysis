@@ -52,7 +52,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **860 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **862 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -685,8 +685,12 @@ quant/
 │   │                    #     half-up in FF's units. 900 of 901 identical to the archive 2022-25 (the
 │   │                    #     one: FF's "<0.25%"). GDP stages from FRED's RELEASE DAYS (an unchanged
 │   │                    #     2nd estimate leaves no FRED revision). Two months on one day -> the
-│   │                    #     later (2025 shutdown). A live number counts only if NEWER: BLS a later
-│   │                    #     month than the last published, FRED posted on the release day.
+│   │                    #     later (2025 shutdown). A live number counts only if NEWER: a later
+│   │                    #     month than the last published (BLS and FRED), and from FRED a new
+│   │                    #     VINTAGE dated the release day (fred_posted). NEVER FRED's realtime_start:
+│   │                    #     its default real-time period is today, so every value says "today" --
+│   │                    #     on 14 Oct 2026 (BLS 503 at 8:30) that passed August's CPI off as
+│   │                    #     September's, meaning reversed. Titles are asked in parallel.
 │   │                    #     history() fetches 4 series at once; FRED's 120/min is kept by the
 │   │                    #     thread-safe pacer in sources._fred, never by sleeping
 │   ├── features.py      #   news_features (minutes to next / since last FROM THE BAR CLOSE, news_day,
@@ -752,7 +756,9 @@ quant/
     │                    #     high; any minutes up to 2880), results (the agencies for US, JBlanked
     │                    #     with credits for the rest: asked for 3 h, but one older than 60 min is
     │                    #     mailed only if THIS monitor was waiting for it, and a release no
-    │                    #     source answers never holds up its group), moved/removed, stale calendar, and a note on
+    │                    #     source answers never holds up its group; the POLL runs after the
+    │                    #     candle emails via TickReport.after, and its number goes that same
+    │                    #     tick), moved/removed, stale calendar, and a note on
     │                    #     candle alerts near high news. Notices are rows in the SAME events
     │                    #     table (alert name "news", reserved), ids hashed from what they are
     │                    #     about; a reminder never goes after its release (overtaken ones are
@@ -1153,9 +1159,10 @@ posted that day (FRED), BLS asked two years back and over its cap the number com
 weekend posting tied back to its release, the agencies win the merge, an unrated event takes FF's
 LAST rating, the history resumes from its own rows, only due series between daily sweeps, live polls
 spaced, capped and time-budgeted, a failed source not asked every minute, parallel fetches never
-exceed FRED's rate, and the real store matching the archive -- 28 rules mutation-checked, plus 4 in
+exceed FRED's rate, and the real store matching the archive -- 30 rules mutation-checked, plus 5 in
 test_alerts_news.py: a late number goes only if awaited, an unanswerable release does not hold its
-group, and the slow fetches start only after the candle emails are out). **860 total.**
+group, the slow fetches and the result poll start only after the candle emails are out, and a
+live FRED number needs a vintage dated the release day -- the 14 Oct 2026 CPI replayed). **862 total.**
 
 ## 12. Known limitations / honest caveats
 

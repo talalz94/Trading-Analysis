@@ -339,6 +339,23 @@ def test_a_news_failure_never_stops_a_candle_alert(tmp_path):
     assert len(r.rows(alert="spike")) == 1 and len(r.mail.sent) == 1
 
 
+def test_a_result_poll_waits_for_the_candle_emails_and_its_number_goes_the_same_tick(tmp_path):
+    # 14 Oct 2026: polling the agencies at the release took 40 s, and it ran BEFORE the candles
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")), alerts=[SPIKE],
+            spikes=["2026-10-14 12:30"], news_cfg=dict(remind_before={}))
+    r.tick("2026-10-14 12:00")
+    seen = []
+
+    def poll(now, pending=None):
+        seen.append(len(r.mail.sent))
+        r.news.ev = calendar(rel("2026-10-14 12:30", actual="0.5%"))   # the number lands
+        return {}
+    r.news.poll_results = poll
+    r.tick("2026-10-14 12:37")
+    assert seen == [1]                     # the spike's email had gone before the poll began
+    assert len(r.mail.sent) == 2 and "0.5%" in r.mail.sent[1][0]
+
+
 def test_slow_news_fetches_wait_until_the_candle_emails_are_out(tmp_path):
     r = Rig(tmp_path, alerts=[SPIKE], spikes=["2026-10-14 12:10"])
     seen = []

@@ -41,6 +41,10 @@ class FakeFred:
                      for s, days in vint.items()}
         self.calls = []
 
+    def add(self, series, day, obs):
+        """FRED posts a new version of `series` on `day`."""
+        self.vint.setdefault(series, {})[day] = {ts(p): v for p, v in obs.items()}
+
     def as_of(self, series, day):
         out = {}
         for d in sorted(self.vint[series]):
@@ -50,9 +54,11 @@ class FakeFred:
 
     def __call__(self, path, key, timeout=30, **p):
         self.calls.append((path, p))
-        assert path == "series/observations"
         s = p["series_id"]
         days = sorted(self.vint[s])
+        if path == "series/vintagedates":
+            return dict(vintage_dates=[d for d in days if d >= p.get("realtime_start", "")])
+        assert path == "series/observations"
         periods = sorted({q for d in days for q in self.vint[s][d]})
         if p.get("output_type") == 4:
             obs = []
@@ -71,12 +77,12 @@ class FakeFred:
                     r[f"{s}_{d.replace('-', '')}"] = "." if v is None else str(v)
                 rows.append(r)
             return dict(observations=rows)
+        # like FRED: the default real-time period is TODAY, so every value carries today's date
+        # whenever it was published -- the trap of 14 Oct 2026
         now = self.as_of(s, "9999-12-31")
-        obs = []
-        for q in sorted(now):
-            changed = [d for d in days if q in self.vint[s][d]]
-            obs.append(dict(date=str(q.date()), realtime_start=changed[-1], value=str(now[q])))
-        return dict(observations=obs)
+        return dict(observations=[dict(date=str(q.date()), realtime_start="2099-01-01",
+                                       realtime_end="2099-01-01", value=str(now[q]))
+                                  for q in sorted(now)])
 
 
 # ── printing ────────────────────────────────────────────────────────────────────────────────
@@ -240,20 +246,45 @@ def test_bls_is_asked_two_years_back_and_only_for_months(monkeypatch):
     assert list(out["CUUR0000SA0"].index) == [ts("2024-12-01"), ts("2025-12-01")]
 
 
-def test_a_live_fred_number_counts_only_when_published_on_the_release_day(monkeypatch):
-    s = pd.Series([700.0, 707.0], index=[ts("2024-06-01"), ts("2024-07-01")])
+def test_a_live_fred_number_needs_a_version_from_the_release_day_and_a_new_month(monkeypatch):
     title = "Retail Sales m/m"
+    base = {title: ts("2024-06-01")}
     p = pend("2024-08-15 12:30", title)
-    monkeypatch.setattr(O, "fred_now", lambda k, se, st, **kw: (s, "2024-08-14"))
-    assert O.live("k", p, {})[0].empty
-    monkeypatch.setattr(O, "fred_now", lambda k, se, st, **kw: (s, "2024-08-15"))
-    assert list(O.live("k", p, {})[0]["actual"]) == ["1.0%"]
+    fake = FakeFred({"RSAFS": {"2024-07-16": {"2024-05-01": 690, "2024-06-01": 700}}})
+    monkeypatch.setattr(O, "_fred", fake)
+    assert O.live("k", p, base)[0].empty                  # not posted yet: June is the latest
+    # the store missed June's release, so its baseline is May: June (posted 16 Jul) LOOKS new, and
+    # only the release-day version check knows it is not today's number
+    assert O.live("k", p, {title: ts("2024-05-01")})[0].empty
+    fake.add("RSAFS", "2024-08-15", {"2024-06-01": 701})
+    assert O.live("k", p, base)[0].empty                  # posted that day, but only revising June
+    fake.add("RSAFS", "2024-08-15", {"2024-06-01": 700, "2024-07-01": 707})
+    assert list(O.live("k", p, base)[0]["actual"]) == ["1.0%"]
+    rows, notes = O.live("k", p, {})                      # unknown baseline: refuse, say so
+    assert rows.empty and "no baseline" in notes[0]
+
+
+def test_bls_down_at_the_release_cannot_pass_last_month_off_as_the_new_number(monkeypatch):
+    # 14 Oct 2026, 8:30 New York: the BLS API answered 503, FRED had not posted September yet,
+    # and the old check -- FRED's realtime_start, which is TODAY on every value -- took August's
+    # CPI (0.4%) for September's (0.6%)
+    def down(*a, **k):
+        raise O.SourceError("BLS: HTTP 503")
+
+    monkeypatch.setattr(O, "bls_levels", down)
+    fake = FakeFred({"CPIAUCSL": {"2026-09-11": {"2026-07-01": 322.0, "2026-08-01": 323.3}}})
+    monkeypatch.setattr(O, "_fred", fake)
+    p = pend("2026-10-14 12:30", "CPI m/m")
+    base = {"CPI m/m": ts("2026-08-01")}
+    rows, notes = O.live("k", p, base)
+    assert rows.empty and "503" in notes[0]
+    fake.add("CPIAUCSL", "2026-10-14", {"2026-08-01": 323.3, "2026-09-01": 325.2})
+    assert list(O.live("k", p, base)[0]["actual"]) == ["0.6%"]
 
 
 def test_when_bls_is_off_limits_the_number_comes_from_fred(monkeypatch):
-    s = pd.Series([158609.0, 158723.0], index=[ts("2024-06-01"), ts("2024-07-01")])
     monkeypatch.setattr(O, "bls_levels", lambda *a, **k: pytest.fail("BLS asked over its cap"))
-    monkeypatch.setattr(O, "fred_now", lambda k, se, st, **kw: (s, "2024-08-02"))
+    monkeypatch.setattr(O, "_fred", FakeFred(PAYEMS))
     p = pend("2024-08-02 12:30", "Non-Farm Employment Change")
     rows, _ = O.live("k", p, {"Non-Farm Employment Change": ts("2024-06-01")}, bls_ok=False)
     assert list(rows["actual"]) == ["114K"]
@@ -396,12 +427,14 @@ def test_between_daily_sweeps_only_series_with_a_release_since_are_asked(tmp_pat
 
 
 def test_a_live_poll_stops_when_its_time_is_spent(monkeypatch):
-    s = pd.Series([700.0, 707.0], index=[ts("2024-06-01"), ts("2024-07-01")])
-    monkeypatch.setattr(O, "fred_now", lambda *a, **k: (s, "2024-08-15"))
+    obs = {"2024-06-01": 700, "2024-07-01": 707}
+    monkeypatch.setattr(O, "_fred", FakeFred({"RSAFS": {"2024-08-15": obs},
+                                              "RSFSXMV": {"2024-08-15": obs}}))
     p = pd.concat([pend("2024-08-15 12:30", "Retail Sales m/m"),
                    pend("2024-08-15 12:30", "Core Retail Sales m/m")])
-    assert len(O.live("k", p, {})[0]) == 2
-    rows, notes = O.live("k", p, {}, budget=-1)
+    base = {"Retail Sales m/m": ts("2024-06-01"), "Core Retail Sales m/m": ts("2024-06-01")}
+    assert len(O.live("k", p, base)[0]) == 2
+    rows, notes = O.live("k", p, base, budget=-1)
     assert rows.empty and "time budget" in notes[0]
 
 

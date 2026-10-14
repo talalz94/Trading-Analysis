@@ -2370,3 +2370,17 @@ themselves are open, free and official: `quant/news/official.py`, docs/NEWS.md h
 - **Forecasts stay Forex Factory's:** the archive to Apr 2025 and the weekly feed from 2026-10-11 on.
   Releases in between have actuals but no forecast, hence no surprise or sentiment.
 - **Mutation-checked:** 28 rules in test_news_official.py, 4 in test_alerts_news.py.
+
+- **Live test on the real CPI of 14 Oct 2026 -- and the bug it found.** Two scripts ran the release:
+  the collector's live path, and the real alerts loop on the user's NEWS settings (emails into a
+  list). Reminders went at 11:30:00 and 12:15 UTC, the day-ahead at 15:00, all on time. The RESULT
+  WAS WRONG: the BLS API answered 503 at 8:30, the collector fell back to FRED, and FRED's
+  `realtime_start` -- which by default is TODAY on every value -- passed August's CPI off as
+  September's (0.4% for 0.6%; "worse for USD" where the truth was as-expected / better). Fixed:
+  FRED must list a vintage dated the release day (`series/vintagedates`) AND the month must be newer
+  than the last published, exactly like the BLS path. The unit tests had faked FRED with honest
+  dates, which is why they passed; the fake now stamps every value with "today" like the real one,
+  and a test replays that morning. Replayed through the real servers: 0.6 / 0.3 / 3.7 / 2.6 from both
+  sources. Also from that morning: the poll made one tick take 40 s, so it now runs after the
+  candle emails (TickReport.after) and its number is sent in the same tick; and the titles are asked
+  in parallel (FRED alone: all four CPI numbers in 18 s instead of two in 25).
