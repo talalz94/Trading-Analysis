@@ -4,6 +4,9 @@ python -m quant.news import-archive      the 2007-2025 archive, once (~68 MB dow
 python -m quant.news backfill-jb [FROM]  JBlanked month by month (one request per 5 minutes)
 python -m quant.news show [--days N] [--past N] [--level high] [--cur USD,EUR]
 python -m quant.news status              what each source last did
+python -m quant.news official [--since 2022-01-01] [--validate]
+                                         US actuals from BLS / FRED / the Fed (FRED_API_KEY), and
+                                         how they compare with the archive's numbers
 """
 from __future__ import annotations
 
@@ -54,6 +57,11 @@ def main(argv=None):
     s.add_argument("--cur", help="currencies, e.g. USD,EUR")
     s.add_argument("--tz", default="Asia/Karachi")
     sub.add_parser("status")
+    o = sub.add_parser("official")
+    o.add_argument("--since", default="2022-01-01")
+    o.add_argument("--validate", action="store_true",
+                   help="compare every number with the archive's, title by title")
+    o.add_argument("--force", action="store_true", help="ignore the 6-hour minimum interval")
     args = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(errors="replace")
@@ -73,6 +81,19 @@ def main(argv=None):
         print(f"stored {update.backfill_jb(st, args.start)} rows")
     elif args.cmd == "show":
         _show(args)
+    elif args.cmd == "official":
+        key = update.keys()["fred"]
+        if not key:
+            sys.exit("FRED_API_KEY is not in .env")
+        print(update.update_official(st, key, start=args.since, force=args.force,
+                                     log=lambda m: print("  " + m)))
+        if args.validate:
+            from .official import validate
+            off, arc = st.read("official"), st.read("archive")
+            if off is None or arc is None:
+                sys.exit("validation needs both official.parquet and archive.parquet")
+            with pd.option_context("display.width", 200, "display.max_colwidth", 60):
+                print(validate(off, arc).to_string(index=False))
     elif args.cmd == "status":
         m = st.meta()
         for k in sorted(m):
