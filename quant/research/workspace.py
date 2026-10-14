@@ -28,7 +28,7 @@ from types import SimpleNamespace
 from typing import Dict, List, Union
 
 __all__ = ["NOTEBOOKS", "STRATEGIES", "load_settings", "list_strategies", "load_strategy",
-           "lab_config", "evaluate_config"]
+           "lab_config", "evaluate_config", "market_view_config"]
 
 NOTEBOOKS = Path(__file__).resolve().parents[2] / "notebooks"
 STRATEGIES = NOTEBOOKS / "strategies"
@@ -74,6 +74,11 @@ def lab_config(path: PathLike = NOTEBOOKS / "lab_config.py",
     """The lab's settings: the strategy file `lab_config.STRATEGY` names, plus the window and the
     drawing settings from `lab_config.py`. Hand it to `fvg_lab`, `run_arms`, `variant`."""
     return _merge(load_settings(path), folder, path)
+
+
+def market_view_config(path: PathLike = NOTEBOOKS / "market_view_config.py") -> SimpleNamespace:
+    """The market view's settings. No strategy file: it draws and never trades."""
+    return SimpleNamespace(**load_settings(path))
 
 
 def evaluate_config(path: PathLike = NOTEBOOKS / "evaluate_config.py",
