@@ -52,7 +52,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **862 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **871 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -617,7 +617,20 @@ quant/
 │   │                  #     merge notebooks/strategies/<STRATEGY>.py (WHAT is traded) with a view
 │   │                  #     config (WHICH strategy, WHEN, HOW drawn) and REFUSE a setting found in
 │   │                  #     both -- each value has one home. Files are run fresh with runpy, so an
-│   │                  #     edit is read on the next call; list_strategies(), load_strategy()
+│   │                  #     edit is read on the next call; list_strategies(), load_strategy();
+│   │                  #     market_view_config() (no strategy: the market view never trades)
+│   ├── market_view.py #   market_view(CFG) -> MarketView: ONE INSTRUMENT'S LATEST DAYS, no trades.
+│   │                  #     INSTRUMENTS {name: dict(symbol, source)} + INSTRUMENT; the window is the
+│   │                  #     last DAYS counted in CANDLES ending at the latest CLOSED one (gold on a
+│   │                  #     Monday reaches back past the weekend), and the FORMING candle is dropped
+│   │                  #     from every timeframe (a line fitted on it would repaint). LINE_TFS /
+│   │                  #     FVG_TFS / SR_TFS must name the chart TF while their feature is on (its
+│   │                  #     layer is always drawn); OPEN_WITH {trendlines, gaps, zones: tfs} becomes
+│   │                  #     pattern_figure's start_visible keys ("fvg_bull" vs "1h::FVG bullish").
+│   │                  #     .summary() = window, freshness, the releases in it and the next 24 h;
+│   │                  #     .figure(). NEWS_UPDATE runs update_all(rebuild=False) first. The data
+│   │                  #     layer's INFO chatter is filtered while it loads (a FILTER: the Binance
+│   │                  #     fetcher resets its logger's level on every call)
 │   ├── variant.py     #   variant(CFG, **overrides) -> the same settings with one thing
 │   │                  #     changed, DEEP-copied. Every A/B a notebook wants is "the same
 │   │                  #     study with one difference"; a shallow copy lets a dict setting be
@@ -849,7 +862,11 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # 22_other_markets + nb22_config.py (2026-10-01) = notebook 21's strategy on
+notebooks/               # market_view.ipynb + market_view_config.py (2026-10-15) = the latest 2 days of
+                         #   any instrument on 1m (BTC, ETH, NASDAQ = Dukascopy E_NQ-100, SP500, DOW,
+                         #   GOLD, SILVER, OIL, USDJPY, EURUSD, GBPUSD), trendlines / S/R / FVGs from
+                         #   1m 5m 15m 1h 4h, the news strip, NO strategy; quant/research/market_view
+                         # 22_other_markets + nb22_config.py (2026-10-01) = notebook 21's strategy on
                          #   gold, WTI, EURUSD, GBPUSD, USDJPY beside BTC. nb22_config reads nb21's
                          #   settings FRESH each run (BASE = "nb21_config.py") and states only the
                          #   markets and their costs; the scan is experiments/instrument_scan.py
@@ -928,6 +945,11 @@ notebooks/               # 22_other_markets + nb22_config.py (2026-10-01) = note
 scripts/fetch_gold_dukascopy.py   # resumable true-spot XAUUSD fetch (1m/5m/15m/1h/4h)
 scripts/install_alerts_task.ps1   # the USER runs it: registers the `quant-alerts` scheduled task
                                   #   (at logon + every 5 min as a watchdog; -Uninstall removes it)
+scripts/install_news_task.ps1     # the `quant-news` scheduled task (INSTALLED 2026-10-15): `quant.news
+                                  #   update --log data/news/update.log` at logon + every 6 h,
+                                  #   StartWhenAvailable. Forecasts exist only in the week's feed, so a
+                                  #   week nothing fetched is lost; on the cloud the monitor logs the
+                                  #   feed and `quant.news import-log` merges it (NewsStore.import_feed_log)
 scripts/install_alerts_linux.sh   # the same on a Linux SERVER (docs/ALERTS_CLOUD.md = Google Cloud's
                                   #   free e2-micro, step by step; Oracle's sign-up refused the user's
                                   #   card from Pakistan): .venv from requirements-alerts.txt,
@@ -1127,7 +1149,8 @@ print(res.stats)
 - Demo: `python examples/gold_ema_demo.py` · Tests: `python -m pytest tests/`
 - Alerts: `python -m quant.alerts list` (the menu) · `check` (dry run -> alerts/state/preview.html)
   · `status` · `news` (the covered calendar and when each reminder goes).
-- News: `python -m quant.news update` · `show --days 7` · `import-archive` (once) · `backfill-jb`.
+- News: `python -m quant.news update [--log F]` · `show --days 7` · `import-archive` (once) ·
+  `official [--validate] [--since D --refetch]` · `import-log <feed_log.parquet>` · `backfill-jb`.
   Setup (Gmail App Password in .env, then scripts/install_alerts_task.ps1) is in docs/ALERTS.md;
   on a cloud server, docs/ALERTS_CLOUD.md (Google Cloud free tier) + scripts/install_alerts_linux.sh.
 - New strategy = one dataclass in `quant/strategies/` (`prepare` + `build_signals`); sweep with `run_grid`.
@@ -1162,7 +1185,12 @@ spaced, capped and time-budgeted, a failed source not asked every minute, parall
 exceed FRED's rate, and the real store matching the archive -- 30 rules mutation-checked, plus 5 in
 test_alerts_news.py: a late number goes only if awaited, an unanswerable release does not hold its
 group, the slow fetches and the result poll start only after the candle emails are out, and a
-live FRED number needs a vintage dated the release day -- the 14 Oct 2026 CPI replayed). **862 total.**
+live FRED number needs a vintage dated the release day -- the 14 Oct 2026 CPI replayed). `test_market_view.py` (the market view on a fake market with a known clock: the window is the last DAYS of
+candles ending at the latest CLOSED one, the forming candle is dropped from every timeframe, a shut
+weekend makes the window reach back past it, a feature list without the chart TF is refused, OPEN_WITH
+names each layer the way the chart does, each layer gets exactly its timeframes, the notebook states
+and defines nothing, and another machine's feed log merges without losing or doubling an observation
+-- 8 rules mutation-checked). **871 total.**
 
 ## 12. Known limitations / honest caveats
 

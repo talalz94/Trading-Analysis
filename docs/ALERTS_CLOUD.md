@@ -221,6 +221,19 @@ Open the terminal with the **SSH** button (step 4), then:
 | startup errors | `journalctl -u quant-alerts -n 50 --no-pager` |
 | remove it | `bash scripts/install_alerts_linux.sh --uninstall` |
 
+### Forecasts your PC missed
+
+Forex Factory's feed only ever shows the current week, so a week in which nothing fetched it loses
+its forecasts for good. The server never sleeps, and the monitor logs the feed every 30 minutes, so
+its log has every week. To fill your PC's research calendar from it:
+
+1. In the SSH window, click the gear (⚙) → **Download file**, and enter
+   `/home/<your user name>/quant/alerts/state/news/feed_log.parquet`
+   (`echo ~` in the terminal prints the first part).
+2. On your PC: `python -m quant.news import-log C:\Users\<you>\Downloads\feed_log.parquet`
+
+Importing twice changes nothing, so do it whenever you like.
+
 ## If something goes wrong
 
 - **The install stops at "No email settings":** step 8 was skipped or the password line is empty.
