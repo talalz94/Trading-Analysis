@@ -706,6 +706,60 @@ def test_more_touches_required_means_fewer_trendlines(rnd):
     assert len(four) <= len(three)
 
 
+def _clear_of_candles(o, tb):
+    """Per line: the worst close and the worst wick beyond it over [first touch, published]."""
+    lo, hi, cl = (o[c].to_numpy(float) for c in ("low", "high", "close"))
+    out = []
+    for r in tb.itertuples():
+        s, e = int(r.start_i), int(r.born_i)
+        y = r.slope * np.arange(s, e + 1) + r.intercept
+        if r.kind < 0:
+            out.append(((y - cl[s:e + 1]).max(), (y - lo[s:e + 1]).max()))
+        else:
+            out.append(((cl[s:e + 1] - y).max(), (hi[s:e + 1] - y).max()))
+    return np.array(out).reshape(-1, 2)
+
+
+@pytest.mark.parametrize("wick_tol", [0.0, 5.0])
+def test_a_strict_trendline_is_clear_of_every_candle_it_spans(rnd, wick_tol):
+    # The default tests only zigzag PIVOTS against the line, so a candle that was never a pivot can
+    # close straight through a "support" -- and its least-squares refit floats between the touches.
+    from quant.indicators import add_trendlines, trendline_table
+    old = add_trendlines(rnd)
+    worst = _clear_of_candles(old, trendline_table(old))
+    assert (worst[:, 0] > 1e-6).any(), "the fault strict exists to fix should show on this data"
+    o = add_trendlines(rnd, fit="strict", line_tol_atr=0.3, wick_tol_atr=wick_tol)
+    tb = trendline_table(o)
+    assert len(tb), "strict found no lines at all"
+    worst = _clear_of_candles(o, tb)
+    eps = 1e-7 * float(rnd["close"].abs().max())
+    assert (worst[:, 0] <= eps).all(), "a close beyond a strict line between its touches"
+    if wick_tol == 0:                        # (5 ATR leaves only the CLOSE rule to hold the line)
+        assert (worst[:, 1] <= eps).all(), "a wick beyond a strict line with wick_tol_atr=0"
+    for r in tb.itertuples():                # the pair's own line: two touches sit exactly ON it
+        dev = [abs(p - (r.slope * i + r.intercept)) for i, p in zip(r.touch_i, r.touch_price)]
+        assert sum(d <= eps for d in dev) >= 2 and r.touches >= 3
+
+
+def test_strict_trendlines_are_causal(rnd):
+    from quant.indicators import add_trendlines
+    k = 2200
+    kw = dict(fit="strict", line_tol_atr=0.3)
+    full = add_trendlines(rnd, **kw)
+    part = add_trendlines(rnd.iloc[:k].copy(), **kw)
+    for col in ("tl_sup", "tl_res", "tl_break_dn", "tl_break_up"):
+        np.testing.assert_array_equal(full[col].to_numpy()[:k], part[col].to_numpy())
+
+
+def test_the_default_fit_is_unchanged_and_a_bad_fit_is_refused(rnd):
+    from quant.indicators import add_trendlines
+    a = add_trendlines(rnd)
+    b = add_trendlines(rnd, fit="ransac", wick_tol_atr=0.9)       # wick_tol is strict-only
+    pd.testing.assert_frame_equal(a, b)
+    with pytest.raises(ValueError, match="fit"):
+        add_trendlines(rnd, fit="tight")
+
+
 def test_pattern_figure_can_draw_trendlines(rnd):
     from quant.viz.studies import pattern_figure
     fig = pattern_figure(rnd, patterns=["rising_wedge"], sr_zones=False, trendlines=True)

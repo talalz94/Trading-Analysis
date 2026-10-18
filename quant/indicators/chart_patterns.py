@@ -330,6 +330,28 @@ class _Candidate:
         return (t, self.span, -dev)
 
 
+@dataclass
+class _Bars:
+    """The candles a STRICT line is checked against: every bar from its first touch to `upto`, the
+    bar it would be published on. Nothing later is read, so the check is as causal as the pivots."""
+    low: np.ndarray
+    high: np.ndarray
+    close: np.ndarray
+    wick_tol: float           # how far a WICK may poke through, in price
+    upto: int
+
+    def clear(self, slope: float, intercept: float, x0: int, side: int) -> bool:
+        """No close beyond the line and no wick beyond it by more than `wick_tol`."""
+        sl = slice(int(x0), int(self.upto) + 1)
+        y = slope * np.arange(sl.start, sl.stop, dtype=float) + intercept
+        eps = 1e-9 * float(np.abs(y).max(initial=1.0))       # a touch sits ON the line, not past it
+        if side < 0:
+            return bool((self.close[sl] >= y - eps).all()
+                        and (self.low[sl] >= y - self.wick_tol - eps).all())
+        return bool((self.close[sl] <= y + eps).all()
+                    and (self.high[sl] <= y + self.wick_tol + eps).all())
+
+
 def _pivots_from_zigzag(df: pd.DataFrame, prefix: str = "zz") -> List[_Pivot]:
     lab = df[f"{prefix}_label"].to_numpy(object)
     price = df[f"{prefix}_price"].to_numpy(float)
@@ -345,7 +367,8 @@ def _pivots_from_zigzag(df: pd.DataFrame, prefix: str = "zz") -> List[_Pivot]:
     return out
 
 
-def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int) -> Optional[_Fit]:
+def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int, *,
+               bars: Optional[_Bars] = None) -> Optional[_Fit]:
     """The best TRENDLINE through a set of pivots — a line several of them sit on, not all of them.
 
     Fitting through every pivot in a window is wrong and was the second half of the original bug: a
@@ -359,6 +382,15 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int) ->
     `side` makes it an ENVELOPE, which is what "resistance" and "support" actually mean: for an upper
     line (+1) no pivot may sit more than `tol` ABOVE it, for a lower line (-1) none more than `tol`
     below. Without that constraint a line can cut straight through the middle of the swings.
+
+    `bars` makes it STRICT (the trendlines' `fit="strict"`; chart patterns never pass it). Two faults
+    of the default, both seen on a real 15m support: the envelope tests PIVOTS only, so a candle the
+    zigzag never called a pivot -- an outside bar, say -- can cross the line by two ATR; and the
+    least-squares refit floats the line between its touches, leaving them up to `tol` either side
+    of it. Strict keeps the pair's own line, exactly through two real swing extremes, and accepts it
+    only if every candle from its first touch to now is clear: no close beyond it, no wick beyond it
+    by more than `bars.wick_tol`. Candidates are tried best first (touches, span, then the smallest
+    mean distance of the touches), so the winner is the best line that is actually CLEAN.
     """
     n = len(pivots)
     if n < max(2, min_touches):
@@ -381,8 +413,10 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int) ->
     resid = y[None, :] - (slope[:, None] * x[None, :] + intercept[:, None])   # (pairs, pivots)
 
     # envelope: for an upper line nothing may poke more than `tol` above it, and vice versa —
-    # which is what "resistance" and "support" actually mean
-    if side > 0:
+    # which is what "resistance" and "support" actually mean. Strict tests the CANDLES instead (below)
+    if bars is not None:
+        keep = np.ones(len(slope), bool)
+    elif side > 0:
         keep = ~(resid > tol).any(axis=1)
     elif side < 0:
         keep = ~(resid < -tol).any(axis=1)
@@ -399,6 +433,17 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int) ->
     keep &= counts >= min_touches
     keep &= spans >= 0.5 * total_span        # touches must cover the window, not cluster
     if not keep.any():
+        return None
+
+    if bars is not None:
+        cand = np.flatnonzero(keep)
+        mean_dev = np.where(inl, np.abs(resid), 0.0).sum(axis=1) / np.maximum(counts, 1)
+        for k in cand[np.lexsort((mean_dev[cand], -spans[cand], -counts[cand]))]:
+            sel = inl[k]
+            if bars.clear(slope[k], intercept[k], int(x[sel].min()), side):
+                return _Fit(float(slope[k]), float(intercept[k]), int(sel.sum()),
+                            float(np.abs(resid[k, sel]).max()),
+                            tuple(p for p, is_touch in zip(pivots, sel) if is_touch))
         return None
 
     order = np.lexsort((spans[keep], counts[keep]))[::-1]         # most touches, then widest
