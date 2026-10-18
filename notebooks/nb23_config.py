@@ -1,7 +1,9 @@
 """
 NOTEBOOK 23 — NOTEBOOK 21, WITH THE NEWS, MARKET HOURS AND A TIDY CHART.  THIS FILE IS YOURS.
 
-Notebook 21's settings, value for value (§1-§6, §8), plus:
+Notebook 21's settings, value for value (§1-§6, §8), except that trendlines are fitted STRICT
+(through two real swing extremes, no candle closing through them -- nb21 uses the default fit),
+plus:
   §7  S/R drawn as BANDS, blue = support / orange = resistance, retired once price has closed
       beyond for about an hour (nb21: lines that never retire, 40 per timeframe)
   §9  NEWS          the release strip along the bottom
@@ -27,9 +29,11 @@ TF_WARMUP_BARS = 800                 # history per extra timeframe, in its own b
 # 2.1  which lines
 LINE_TFS  = ("5m", "15m", "1h", "4h")            # fitted and drawn, as well as TF itself
 TRADE_TFS = ("15m", "1h", "4h")      # whose line breaks may TRADE; the rest are only drawn
-TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.6,
+TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.3,
                  min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0,
-                 break_sustain_bars=1)   # closes beyond before a line retires; 0 = the first one
+                 break_sustain_bars=1,   # closes beyond before a line retires; 0 = the first one
+                 fit="strict",           # no candle closes through a line; "ransac" = nb21's fit
+                 wick_tol_atr=0.15)      # how far a wick may poke through it, in ATR
 
 # 2.2  the break — counted over the candles ending at the entry, against the LINE
 TL_CLOSE_N       = {"5m": 1, "15m": 1, "1h": 1, "*": 2}   # closes beyond it

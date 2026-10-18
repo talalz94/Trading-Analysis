@@ -58,10 +58,12 @@ FVG_TFS  = ("1m", "5m", "15m", "1h", "4h")
 SHOW_SR_ZONES = True
 SR_TFS        = ("1m", "5m", "15m", "1h", "4h")
 
-# ── §4  TRENDLINES — the strategy file's values (notebooks/strategies/tl_break_confirm.py) ─────
-TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.6,
+# ── §4  TRENDLINES — the strategy file's values, but fitted STRICT (docs/CHART_GUIDE.md) ───────
+TRENDLINE = dict(atr_mult=3.5, min_touches=3, lookback_pivots=16, line_tol_atr=0.3,
                  min_span_bars=40, max_age_bars=500, break_buffer_atr=0.0,
-                 break_sustain_bars=1)   # a break must hold one more close before the line dies
+                 break_sustain_bars=1,   # a break must hold one more close before the line dies
+                 fit="strict",           # no candle closes through a line; "ransac" = the old fit
+                 wick_tol_atr=0.15)      # how far a wick may poke through it, in ATR
 
 # ── §5  FAIR VALUE GAPS — the strategy file's values ───────────────────────────────────────────
 FVG_MITIGATION   = "ce"              # "touch" | "ce" (midpoint) | "full" — when a gap dies
