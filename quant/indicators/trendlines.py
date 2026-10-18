@@ -32,7 +32,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from .chart_patterns import _best_line, _Fit, _Pivot, _pivots_from_zigzag
+from .chart_patterns import _Bars, _best_line, _Fit, _Pivot, _pivots_from_zigzag
 from .structure import add_zigzag_structure
 
 
@@ -56,11 +56,11 @@ class _Line:
 
 
 def _fit_side(pivots: List[_Pivot], kind: int, *, tol: float, min_touches: int,
-              min_span_bars: int) -> Optional[_Fit]:
+              min_span_bars: int, bars: Optional[_Bars] = None) -> Optional[_Fit]:
     side = [p for p in pivots if p.kind == kind]
     if len(side) < min_touches:
         return None
-    fit = _best_line(side, tol, min_touches, kind)
+    fit = _best_line(side, tol, min_touches, kind, bars=bars)
     if fit is None or len(fit.pivots) < min_touches:
         return None
     if fit.pivots[-1].i - fit.pivots[0].i < min_span_bars:
@@ -74,6 +74,7 @@ def add_trendlines(df: pd.DataFrame, *,
                    line_tol_atr: float = 0.6, min_span_bars: int = 40,
                    max_age_bars: int = 500, break_buffer_atr: float = 0.0,
                    max_distance_atr: float = 8.0, break_sustain_bars: int = 0,
+                   fit: str = "ransac", wick_tol_atr: float = 0.15,
                    prefix: str = "tl") -> pd.DataFrame:
     """Fit the live support and resistance trendlines bar by bar and flag their breaks.
 
@@ -127,7 +128,21 @@ def add_trendlines(df: pd.DataFrame, *,
         The line is still published while the count runs, so the level is there to trade against;
         and `max_distance_atr` still retires it outright if price simply leaves, which is the case
         this counter cannot catch.
+    fit
+        "ransac" (the default, unchanged) or "strict". The default checks only zigzag PIVOTS against
+        the line and then refits it by least squares, so a candle that was never a pivot can cross
+        it and the touches float up to `line_tol_atr` either side -- measured on BTC 15m S15
+        (Sep 2026): an outside bar's wick 2.2 ATR through a "support", touches at -0.40 / +0.17 /
+        +0.46 / -0.23 ATR. "strict" draws the line exactly through two real swing extremes and keeps
+        it only if every candle from its first touch to the bar it is published on is clear of it:
+        no CLOSE beyond, no WICK beyond by more than `wick_tol_atr`. Pair it with a smaller
+        `line_tol_atr` so a "touch" is one you can see. Off by default because every recorded
+        trendline result was measured on the default.
+    wick_tol_atr
+        Strict only: how far a wick may poke through the line between its touches, in ATR.
     """
+    if fit not in ("ransac", "strict"):
+        raise ValueError(f"fit must be 'ransac' or 'strict', got {fit!r}")
     out = df.reset_index(drop=True).copy()
     if f"zz_label" not in out.columns:
         out = add_zigzag_structure(out, atr_mult=atr_mult, atr_period=atr_period)
@@ -135,6 +150,9 @@ def add_trendlines(df: pd.DataFrame, *,
     atr_s = _atr(out, atr_period).to_numpy(float)
     close = out["close"].to_numpy(float)
     n = len(out)
+    strict = fit == "strict"
+    if strict:
+        low_a, high_a = out["low"].to_numpy(float), out["high"].to_numpy(float)
 
     pivots = _pivots_from_zigzag(out)
     sup_px = np.full(n, np.nan); res_px = np.full(n, np.nan)
@@ -152,9 +170,11 @@ def add_trendlines(df: pd.DataFrame, *,
             a = atr_s[i] if np.isfinite(atr_s[i]) else 0.0
             if a > 0:
                 window = pivots[max(0, pi + 1 - lookback_pivots):pi + 1]
+                bars = _Bars(low_a, high_a, close, wick_tol_atr * a, i) if strict else None
                 for kind in (+1, -1):
                     fit = _fit_side(window, kind, tol=line_tol_atr * a,
-                                    min_touches=min_touches, min_span_bars=min_span_bars)
+                                    min_touches=min_touches, min_span_bars=min_span_bars,
+                                    bars=bars)
                     if fit is None:
                         continue
                     # A line that has already been broken or retired does not come back. Refitting
@@ -185,6 +205,11 @@ def add_trendlines(df: pd.DataFrame, *,
                         span_x = (cur.start_i, i)
                         same = all(abs(fit.slope * x + fit.intercept - cur.at(x))
                                    <= line_tol_atr * a for x in span_x)
+                        # strict: the refit is drawn from the incumbent's start, so it must be
+                        # clean from THERE, not only from its own first touch
+                        if same and bars is not None:
+                            same = bars.clear(fit.slope, fit.intercept,
+                                              min(cur.start_i, fit.pivots[0].i), kind)
                         if same:
                             cur.slope, cur.intercept = fit.slope, fit.intercept
                             cur.touches = fit.touches
