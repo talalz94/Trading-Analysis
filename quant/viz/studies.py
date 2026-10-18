@@ -1376,6 +1376,24 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             if not rewind:
                 zt = zt.sort_values("end_i").groupby("zone", as_index=False).tail(1)
             zt = zt[zt["price"].between(_lo - _pad, _hi + _pad)]
+
+        last_i = len(tl_) - 1
+
+        def _span(r):
+            """Where a row is drawn. A level established earlier is still the level, so one that
+            began in the warm-up starts at the first visible candle. A REVISION ends where the next
+            one begins, and a zone that DIED -- retired by a break (`break_bars`) or evicted for
+            room -- ends where it died; only a live zone runs to the right edge."""
+            x_from = tv[0] if r.start_i < lv else (tl_[int(r.start_i)] + step)
+            x_to = tv[-1] if int(r.end_i) >= last_i else min(tv[-1], tl_[int(r.end_i)] + step)
+            return x_from, x_to
+
+        # ...and it has to REACH the window. With rewind on, a revision over before the view opened
+        # used to be drawn from the first candle BACKWARDS to where it ended -- a fan of levels in
+        # the warm-up that all stopped at the view start, reading as zones the chart had failed to
+        # carry forward. Without rewind, a dead zone's last revision ran on to the right edge.
+        if len(zt):
+            zt = zt[[a < b for a, b in map(_span, zt.itertuples())]]
         if not len(zt):
             return 0
 
@@ -1396,7 +1414,6 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
         band = sr_style == "band"
         _cols = {**_SR_ROLE_COLOURS, **(sr_colours or {})}
-        last_i = len(tl_) - 1
         # a role is known once the bar that decides it has CLOSED -- for every layer, the chart's own
         # included -- so a change of colour is drawn at that close, never at the bar's open
         _blen = (np.timedelta64(bar_interval(dl, time_col=time_col))
@@ -1431,17 +1448,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         by_role = {1: ([], [], []), -1: ([], [], [])}
         per_zone = []
         for r in zt.itertuples():
-            # drawn across the whole visible window: a level established earlier is still the level
-            x_from = tv[0] if r.start_i < lv else (tl_[int(r.start_i)] + step)
-            # A REVISION ends where the next one begins, and a zone that DIED -- retired by a break
-            # (`break_bars`) or evicted for room -- ends where it died. Only a live zone runs to the
-            # right edge. Before, a dead zone's last revision ran on to the edge whenever rewind was
-            # off, so a support price had closed through and left for a day still read as a level.
-            x_to = tv[-1]
-            if int(r.end_i) < last_i:
-                x_to = min(tv[-1], tl_[int(r.end_i)] + step)
-                if not rewind and x_to < tv[0]:
-                    continue                         # it died before the window opens
+            x_from, x_to = _span(r)
             tag = "\u00b7".join((tf_nm, "Z%d" % int(r.zone)))
             if band:
                 half = 0.5 * w_frac * r.price
@@ -1473,11 +1480,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                                  pd.Timestamp(str(x_from)).value, int(r.touches), y0, y1))
 
         _mine = sr_layer_ix.setdefault(tf_nm, [])
-        n_live = len(zt["zone"].unique()) if (band or sr_roles) else len(zt)
+        n_live = int(zt["zone"].nunique())         # zones, not revisions
         if not band and not sr_roles:
             _mine += [len(fig.data), len(fig.data) + 1]
             fig.add_trace(go.Scattergl(
-                x=xs, y=ys, mode="lines", name="%s (%d)" % (label, len(zt)),
+                x=xs, y=ys, mode="lines", name="%s (%d)" % (label, n_live),
                 legendgroup=lgp + base_label, line=dict(color=shade, width=width),
                 opacity=alpha_l, customdata=cd, visible=vis,
                 hovertemplate="%{customdata}<extra></extra>"))

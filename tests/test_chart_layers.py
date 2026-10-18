@@ -161,6 +161,25 @@ def test_a_zone_broken_and_held_beyond_ends_where_it_broke():
     assert lows and any(max(t for t, _ in s) == last for s in lows)   # the support is still live
 
 
+@pytest.mark.parametrize("rewind", [False, True])
+def test_a_zone_from_the_warm_up_starts_at_the_view_and_a_dead_one_is_not_drawn(rewind):
+    # With rewind on, a revision that ended in the warm-up was drawn from the first visible candle
+    # BACKWARDS to its end: lines that all stopped at the view start, as if never carried forward.
+    x = np.arange(240)                    # _sr_market's break, then swings 101-121 to look at
+    p = (list(105 + 5 * np.sin(2 * np.pi * x / 40)) + [116, 119] + [120] * 18
+         + list(111 + 10 * np.cos(2 * np.pi * np.arange(80) / 40)))
+    df = bars("2026-03-02", len(p), freq="5min", price=p)
+    vs = df["t"].iloc[250]                                 # after the ~110 zone was broken
+    (line,) = _sr_traces(_sr_figure(df, view_start=vs, rewind=rewind))
+    segs = _segments(line.x, line.y)
+    assert segs
+    for s in segs:
+        assert min(t for t, _ in s) >= vs and s[0][0] < s[-1][0]       # inside, and forwards
+    assert not [s for s in segs if 108 <= s[0][1] <= 112]              # broken before the view
+    live = [s for s in segs if 98 <= s[0][1] <= 102]
+    assert live and min(s[0][0] for s in live) == vs                  # carried in from the warm-up
+
+
 def test_a_band_takes_the_zones_tolerance_and_its_colour_changes_at_the_close():
     df = _sr_market()
     fig = _sr_figure(df, sr_style="band", sr_roles=True)
