@@ -245,6 +245,10 @@ class FvgLab:
                                        t.max() + pd.Timedelta(days=1), coverage=cov),
                       news_show=_get(c, "NEWS_SHOW", "high"),
                       news_tz=_get(c, "NEWS_TZ", "Asia/Karachi"))
+        # patterns, S/R style, period levels, sessions -- each only if the config asks for it
+        from .chart_layers import chart_layers
+        kw.update(chart_layers(c, symbol=c.SYMBOL, source=_get(c, "SOURCE", "binance"),
+                               view_start=c.VIEW_START, end=self.end))
         kw.update(overrides)
         return pattern_figure(self.D, **kw)
 

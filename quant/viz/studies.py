@@ -444,6 +444,14 @@ _FVG_COL = {"bull": "#26a69a", "bear": "#ef5350"}
 # S/R reads as STRUCTURE, so it stays neutral and lets WEIGHT carry the timeframe -- the same
 # convention the trendlines use. Coarsest is brightest, because that is the level that matters.
 _SR_SHADES = ["#e3e8ee", "#c2cad3", "#a3acb6", "#8e9aa6", "#77818b", "#636c75"]
+# with sr_roles: blue and orange, so they never read as the gaps' green / red or the trendlines'
+_SR_ROLE_COLOURS = {"support": "#4493f8", "resistance": "#f0883e"}
+
+
+def _rgba(hex_colour: str, alpha: float) -> str:
+    h = hex_colour.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return "rgba(%d,%d,%d,%.3f)" % (r, g, b, alpha)
 
 
 def _short(label, n=34):
@@ -494,7 +502,11 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
                    fvg_show=("bull", "bear"),
                    sr_frames=None, tf_sr=None, max_sr_picker: int = 6,
                    rewind: bool = False, rejected=None, max_missed_picker: int = 8,
-                   news=None, news_show: str = "high", news_tz: str = "Asia/Karachi"):
+                   news=None, news_show: str = "high", news_tz: str = "Asia/Karachi",
+                   sr_style: str = "line", sr_roles: bool = False, sr_colours=None,
+                   period_levels=None, levels_show=("D",), sessions=None,
+                   sessions_show: bool = True, session_open_lines=(), candle_patterns=None,
+                   candle_patterns_show: bool = True):
     """A clean price chart with CHART-PATTERN SHAPES and S/R zones, each toggleable on its own.
 
     `news` is a calendar from `quant.news.load_events` (already narrowed to the currencies you
@@ -502,6 +514,20 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
     `News: critical | high+ | medium+ | all | off` dropdown under the chart that `news_show`
     opens on; hover times read in `news_tz`. It is APPENDED after everything else, so a chart
     without it is unchanged -- quant/viz/news.py has the details, including how rewind treats it.
+
+    `period_levels` {"D": quant.indicators.period_levels(...), "W": ...} draws the previous day /
+    week / month / year high and low (`levels_show` opens on those periods); `sessions` (a
+    `quant.indicators.session_windows` table) draws each market's hours as a ribbon along the top,
+    with a dotted line at every open of `session_open_lines`; `candle_patterns` names candlestick
+    patterns to mark. All three are appended after everything else (quant/viz/markets.py).
+
+    S/R STYLE. `sr_style="band"` draws each zone as the band of prices it stands for -- its
+    clustering tolerance, widened to every pivot that joined it -- instead of one line at the
+    mean, since a level that held at 78,400 also held at 78,430. `sr_roles=True` colours a zone by
+    what it is AT EACH MOMENT: support while price closes above it, resistance while below
+    (`sr_colours`), so a broken support turning into resistance shows as a change of colour.
+    `sr_break_bars` may be a dict by timeframe ({"5m": 3, "*": 3}). The defaults ("line", no roles)
+    draw exactly what they always did.
 
     Unlike `add_pattern_overlays`, which drops a marker at the confirmation bar, this draws the
     GEOMETRY: the pivots the shape is built from, the upper and lower trendlines through them, the
@@ -1300,7 +1326,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
 
     sr_layer_ix = {}    # timeframe name -> its trace indices, for the toggle row
 
-    def _draw_sr(dl, *, tf, width, alpha, shade, budget):
+    def _draw_sr(dl, *, tf, width, alpha, shade, budget, rank=0.0):
         """One timeframe's S/R zones. Returns the picker budget used.
 
         A level fitted on 1h bars is a different level from one fitted on 5m bars, so each frame is
@@ -1320,9 +1346,12 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         z0 = max(0, lv - int(zone_lookback_bars)) if zone_lookback_bars else 0
         # THE KNOB, resolved for THIS layer's timeframe: a 4h layer on a 5m chart is tuned as 4h
         from ..indicators import sr_params
+        _bb = sr_break_bars
+        if isinstance(_bb, dict):          # per timeframe, "*" for the rest; None = the table
+            _bb = _bb.get(tf or chart_tf or base_tf, _bb.get("*"))
         _prm = sr_params(tf or chart_tf or '5m', sr_sensitivity, left=zones_left,
                          right=zones_right, cluster_pct=cluster_pct, min_touches=min_touches,
-                         break_bars=sr_break_bars, anchor=sr_anchor)
+                         break_bars=_bb, anchor=sr_anchor)
         zt = sr_zone_table(dl.iloc[z0:].reset_index(drop=True), left=_prm['left'],
                            right=_prm['right'], cluster_pct=_prm['cluster_pct'],
                            max_zones=max_zones, time_col=time_col,
@@ -1365,35 +1394,115 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         room = max(0, int(budget))
         pick = set(zt.sort_values("touches", ascending=False).head(room)["zone"]) if room else set()
 
+        band = sr_style == "band"
+        _cols = {**_SR_ROLE_COLOURS, **(sr_colours or {})}
+        last_i = len(tl_) - 1
+        # a role is known once the bar that decides it has CLOSED -- for every layer, the chart's own
+        # included -- so a change of colour is drawn at that close, never at the bar's open
+        _blen = (np.timedelta64(bar_interval(dl, time_col=time_col))
+                 if time_col in dl.columns and len(dl) > 1 else step)
+        _cl = (pd.to_numeric(dl["close"], errors="coerce").to_numpy(np.float64)
+               if sr_roles else None)
+        w_frac = float(_prm["cluster_pct"]) / 100.0
+
+        def _runs(r, x_from, x_to):
+            """[(from, to, role)] over the segment: +1 support (price closing above the zone),
+            -1 resistance (below). A close ON the level keeps the role it had."""
+            s_i, e_i = int(r.start_i), int(r.end_i)
+            sg = np.nan_to_num(np.sign(_cl[s_i:e_i + 1] - r.price), nan=0.0)
+            nz = np.flatnonzero(sg)
+            if not len(nz):
+                return [(x_from, x_to, 1)]
+            # each undecided close takes the role before it; any before the first decided close
+            # take that first one
+            sg = sg[np.maximum.accumulate(np.where(sg != 0, np.arange(len(sg)), nz[0]))]
+            chg = np.flatnonzero(sg[1:] != sg[:-1]) + 1
+            cuts = [tl_[s_i + j] + _blen for j in chg]
+            edges = [x_from] + cuts + [x_to]
+            roles = [int(sg[0])] + [int(sg[j]) for j in chg]
+            out = []
+            for a, b, ro in zip(edges[:-1], edges[1:], roles):
+                a, b = max(a, x_from), min(b, x_to)
+                if b > a:
+                    out.append((a, b, ro))
+            return out or [(x_from, x_to, roles[-1])]
+
         xs, ys, cd, hx, hy, hc = [], [], [], [], [], []
+        by_role = {1: ([], [], []), -1: ([], [], [])}
         per_zone = []
         for r in zt.itertuples():
             # drawn across the whole visible window: a level established earlier is still the level
             x_from = tv[0] if r.start_i < lv else (tl_[int(r.start_i)] + step)
-            # a REVISION ends where the next one begins; only the last one runs to the right edge
+            # A REVISION ends where the next one begins, and a zone that DIED -- retired by a break
+            # (`break_bars`) or evicted for room -- ends where it died. Only a live zone runs to the
+            # right edge. Before, a dead zone's last revision ran on to the edge whenever rewind was
+            # off, so a support price had closed through and left for a day still read as a level.
             x_to = tv[-1]
-            if rewind and int(r.end_i) < len(tl_) - 1:
+            if int(r.end_i) < last_i:
                 x_to = min(tv[-1], tl_[int(r.end_i)] + step)
+                if not rewind and x_to < tv[0]:
+                    continue                         # it died before the window opens
             tag = "\u00b7".join((tf_nm, "Z%d" % int(r.zone)))
-            txt = ("<b>%s</b>  S/R<br>%s<br>%d touches" % (tag, format(r.price, ",.2f"),
-                                                           int(r.touches)))
-            xs += [x_from, x_to, None]
-            ys += [r.price, r.price, None]
-            cd += [txt, txt, txt]
+            if band:
+                half = 0.5 * w_frac * r.price
+                y0 = min(getattr(r, "lo", r.price), r.price - half)
+                y1 = max(getattr(r, "hi", r.price), r.price + half)
+                txt = ("<b>%s</b>  S/R<br>%s  (%s - %s)<br>%d touches"
+                       % (tag, format(r.price, ",.2f"), format(y0, ",.0f"), format(y1, ",.0f"),
+                          int(r.touches)))
+            else:
+                y0 = y1 = r.price
+                txt = ("<b>%s</b>  S/R<br>%s<br>%d touches" % (tag, format(r.price, ",.2f"),
+                                                               int(r.touches)))
+            parts = _runs(r, x_from, x_to) if sr_roles else [(x_from, x_to, 0)]
+            for a, b, ro in parts:
+                bx_, by_, bc_ = by_role[ro] if sr_roles else (xs, ys, cd)
+                if band:
+                    bx_ += [a, b, b, a, a, None]
+                    by_ += [y0, y0, y1, y1, y0, None]
+                    bc_ += [txt] * 6
+                else:
+                    bx_ += [a, b, None]
+                    by_ += [r.price, r.price, None]
+                    bc_ += [txt, txt, txt]
             hx.append(tv[len(tv) // 2] if len(tv) else x_from)
             hy.append(r.price)
             hc.append(txt)
             if r.zone in pick:
                 per_zone.append((tag, label, [x_from, x_to], [r.price, r.price], txt,
-                                 pd.Timestamp(str(x_from)).value, int(r.touches)))
+                                 pd.Timestamp(str(x_from)).value, int(r.touches), y0, y1))
 
         _mine = sr_layer_ix.setdefault(tf_nm, [])
-        _mine += [len(fig.data), len(fig.data) + 1]
-        fig.add_trace(go.Scattergl(
-            x=xs, y=ys, mode="lines", name="%s (%d)" % (label, len(zt)),
-            legendgroup=lgp + base_label, line=dict(color=shade, width=width),
-            opacity=alpha_l, customdata=cd, visible=vis,
-            hovertemplate="%{customdata}<extra></extra>"))
+        n_live = len(zt["zone"].unique()) if (band or sr_roles) else len(zt)
+        if not band and not sr_roles:
+            _mine += [len(fig.data), len(fig.data) + 1]
+            fig.add_trace(go.Scattergl(
+                x=xs, y=ys, mode="lines", name="%s (%d)" % (label, len(zt)),
+                legendgroup=lgp + base_label, line=dict(color=shade, width=width),
+                opacity=alpha_l, customdata=cd, visible=vis,
+                hovertemplate="%{customdata}<extra></extra>"))
+        else:
+            # one trace per ROLE (or one, uncoloured), all in the layer's legend group so the layer
+            # still switches as one; the band's opacity carries the timeframe the way width does
+            fill_a = (min(0.30, 0.13 + 0.045 * rank) if rank >= 0 else max(0.06, 0.13 + 0.03 * rank))
+            groups = ([(_cols["support"], by_role[1]), (_cols["resistance"], by_role[-1])]
+                      if sr_roles else [(shade, (xs, ys, cd))])
+            first = True
+            for colr, (gx, gy, gc) in groups:
+                _mine.append(len(fig.data))
+                common = dict(x=gx, y=gy, mode="lines", legendgroup=lgp + base_label,
+                              name="%s (%d)" % (label, n_live), showlegend=first, visible=vis)
+                if band:
+                    fig.add_trace(go.Scattergl(
+                        **common, fill="toself", fillcolor=_rgba(colr, fill_a),
+                        line=dict(color=_rgba(colr, min(0.85, fill_a * 3.2)), width=0.8),
+                        hoverinfo="skip"))
+                else:
+                    fig.add_trace(go.Scattergl(
+                        **common, line=dict(color=colr, width=width), opacity=alpha_l,
+                        customdata=gc, hovertemplate="%{customdata}<extra></extra>"))
+                first = False
+            _mine.append(len(fig.data))
         # A horizontal line only reports a hit when the cursor is ON it. The midpoint marker gives
         # each zone somewhere to hover that is not a one-pixel target.
         fig.add_trace(go.Scattergl(
@@ -1402,15 +1511,22 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             customdata=hc, hovertemplate="%{customdata}<extra></extra>"))
 
         used = 0
-        for tag, fam, bx, by, txt, sort_key, _t in per_zone:
+        for tag, fam, bx, by, txt, sort_key, _t, y0, y1 in per_zone:
             line_ref[tag] = len(fig.data)
             picker.append((fam, "%s  %s" % (tag, txt.split("<br>")[1]), len(fig.data), sort_key))
             used += 1
             grp = "i#%d" % len(fig.data)
-            fig.add_trace(go.Scattergl(
-                x=bx, y=by, mode="lines", name=tag, legendgroup=grp, visible=False,
-                showlegend=True, line=dict(color=shade, width=max(2.0, width + 0.8)),
-                customdata=[txt, txt], hovertemplate="%{customdata}<extra></extra>"))
+            if band:
+                fig.add_trace(go.Scattergl(
+                    x=[bx[0], bx[1], bx[1], bx[0], bx[0]], y=[y0, y0, y1, y1, y0], mode="lines",
+                    name=tag, legendgroup=grp, visible=False, showlegend=True, fill="toself",
+                    fillcolor=_rgba(shade, 0.22), line=dict(color=shade, width=1.2),
+                    customdata=[txt] * 5, hovertemplate="%{customdata}<extra></extra>"))
+            else:
+                fig.add_trace(go.Scattergl(
+                    x=bx, y=by, mode="lines", name=tag, legendgroup=grp, visible=False,
+                    showlegend=True, line=dict(color=shade, width=max(2.0, width + 0.8)),
+                    customdata=[txt, txt], hovertemplate="%{customdata}<extra></extra>"))
             fig.add_trace(go.Scattergl(
                 x=[bx[0] + (bx[1] - bx[0]) / 2], y=[by[0]], mode="markers", legendgroup=grp,
                 visible=False, showlegend=False,
@@ -1441,7 +1557,7 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
             _draw_sr(_sr_layers[_k], tf=_k, width=round(_w, 2),
                      alpha=1.0 if _rank >= 0 else 0.7,
                      shade=_SR_SHADES[min(max(3 - (_anchor - _n), 0), len(_SR_SHADES) - 1)],
-                     budget=max_sr_picker)
+                     budget=max_sr_picker, rank=_rank)
 
     # ---- the chart's own timeframe, then any extra ones ----------------------------------
     _draw_layer(d, tf=None, want=patterns, draw_lines=trendlines,
@@ -2176,17 +2292,43 @@ def pattern_figure(df, *, patterns=None, time_col: str = "t", title=None, height
         title_x=0.5, title_xanchor="center", title_y=0.985, title_yanchor="top")
     fig.update_yaxes(side="right")
 
+    _tc = d[time_col] if time_col in d.columns else None
+    _xtz = (_tc.dt.tz if _tc is not None and pd.api.types.is_datetime64_any_dtype(_tc)
+            else None)
+    _t_end = pd.Timestamp(tv[-1]) + bar_interval(d, time_col=time_col)
+    # THE FOOTER. News keeps its place at the bottom right; Levels and Sessions share the row
+    # under it, right to left -- or take News's row when there is no news. Plotly places a menu in
+    # fractions of the plot's width, so one row of three overlapped below ~1,400 px; two fit to
+    # ~1,100. Each slot is (x, y) and is taken in turn.
+    _slots = [(1.0, -0.035), (1.0, -0.085), (0.84, -0.085)]
     if news is not None and len(news):
         # LAST, after every axis setting above: `update_yaxes` would otherwise reach the strip's
         # own [0, 1] axis too. Its menu goes on the END of updatemenus, so the cascades that
         # address `updatemenus[1]` / `[2]` / `[4]` by index still find what they expect.
         from .news import add_news_strip
-        _tc = d[time_col] if time_col in d.columns else None
-        _xtz = (_tc.dt.tz if _tc is not None and pd.api.types.is_datetime64_any_dtype(_tc)
-                else None)
-        add_news_strip(fig, news, t_min=tv[0],
-                       t_max=pd.Timestamp(tv[-1]) + bar_interval(d, time_col=time_col),
-                       show=news_show, tz=news_tz, x_tz=_xtz, rewind=rewind)
+        if not add_news_strip(fig, news, t_min=tv[0], t_max=_t_end, show=news_show, tz=news_tz,
+                              x_tz=_xtz, rewind=rewind).get("menu"):
+            _slots = [(1.0, -0.035), (0.84, -0.035)]
+        else:
+            _slots.pop(0)
+    else:
+        _slots = [(1.0, -0.035), (0.84, -0.035)]
+    # the market layers, after the news and for the same reasons (quant/viz/markets.py)
+    if period_levels:
+        from .markets import add_period_levels
+        if add_period_levels(fig, period_levels, t_min=tv[0], t_max=_t_end, x_tz=_xtz,
+                             show=tuple(levels_show or ()), rewind=rewind,
+                             menu_x=_slots[0][0], menu_y=_slots[0][1]).get("menu"):
+            _slots.pop(0)
+    if sessions is not None and len(sessions):
+        from .markets import add_sessions
+        add_sessions(fig, sessions, t_min=tv[0], t_max=_t_end, x_tz=_xtz, show=sessions_show,
+                     open_lines=tuple(session_open_lines or ()), menu_x=_slots[0][0],
+                     menu_y=_slots[0][1])
+    if candle_patterns:
+        from .markets import add_candle_markers
+        add_candle_markers(fig, d, candle_patterns, time_col=time_col, start=tv[0],
+                           show=candle_patterns_show, rewind=rewind)
     return fig
 
 

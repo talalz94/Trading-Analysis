@@ -225,6 +225,7 @@ class MarketView:
             sr_sensitivity=_get(c, "SR_SENSITIVITY", "normal"),
             zone_lookback_bars=_get(c, "ZONE_LOOKBACK", 2000),
             max_zones=_get(c, "SR_MAX_ZONES", 40), max_sr_picker=_get(c, "MAX_SR_PICKER", 6),
+            sr_break_bars=_get(c, "SR_BREAK_BARS", None),
             view_start=self.view_start, emas=tuple(_get(c, "EMAS", ()) or ()), mtf_emas=None,
             chart_tf=c.TF, ema_frames=self.frames,
             max_picker_instances=_get(c, "MAX_PICKER", 24),
@@ -238,6 +239,10 @@ class MarketView:
         if self.news is not None and len(self.news):
             kw.update(news=self.news, news_show=_get(c, "NEWS_SHOW", "high"),
                       news_tz=_get(c, "NEWS_TZ", "Asia/Karachi"))
+        # patterns, S/R style, period levels, sessions -- each only if the config asks for it
+        from .chart_layers import chart_layers
+        kw.update(chart_layers(c, symbol=self.symbol, source=self.source,
+                               view_start=self.view_start, end=None))
         kw.update(overrides)
         return pattern_figure(self.df, **kw)
 
