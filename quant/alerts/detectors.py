@@ -258,7 +258,12 @@ class TrendlineDetector(Detector):
               "confirm": (0, "then, within N candles, one of the break's colour must close beyond "
                              "the WHOLE break candle (notebook 21's rule; 0 = off)"),
               "min_touches": (3, "pivots the line must touch"),
-              "swing_size": (3.5, "zigzag pivot size in ATRs: bigger = longer, fewer lines")}
+              "swing_size": (3.5, "zigzag pivot size in ATRs: bigger = longer, fewer lines"),
+              "fit": ("ransac", "ransac = the default fit | strict = exactly through two swing "
+                                "extremes, and no candle closes through it before it is drawn"),
+              "touch_tol": (0.6, "how far off the line a pivot may sit and still count as a "
+                                 "touch, in ATR (0.3 with strict)"),
+              "wick_tol": (0.15, "strict only: how far a wick may poke through the line, in ATR")}
     example = dict(event="both", closes=2)
 
     def check(self, p):
@@ -267,6 +272,10 @@ class TrendlineDetector(Detector):
         _check_rule(p)
         if int(p["min_touches"]) < 2:
             raise ValueError("min_touches must be at least 2")
+        if p["fit"] not in ("ransac", "strict"):
+            raise ValueError("fit must be ransac | strict")
+        if float(p["touch_tol"]) <= 0 or float(p["wick_tol"]) < 0:
+            raise ValueError("touch_tol must be above 0 and wick_tol 0 or more")
 
     def warmup_bars(self, params):
         return 500         # a line may live 500 bars
@@ -275,7 +284,9 @@ class TrendlineDetector(Detector):
         from quant.indicators import add_trendlines, trendline_table
         p = self.settings(params)
         d = add_trendlines(frame[["open", "high", "low", "close"]].copy(),
-                           min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]))
+                           min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]),
+                           fit=p["fit"], line_tol_atr=float(p["touch_tol"]),
+                           wick_tol_atr=float(p["wick_tol"]))
         lines = trendline_table(d)
         when = frame[TIME_COL] + pd.Timedelta(minutes=_TF_MIN.get(tf, 0))   # each bar's close
         hits = []

@@ -107,6 +107,17 @@ def test_the_shipped_config_loads_and_every_alert_in_it_is_valid():
     assert cfg.markets and (cfg.alerts or cfg.off)
 
 
+def test_the_trendline_config_loads_and_fits_its_lines_strict():
+    # the ready-to-switch copy: it has to load as it stands, since its instructions say copy it
+    # over alerts_config.py, and its whole point is the strict fit
+    cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
+    lines = [a for a in cfg.alerts + cfg.off if a.kind == "trendline"]
+    assert [a for a in cfg.alerts if a.kind == "trendline"]
+    assert all(a.params.get("fit") == "strict" for a in lines)
+    assert {a.kind for a in cfg.alerts} >= {"trendline", "candle", "chart"}
+    assert cfg.news.on and cfg.markets
+
+
 @pytest.mark.parametrize("bad, says", [
     (dict(markets=("A", "Z")), "'Z' is neither a market nor a group"),
     (dict(tfs=("1h", "3h")), "tfs must be"),
@@ -385,6 +396,7 @@ def _kind_cases():
               ("trendline", dict(event="both", closes=2, full=1, colour=2)),
               ("trendline", dict(event="break", closes=1, confirm=3)),
               ("trendline", dict(event="break", closes=0, full=2)),
+              ("trendline", dict(event="both", closes=1, fit="strict", touch_tol=0.3)),
               ("sr_zone", dict(event="break", closes=2, full=1, colour=1)),
               ("chart", dict(patterns="all")), ("sr_zone", dict(event="both")),
               ("fvg", dict(event="both")), ("ma_cross", dict(fast=20, slow=50)),
