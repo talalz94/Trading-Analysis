@@ -492,8 +492,11 @@ def test_each_trade_takes_the_rule_settings_of_the_line_that_fired_it():
     sys.path.insert(0, str(NB))
     import nb21_config as CFG
     from quant.research import fvg_lab, variant
+    # its OWN window: nb21_config.py is the user's file and its dates move (2026-10-18 they moved to
+    # Sep-Oct, a window with no "5m+15m" trade), which must not decide whether this rule holds
     lab = fvg_lab(variant(CFG, LINE_TFS=("15m", "1h"), TRADE_TFS=("5m", "15m", "1h"),
-                          USE_FVG_EXIT=False, TL_CONFIRM_N={"1h": 3, "15m": 3, "5m": 2, "*": 0}))
+                          USE_FVG_EXIT=False, TL_CONFIRM_N={"1h": 3, "15m": 3, "5m": 2, "*": 0},
+                          VIEW_START="2026-06-01", END="2026-07-15", WARMUP_START="2026-05-01"))
     t = lab.retrade(USE_HARD_CLOSE=True,
                     HARD_CLOSE=dict(tag="HARD", after_h={"5m": 1, "*": 0})).trades
     five = t[t.trigger == "5m"]

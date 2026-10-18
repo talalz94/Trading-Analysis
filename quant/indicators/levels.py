@@ -15,6 +15,108 @@ import pandas as pd
 SESSION_BOUNDS = {"asia": (0, 8), "eu": (8, 16), "us": (16, 24)}   # UTC blocks for a 24/7 market
 
 
+# ══ PERIOD LEVELS AND MARKET SESSIONS -- what a chart draws, as tables ═══════════════════════════
+PERIODS = {"D": "day", "W": "week", "M": "month", "Y": "year"}
+_PERIOD_STEP = {"D": pd.DateOffset(days=1), "W": pd.DateOffset(weeks=1),
+                "M": pd.DateOffset(months=1), "Y": pd.DateOffset(years=1)}
+
+
+def _period_start(local: pd.Series, period: str) -> pd.Series:
+    """The wall-clock start of each bar's period: midnight, Monday, the 1st, 1 January."""
+    if period == "D":
+        return local.dt.floor("D")
+    return local.dt.to_period({"W": "W-SUN", "M": "M", "Y": "Y"}[period]).dt.start_time
+
+
+def period_levels(frame: pd.DataFrame, period: str = "D", *, tz: str = "UTC",
+                  time_col: str = "open_time") -> pd.DataFrame:
+    """The PREVIOUS period's high and low, as the stretch of time they apply to.
+
+    One row per period P found in `frame`: [start, end) is P in UTC (its boundaries are midnight,
+    Monday, the 1st or 1 January in `tz`, DST included), and high / low are those of the period
+    before it -- complete, so known from the first moment of P. That is the whole causality story:
+    nothing in a row is unknown at its `start`.
+
+    The period before P is the previous one THAT HAS BARS: Monday's "previous day" on a market
+    shut at the weekend is Friday, as on every trading platform. A period the frame holds only
+    part of (it starts mid-way) is never used as a source -- its high would be the high of the
+    part loaded -- so give the frame a full period of history before the first one you draw.
+
+    Columns: start, end, high, low, source_start (when the period the levels come from began).
+    """
+    if period not in PERIODS:
+        raise ValueError(f"period must be one of {list(PERIODS)}, got {period!r}")
+    cols = ["start", "end", "high", "low", "source_start"]
+    if frame is None or len(frame) < 2:
+        return pd.DataFrame(columns=cols)
+    t = pd.to_datetime(frame[time_col], utc=True).reset_index(drop=True)
+    local = t.dt.tz_convert(tz).dt.tz_localize(None)
+    key = _period_start(local, period)
+    g = pd.DataFrame({"k": key.to_numpy(),
+                      "h": pd.to_numeric(frame["high"]).to_numpy(float),
+                      "l": pd.to_numeric(frame["low"]).to_numpy(float)}).groupby("k", sort=True)
+    agg = g.agg(h=("h", "max"), l=("l", "min"))
+    bar = t.diff().median()
+    first_whole = (local.iloc[0] - agg.index[0]) <= bar         # loaded from the period's start?
+    src = pd.DataFrame({"high": agg["h"].shift(1).to_numpy(),
+                        "low": agg["l"].shift(1).to_numpy(),
+                        "source_start": pd.Series(agg.index).shift(1).to_numpy()},
+                       index=agg.index)
+    if not first_whole and len(src) > 1:
+        src.iloc[1, :2] = np.nan                                # its source was a partial period
+    src = src.iloc[1:].dropna(subset=["high", "low"])
+    if not len(src):
+        return pd.DataFrame(columns=cols)
+
+    def utc(naive) -> pd.Series:
+        return (pd.Series(pd.to_datetime(naive))
+                .dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
+                .dt.tz_convert("UTC"))
+
+    start = utc(src.index)
+    end = utc(pd.DatetimeIndex(src.index) + _PERIOD_STEP[period])
+    out = pd.DataFrame({"start": start.to_numpy(), "end": end.to_numpy(),
+                        "high": src["high"].to_numpy(), "low": src["low"].to_numpy(),
+                        "source_start": utc(src["source_start"]).to_numpy()}, columns=cols)
+    return out.dropna(subset=["start", "end"]).reset_index(drop=True)
+
+
+def session_windows(sessions: Dict[str, tuple], start, end, *,
+                    weekdays=(0, 1, 2, 3, 4)) -> pd.DataFrame:
+    """Every session's open and close in UTC between `start` and `end`.
+
+    `sessions` = {name: (tz, "HH:MM" open, "HH:MM" close)} in each market's OWN clock, so daylight
+    saving is that market's: London opens at 08:00 London time in summer and winter alike, which is
+    07:00 or 08:00 UTC. A close earlier than the open runs past midnight. `weekdays` are the LOCAL
+    days a session opens (Monday = 0), so Sydney's Monday session -- Sunday evening in UTC -- is
+    there and its Saturday is not.
+
+    Columns: name, open, close (UTC), tz, local_open, local_close.
+    """
+    lo, hi = pd.Timestamp(start), pd.Timestamp(end)
+    lo = lo.tz_localize("UTC") if lo.tzinfo is None else lo.tz_convert("UTC")
+    hi = hi.tz_localize("UTC") if hi.tzinfo is None else hi.tz_convert("UTC")
+
+    def at(day, hhmm, tz):
+        return (pd.Timestamp(f"{day} {hhmm}")
+                .tz_localize(tz, ambiguous=False, nonexistent="shift_forward").tz_convert("UTC"))
+
+    rows = []
+    for name, (tz, a, b) in sessions.items():
+        days = pd.date_range((lo - pd.Timedelta(days=2)).tz_convert(tz).date(),
+                             (hi + pd.Timedelta(days=1)).tz_convert(tz).date(), freq="D")
+        for d in days:
+            if d.weekday() not in weekdays:
+                continue
+            o, c = at(d.date(), a, tz), at(d.date(), b, tz)
+            if c <= o:                                          # runs past local midnight
+                c = at((d + pd.Timedelta(days=1)).date(), b, tz)
+            if c > lo and o < hi:
+                rows.append(dict(name=name, open=o, close=c, tz=tz, local_open=a, local_close=b))
+    out = pd.DataFrame(rows, columns=["name", "open", "close", "tz", "local_open", "local_close"])
+    return out.sort_values(["open", "name"]).reset_index(drop=True)
+
+
 def _session_key(t: pd.Series) -> pd.Series:
     """Integer session id: yyyymmdd * 10 + block. Integers rather than formatted strings because this
     runs over hundreds of thousands of bars in the sweeps and strftime dominates the cost."""
