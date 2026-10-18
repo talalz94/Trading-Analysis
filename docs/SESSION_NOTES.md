@@ -2433,3 +2433,35 @@ Gotchas:
   below ~1,400 px; Levels and Sessions moved to a row under News;
 - the S/R "none" I first read as a bug was the FVG row, correctly showing that all gaps start hidden;
 - the browser pane cannot open file:// -- serve reports/ with the `reports` launch config.
+
+### Warm-up S/R zones, strict trendlines, the trendline alerts config (2026-10-18)
+
+Three follow-ups from the user's screenshots of notebook 21:
+- **"S/R zones not carried forward from the warm-up."** They were; what showed were zones that had
+  DIED in the warm-up, drawn with rewind on from the first visible candle BACKWARDS to where they
+  ended (x_from clamped to the view, x_to not). A fan of grey lines ending exactly at the view start
+  looked like levels the view had dropped. Fixed in `_draw_sr`: a segment must reach the window
+  (x_to > x_from) or it is not drawn, in both modes; the legend counts zones, not revisions. Pre-dated
+  this session's S/R work -- the old rewind branch had it too.
+- **A 15m support "poorly formed"** (S15, 11-15 Sep): the default fitter tests only zigzag PIVOTS
+  against the line, then refits it by least squares. The 12:30 Sep 11 bar was an OUTSIDE bar (low
+  76,047, high 77,700) right after a confirmed low, so the zigzag never made it a pivot -- and its
+  wick sat 2.2 ATR under the line. Touches were -0.40/+0.17/+0.46/-0.23 ATR off it. On that window
+  17 of 55 15m lines had a CLOSE through them before they were even published. `fit="strict"` keeps
+  the RANSAC pair's own line and accepts it only if every candle from the first touch to the publish
+  bar is clear (closes never, wicks <= wick_tol_atr). With line_tol_atr 0.3: 34 lines, all clean.
+  Opt-in: 19 quarters of notebook 21 show 18% fewer trades and -0.024R/trade forward (t -0.99) -- no
+  measurable change, so nb21 and the strategy file keep the default and nb23 + market view use strict.
+  nb23 trades 8 times on the window, not 19 (+0.94R vs -9.05R; one window, not evidence).
+- **alerts/alerts_config_trendlines.py**: strict trendline alerts (formed 1h/4h ~0.3/day, 2 closes
+  1h/4h ~0.1/day, 15m break confirmed ~0.3/day) + engulfing / hammer / star on 4h + tops & bottoms,
+  ~4.7/day as set, measured on Gold + USDJPY + BTC Mar-Aug 2026 exactly like the original's
+  comments (engulfing 4h reproduced the original's ~2.5/day). The trendline alert kind gained
+  `fit` / `touch_tol` / `wick_tol`, defaulting to today's behaviour.
+
+Gotchas:
+- `resample_ohlcv(df, "15m")` is FIFTEEN MONTHS to pandas -- pass "15min". The alerts engine and
+  tf_frames do not go through that string, which is why nothing live was affected; a measurement
+  script that did came back with zero 15m alerts.
+- one guard in strict mode (a refit must be clean from the incumbent's start) is not reached by any
+  random or hand-built series tried; it is kept as cheap insurance, and the mutation run says so.

@@ -50,6 +50,34 @@ per timeframe: `"tight"` (fewer, sharper), `"normal"`, `"loose"` (more context).
 * **`SR_MAX_ZONES`** caps the live zones per timeframe; when full, the one farthest from price
   goes. A zone that was retired or pushed out ends where it did, it does not run on to the right
   edge.
+* **Zones from the warm-up.** A zone still live when the chart opens is drawn from the first
+  candle, and one that died during the warm-up is not drawn at all. (With `REWIND` on, those dead
+  ones used to be drawn from the first candle *backwards* into the warm-up, a fan of levels that
+  all stopped at the view start and looked as though the chart had failed to carry them forward.)
+
+## Trendlines
+
+A trendline is fitted from the zigzag's swing highs (resistance) or lows (support): the line that
+touches the most of them, at least `min_touches`, within `line_tol_atr` ATR. The settings are the
+`TRENDLINE` dict in the config; two fits are available.
+
+* **`fit="ransac"`** (the default, and what every recorded result was measured with) checks only
+  the swings against the line and then refits it by least squares. A candle the zigzag never
+  called a swing, such as an outside bar, can cross it, and the touches float on either side. On
+  BTC 15m, Sep 2026, line S15 had a wick 2.2 ATR through it and touches at −0.40 / +0.17 / +0.46 /
+  −0.23 ATR; 17 of the window's 55 15m lines had a candle close through them before they were
+  even drawn.
+* **`fit="strict"`** draws the line exactly through two real swing extremes and keeps it only if
+  every candle from its first touch to the moment it is drawn is clear: no close beyond it, and no
+  wick beyond it by more than `wick_tol_atr` (0.15). Pair it with `line_tol_atr=0.3`, so a third
+  swing counts as a touch only when it visibly sits on the line. It finds fewer lines (15m: 34
+  instead of 55 over that window) and every one of them is clean. Over 19 quarters it changes
+  notebook 21's results by nothing measurable (−0.02R a trade, t −1.0): a cleaner chart, not an
+  edge.
+
+Notebook 23 and the market view use `fit="strict"`; notebook 21 and the strategy file keep the
+default. The trendline alerts take the same choice as `fit=`, `touch_tol=` and `wick_tol=`
+(`alerts/alerts_config_trendlines.py` uses strict).
 
 ## Previous period highs and lows
 

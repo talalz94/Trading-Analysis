@@ -54,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **890 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **898 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -193,6 +193,16 @@ quant/
 │   │                    #     base first then coarsest;
 │   │                    #     add_trendline_ids() -> tl_res_n/tl_sup_n = WHICH line is live per bar,
 │   │                    #     so a trade can name the exact line it broke, not just its timeframe.
+│   │                    #     fit="strict" (opt-in; the default "ransac" is byte-identical) keeps
+│   │                    #     the PAIR's own line, exactly through two real swing extremes, and
+│   │                    #     accepts it only if every CANDLE from its first touch to the bar it
+│   │                    #     is published on is clear: no close beyond, no wick beyond by more
+│   │                    #     than wick_tol_atr. The default tests PIVOTS only and refits by least
+│   │                    #     squares: BTC 15m S15 (Sep 2026) had an outside bar's wick 2.2 ATR
+│   │                    #     through it and touches at -0.40..+0.46 ATR, and 17 of 55 15m lines
+│   │                    #     had a CLOSE through them before they were drawn. Strict + line_tol
+│   │                    #     0.3: 34 lines, all clean; 19 quarters of nb21 -0.02R/trade, t -1.0 --
+│   │                    #     a cleaner chart, not an edge. nb23 + the market view use it
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
 │   ├── levels.py        #   prev-day/week/session levels (per-bar columns), VWAP, round numbers,
 │   │                    #     level_events; period_levels(frame, "D"|"W"|"M"|"Y", tz) = the PREVIOUS
@@ -888,7 +898,9 @@ notebooks/               # 23_break_confirmation_news + nb23_config.py (2026-10-
                          #   differ on purpose) + news, CHART_PATTERNS / CANDLE_PATTERNS, period levels,
                          #   sessions, and S/R as role-coloured BANDS retired after ~1h beyond
                          #   ({"5m": 12, "15m": 4, "1h": 2, "4h": 2}). Measured on nb21's own window:
-                         #   its 5m layer drew 63 zones, 16 live at a time, nearly all already broken
+                         #   its 5m layer drew 63 zones, 16 live at a time, nearly all already broken.
+                         #   TRENDLINE fit="strict", line_tol_atr=0.3 since 2026-10-18 (the user asked
+                         #   for clean lines), so its trades differ from 21's: 8 on the window, not 19
                          # market_view.ipynb + market_view_config.py (2026-10-15) = the latest 2 days of
                          #   any instrument on 1m (BTC, ETH, NASDAQ = Dukascopy E_NQ-100, SP500, DOW,
                          #   GOLD, SILVER, OIL, USDJPY, EURUSD, GBPUSD), trendlines / S/R / FVGs from
@@ -989,6 +1001,9 @@ requirements-alerts.txt           # ONLY what quant.alerts imports (measured by 
                                   #   Ubuntu 24.04 python) by test_alerts.py passing there
 alerts/alerts_config.py           # THE ALERTS CONFIG, the user's: markets, groups, categories,
                                   #   alerts, delivery. alerts/state/ is git-ignored
+alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy: strict trendline alerts + a few chosen
+                                  #   patterns, ~4.7/day, with preview/switch/revert steps on top.
+                                  #   The monitor reads only alerts_config.py; `--config` previews it
 examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
 ```
 
@@ -1224,7 +1239,13 @@ an S/R zone broken and held beyond ENDS there, a band is at least the clustering
 support at the CLOSE above it, break bars per timeframe; the market layers only APPEND, each footer
 menu touches only its own traces, levels and candles rewind and the timetable does not, open lines
 hide on a long chart; bad settings refused by name; notebook 23 states nothing and its config is a
-control panel the chart accepts; docs/CHART_GUIDE.md names every pattern). **890 total.**
+control panel the chart accepts; docs/CHART_GUIDE.md names every pattern; a zone from the warm-up
+starts at the view and one that died there is not drawn, rewind on or off -- the rewind path drew it
+BACKWARDS from the first candle). `test_patterns.py` also: a STRICT trendline is clear of every
+candle it spans (no close beyond; no wick either at wick_tol 0) and passes exactly through two of its
+touches, strict lines are causal by truncation, the default fit is unchanged and lets closes through
+on the same data, a bad fit is refused. `test_alerts.py` also: the strict trendline alert never
+repaints, and alerts_config_trendlines.py loads with every trendline alert strict. **898 total.**
 
 ## 12. Known limitations / honest caveats
 
