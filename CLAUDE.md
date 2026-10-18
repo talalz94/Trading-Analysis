@@ -12,7 +12,9 @@
 > [`docs/ALERTS_CATALOGUE.md`](docs/ALERTS_CATALOGUE.md) (GENERATED: every instrument, timeframe,
 > pattern, alert kind and setup an alert can use) · [`docs/ALERTS_CLOUD.md`](docs/ALERTS_CLOUD.md)
 > (running the alerts on Google Cloud's free tier, step by step) · [`docs/NEWS.md`](docs/NEWS.md)
-> (the economic calendar: sources and their faults, criticality, sentiment, alerts, the chart strip).
+> (the economic calendar: sources and their faults, criticality, sentiment, alerts, the chart strip) ·
+> [`docs/CHART_GUIDE.md`](docs/CHART_GUIDE.md) (every chart layer, every chart and candlestick pattern
+> name, and the setting behind each).
 >
 > **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
 > before proposing any new strategy idea, because most of them have already been tested and killed.
@@ -52,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **871 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **890 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -192,6 +194,12 @@ quant/
 │   │                    #     add_trendline_ids() -> tl_res_n/tl_sup_n = WHICH line is live per bar,
 │   │                    #     so a trade can name the exact line it broke, not just its timeframe.
 │   ├── volatility.py    #   atr, add_atr, add_supertrend (recursive part in numba)
+│   ├── levels.py        #   prev-day/week/session levels (per-bar columns), VWAP, round numbers,
+│   │                    #     level_events; period_levels(frame, "D"|"W"|"M"|"Y", tz) = the PREVIOUS
+│   │                    #     period's high/low as the stretch they apply to (equal to the per-bar
+│   │                    #     helpers on 100% of bars; a partly-loaded period is never a source;
+│   │                    #     Monday's previous day is Friday); session_windows({name: (tz, open,
+│   │                    #     close)}) = each market's hours in UTC in ITS OWN clock (DST included)
 │   └── structure.py     #   add_swings (swing_last_low/high = ref_col stop sources), add_pivot_points,
 │                        #     add_trend_structure (HH/HL/LH/LL from fixed fractals) +
 │                        #     add_zigzag_structure (ATR-adaptive swings; ~1/3 the lag — preferred),
@@ -449,6 +457,13 @@ quant/
 │   │                    #     index) addressing only news traces. Rewind keeps the schedule and
 │   │                    #     clips only the ACTUALS, which sit on invisible markers of their own.
 │   │                    #     pattern_figure(news=, news_show=, news_tz=); lab: NEWS / NEWS_SHOW
+│   ├── markets.py       #   add_period_levels (dotted steps, a PDH/PDL label on the CURRENT period
+│   │                    #     only), add_sessions (a ribbon per market along the TOP on an overlay
+│   │                    #     axis, hover on the opens, dotted open lines that start hidden on a chart
+│   │                    #     longer than 7 days), add_candle_markers; `Levels:` / `Sessions:` footer
+│   │                    #     dropdowns on the row UNDER News (one row of three overlapped below
+│   │                    #     ~1,400 px; two fit to ~1,100). Appended after everything, menus by index
+│   │                    #     to their own traces only; levels + candles rewind, the timetable not
 │   └── heatmaps.py      #   monthly-returns, hour×weekday, parameter-sweep heatmaps
 ├── scenarios/           # VERSIONED, COMPOSABLE setups: Scenario × Stop × TP × Secondary × params
 │   ├── base.py          #   Scenario/StopMethod/TPMethod/SecondaryMethod ABCs + registries +
@@ -619,6 +634,12 @@ quant/
 │   │                  #     both -- each value has one home. Files are run fresh with runpy, so an
 │   │                  #     edit is read on the next call; list_strategies(), load_strategy();
 │   │                  #     market_view_config() (no strategy: the market view never trades)
+│   ├── chart_layers.py#   chart_layers(cfg, symbol, source, view_start, end) -> pattern_figure kwargs
+│   │                  #     for CHART_PATTERNS / PATTERNS_TUNED / CANDLE_PATTERNS / SR_STYLE / SR_ROLES
+│   │                  #     / SR_COLOURS / PERIOD_LEVELS (+ _ON, LEVELS_TZ; read off 1h bars from the
+│   │                  #     period before the first visible one) / SESSIONS (+ _ON, SESSION_OPEN_LINES).
+│   │                  #     Absent settings -> {}: every older chart unchanged. Used by fvg_lab and
+│   │                  #     market_view, so a setting means one thing in every notebook
 │   ├── market_view.py #   market_view(CFG) -> MarketView: ONE INSTRUMENT'S LATEST DAYS, no trades.
 │   │                  #     INSTRUMENTS {name: dict(symbol, source)} + INSTRUMENT; the window is the
 │   │                  #     last DAYS counted in CANDLES ending at the latest CLOSED one (gold on a
@@ -862,7 +883,13 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 ├── ema_mtf.py · session_timing.py · exit_design.py   # worked examples (each with a description)
 └── README.md
 scenarios/presets/       # tuned, named, versioned scenario configs (JSON; git-tracked, reloadable)
-notebooks/               # market_view.ipynb + market_view_config.py (2026-10-15) = the latest 2 days of
+notebooks/               # 23_break_confirmation_news + nb23_config.py (2026-10-18) = notebook 21's
+                         #   settings value for value (generated FROM nb21_config, two S/R values
+                         #   differ on purpose) + news, CHART_PATTERNS / CANDLE_PATTERNS, period levels,
+                         #   sessions, and S/R as role-coloured BANDS retired after ~1h beyond
+                         #   ({"5m": 12, "15m": 4, "1h": 2, "4h": 2}). Measured on nb21's own window:
+                         #   its 5m layer drew 63 zones, 16 live at a time, nearly all already broken
+                         # market_view.ipynb + market_view_config.py (2026-10-15) = the latest 2 days of
                          #   any instrument on 1m (BTC, ETH, NASDAQ = Dukascopy E_NQ-100, SP500, DOW,
                          #   GOLD, SILVER, OIL, USDJPY, EURUSD, GBPUSD), trendlines / S/R / FVGs from
                          #   1m 5m 15m 1h 4h, the news strip, NO strategy; quant/research/market_view
@@ -1190,7 +1217,14 @@ candles ending at the latest CLOSED one, the forming candle is dropped from ever
 weekend makes the window reach back past it, a feature list without the chart TF is refused, OPEN_WITH
 names each layer the way the chart does, each layer gets exactly its timeframes, the notebook states
 and defines nothing, and another machine's feed log merges without losing or doubling an observation
--- 8 rules mutation-checked). **871 total.**
+-- 8 rules mutation-checked). `test_chart_layers.py` (period levels equal the per-bar helpers, use only the
+period before, never a partial one, and Monday's yesterday is Friday; a day starts at midnight in the
+zone asked for; a session opens at its own market's time through DST, Sydney's Monday is Sunday UTC;
+an S/R zone broken and held beyond ENDS there, a band is at least the clustering tolerance and turns
+support at the CLOSE above it, break bars per timeframe; the market layers only APPEND, each footer
+menu touches only its own traces, levels and candles rewind and the timetable does not, open lines
+hide on a long chart; bad settings refused by name; notebook 23 states nothing and its config is a
+control panel the chart accepts; docs/CHART_GUIDE.md names every pattern). **890 total.**
 
 ## 12. Known limitations / honest caveats
 

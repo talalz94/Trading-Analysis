@@ -173,6 +173,10 @@ notebooks look at them:
 - [`notebooks/evaluate.ipynb`](notebooks/evaluate.ipynb) — the strategy named in `evaluate_config.py`
   and its arms over 19 quarters, chosen on train and judged on forward. Run this before believing a
   window.
+- [`notebooks/23_break_confirmation_news.ipynb`](notebooks/23_break_confirmation_news.ipynb) — notebook
+  21's strategy with the news strip, market sessions, previous day/week/month/year highs and lows,
+  chart and candlestick patterns, and S/R zones as bands coloured by role. Every layer and pattern:
+  [`docs/CHART_GUIDE.md`](docs/CHART_GUIDE.md).
 - [`notebooks/market_view.ipynb`](notebooks/market_view.ipynb) — no strategy: the latest two days of
   any instrument (BTC, Nasdaq futures, gold, USDJPY ... `INSTRUMENT` in `market_view_config.py`) on
   a 1-minute chart, with trendlines, S/R zones and fair value gaps from 1m to 4h and the news strip.

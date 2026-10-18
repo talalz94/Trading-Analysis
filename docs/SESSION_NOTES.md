@@ -2407,3 +2407,29 @@ themselves are open, free and official: `quant/news/official.py`, docs/NEWS.md h
   logging FILTER; FRED refuses a first-prints request whose real-time span holds more than ~2,000
   vintages (weekly claims since 1990), fine from 2015; the browser pane cannot open file:// URLs --
   serve reports/ with the `reports` launch config instead.
+
+### Notebook 23, market hours, period levels, and S/R as bands (2026-10-18)
+
+The user's notebook 21 chart had dozens of S/R lines that price cut straight through. Two causes:
+- the tuned "normal" setting has `break_bars = 0` on 5m and 15m, so a zone there is never retired;
+- with rewind OFF, `pattern_figure` drew a zone's last revision to the right edge even when it had
+  died. That was a bug: only rewind mode honoured a segment's end.
+Measured on nb21's own window (BTC 5m, 1 Sep - 19 Oct): the 5m layer drew 63 zones with 16 live at
+a time. Retiring after ~1h beyond (`{"5m": 12, "15m": 4, "1h": 2, "4h": 2}`) leaves the 1h/4h layers
+with ~5 live zones each and the 5m layer with almost none -- a 4-touch 5m level rarely survives an
+hour beyond it. Dead zones now end where they died in every mode.
+
+New, all opt-in (absent = byte-identical charts):
+- `SR_STYLE="band"` (the clustering tolerance, widened to every pivot) and `SR_ROLES` (blue support
+  / orange resistance, the colour changing at the CLOSE that crossed the level);
+- `period_levels` / `session_windows` (quant.indicators.levels) drawn by quant/viz/markets.py;
+- `CHART_PATTERNS` / `CANDLE_PATTERNS`, through `quant/research/chart_layers.py` for fvg_lab and
+  the market view alike;
+- notebook 23, generated FROM nb21_config.py (two S/R values differ on purpose);
+- docs/CHART_GUIDE.md, with every pattern name tested against the code.
+
+Gotchas:
+- the footer menus are placed in fractions of the plot's width, so one row of three overlapped
+  below ~1,400 px; Levels and Sessions moved to a row under News;
+- the S/R "none" I first read as a bug was the FVG row, correctly showing that all gaps start hidden;
+- the browser pane cannot open file:// -- serve reports/ with the `reports` launch config.
