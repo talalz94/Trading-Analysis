@@ -177,6 +177,7 @@ library is a screenshot of something that no longer happens.
 
 | notebook | config | what it is for |
 |---|---|---|
+| **`23_break_confirmation_news`** | `nb23_config.py` | notebook 21 + news, patterns, previous D/W/M/Y highs and lows, market sessions, and S/R as role-coloured bands (docs/CHART_GUIDE.md) |
 | **`market_view`** | `market_view_config.py` | **no strategy**: any instrument's latest days on 1m, with lines, zones and gaps from 1m to 4h and the news |
 | `22_other_markets` | `nb22_config.py` (+ `nb21_config.py`, read fresh) | notebook 21's strategy on gold, oil and FX beside BTC, against a metronome |
 | **`lab`** | `lab_config.py` + `strategies/*.py` | **start here** -- any strategy on any window |
