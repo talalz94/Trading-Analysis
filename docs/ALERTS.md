@@ -188,6 +188,14 @@ candle itself. In the research version, "2 whole candles below" fired only when 
 that crossed the line was already wholly below it: 0.02 a day on BTC 5m, against 0.8 counted this
 way.
 
+**Which lines.** `fit="strict"` (with `touch_tol=0.3`) only accepts a line that runs exactly
+through two real swing extremes with no candle closing through it before it is drawn; the default
+fit checks the swings alone, so a wick can cross a line by two ATR (docs/CHART_GUIDE.md,
+"Trendlines"). Strict roughly halves the lines and the alerts: on Gold + USDJPY + BTC, Mar–Aug
+2026, "formed" on 1h/4h went from ~0.5 to ~0.3 a day. **`alerts/alerts_config_trendlines.py`** is
+a ready-made config built on it: strict trendline alerts plus a few chosen candlestick and chart
+patterns, with the steps to preview it and switch to it at the top of the file.
+
 **Rules that keep it honest:**
 - **A setting a kind does not have is refused by name.** `perod=14` on an RSI alert is an error,
   not a silent default.

@@ -126,6 +126,9 @@ dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom',
 | `confirm` | `0` | then, within N candles, one of the break's colour must close beyond the WHOLE break candle (notebook 21's rule; 0 = off) |
 | `min_touches` | `3` | pivots the line must touch |
 | `swing_size` | `3.5` | zigzag pivot size in ATRs: bigger = longer, fewer lines |
+| `fit` | `'ransac'` | ransac = the default fit \| strict = exactly through two swing extremes, and no candle closes through it before it is drawn |
+| `touch_tol` | `0.6` | how far off the line a pivot may sit and still count as a touch, in ATR (0.3 with strict) |
+| `wick_tol` | `0.15` | strict only: how far a wick may poke through the line, in ATR |
 
 ```python
 dict(on=True, name="...", kind="trendline", event='both', closes=2, markets="all", tfs="1h")
