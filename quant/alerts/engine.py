@@ -16,6 +16,12 @@ does the same right thing:
 5. Urgent events are emailed on the tick that finds them; everything else waits for the digest,
    at most one email per `digest_minutes`. Any email carries EVERY pending event, so the markets
    that fired on the same bar close arrive together.
+6. With `every_minutes` (DELIVERY) the clock decides instead: one email per boundary (15 = :00 :15
+   :30 :45 UTC), sent once that boundary's bars are final and carrying everything found since --
+   urgent alerts and news included. A timeframe finer than the boundary is fetched and judged only
+   there, so five 1m candles through a line in one quarter hour arrive in ONE email.
+7. A 1m alert reads 1m bars, fetched and stored apart from the 5m ones (`base_of`); every other
+   timeframe is still resampled from 5m.
 """
 from __future__ import annotations
 
@@ -23,16 +29,16 @@ import json
 import math
 import socket
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from quant.data.base import TIME_COL
 
 from .compose import compose
-from .config import TF_MINUTES, AlertsConfig
+from .config import TF_MINUTES, AlertsConfig, base_of
 from .detectors import REGISTRY
-from .feeds import BAR
+from .feeds import BASE_BAR
 from .store import State, iso, ts
 
 
@@ -51,18 +57,19 @@ def _tf(tf) -> pd.Timedelta:
     return pd.Timedelta(minutes=TF_MINUTES[tf])
 
 
-def history_days(cfg: AlertsConfig) -> int:
-    """Calendar days of 5m bars to keep: the longest warm-up, x7/5 for weekends, plus slack."""
+def history_days(cfg: AlertsConfig, base: str = "5m") -> int:
+    """Calendar days of `base` bars to keep: the longest warm-up of the timeframes built from them,
+    x7/5 for weekends, plus slack."""
     need = max(((REGISTRY[a.kind].warmup_bars(a.params) + 5) * TF_MINUTES[tf]
-                for a in cfg.alerts for tf in a.tfs), default=0)
+                for a in cfg.alerts for tf in a.tfs if base_of(tf) == base), default=0)
     return math.ceil(need / 1440 * 7 / 5) + 3
 
 
-def tf_bars(bars: pd.DataFrame, tf: str) -> pd.DataFrame:
-    """5m bars -> `tf` bars, buckets on UTC boundaries (4h = 00, 04, 08 ... UTC)."""
+def tf_bars(bars: pd.DataFrame, tf: str, base: str = "5m") -> pd.DataFrame:
+    """`base` bars -> `tf` bars, buckets on UTC boundaries (4h = 00, 04, 08 ... UTC)."""
     if bars.empty:
         return bars.copy()
-    if tf == "5m":
+    if tf == base:
         return bars.reset_index(drop=True)
     key = bars[TIME_COL].dt.floor(f"{TF_MINUTES[tf]}min")
     g = bars.groupby(key, sort=True)
@@ -73,14 +80,14 @@ def tf_bars(bars: pd.DataFrame, tf: str) -> pd.DataFrame:
     return out.reset_index()
 
 
-def final_bars(bars: pd.DataFrame, tf: str, now: pd.Timestamp, d) -> pd.DataFrame:
+def final_bars(bars: pd.DataFrame, tf: str, now: pd.Timestamp, d, base: str = "5m") -> pd.DataFrame:
     """The `tf` bars that will not change any more (see the module docstring, step 2). Called
     only on bars the feed has just returned, so `now` is also when the feed last answered."""
-    f = tf_bars(bars, tf)
+    f = tf_bars(bars, tf, base)
     if f.empty:
         return f
     end = f[TIME_COL] + _tf(tf)
-    covered = (bars[TIME_COL].iloc[-1] + BAR >= end) | (
+    covered = (bars[TIME_COL].iloc[-1] + BASE_BAR[base] >= end) | (
         now >= end + pd.Timedelta(minutes=d.close_grace_minutes))
     ok = (now >= end + pd.Timedelta(seconds=d.settle_seconds)) & covered
     return f[ok.to_numpy()].reset_index(drop=True)
@@ -104,26 +111,43 @@ def judge(alert, frame: pd.DataFrame, after: Optional[pd.Timestamp], tf: str):
     return hits
 
 
-def _due(cfg, state, now) -> List[str]:
-    """Markets with a bar due: some pair's next bar has closed, or the pair is new -- unless the
-    market is backing off (its feed failed, or had nothing new: a weekend)."""
+def _feed_key(m: str, base: str) -> str:
+    """How a market's FEED is named in the state: the 5m one keeps its old plain name."""
+    return m if base == "5m" else f"{m}@{base}"
+
+
+def _due(cfg, state, now) -> List[Tuple[str, str]]:
+    """(market, base) feeds with a bar due: some pair's next bar has closed, or the pair is new --
+    unless that feed is backing off (it failed, or had nothing new: a weekend). With
+    `every_minutes`, a bar finer than the boundary waits for the boundary it closes before."""
     settle = pd.Timedelta(seconds=cfg.delivery.settle_seconds)
+    cad = cfg.delivery.every_minutes
     due = []
     for (m, tf), alerts in cfg.pairs().items():
-        wait = ts(state.get(f"wait_until:{m}"))
+        base = base_of(tf)
+        if (m, base) in due:
+            continue
+        wait = ts(state.get(f"wait_until:{_feed_key(m, base)}"))
         if wait is not None and now < wait:
             continue
         for a in alerts:
             c = state.cursor(a.name, m, tf)
-            if c is None or now >= c + 2 * _tf(tf) + settle:
-                due.append(m)
+            if c is None:
+                due.append((m, base))
                 break
-    return list(dict.fromkeys(due))
+            closes = c + 2 * _tf(tf)
+            if cad:
+                closes = closes.ceil(f"{cad}min")
+            if now >= closes + settle:
+                due.append((m, base))
+                break
+    return due
 
 
 def _backoff(state, m, now, why: Optional[str]):
     """After a failed or empty poll, wait 1, 2, 4 ... 15 minutes before asking again; reset on
-    the first poll that brings bars. Bounds a dead feed AND a shut market to ~4 polls an hour."""
+    the first poll that brings bars. Bounds a dead feed AND a shut market to ~4 polls an hour.
+    `m` is the feed's key (_feed_key)."""
     if why is None:
         state.put(f"misses:{m}", 0)
         state.put(f"wait_until:{m}", iso(now))
@@ -133,47 +157,58 @@ def _backoff(state, m, now, why: Optional[str]):
     state.put(f"wait_until:{m}", iso(now + pd.Timedelta(minutes=min(2 ** (n - 1), 15))))
 
 
-def refresh_bars(cfg, state, feed, markets, now, report) -> List[str]:
-    """Fetch the new 5m bars of `markets` into the bar store. Returns the markets that answered."""
-    keep = pd.Timedelta(days=history_days(cfg))
-    starts, stored = {}, {}
-    for m in markets:
-        b = state.bars(m)
-        stored[m] = b
-        recent = not b.empty and b[TIME_COL].iloc[-1] >= now - keep
-        starts[m] = (b[TIME_COL].iloc[-1] - 2 * BAR) if recent else (now - keep).floor("D")
-    got = feed.fetch([cfg.markets[m] for m in markets], starts, now)
+def refresh_bars(cfg, state, feed, due, now, report) -> List[Tuple[str, str]]:
+    """Fetch the new bars of each (market, base) in `due` into the bar store. Returns the feeds
+    that answered."""
     ok = []
-    for m, new in got.items():
-        if isinstance(new, Exception):
-            report.errors[m] = f"{type(new).__name__}: {new}"
-            state.put(f"feed_error:{m}", f"{iso(now)} {report.errors[m]}")
-            _backoff(state, m, now, "failed")
-            continue
-        old = stored[m]
-        before = None if old.empty else old[TIME_COL].iloc[-1]
-        if not new.empty:                            # an empty answer is not merged: its columns
-            b = pd.concat([old, new]) if not old.empty else new        # carry no dtypes
-            b = b.drop_duplicates(TIME_COL, keep="last").sort_values(TIME_COL)
-            b = b[b[TIME_COL] >= now - keep].reset_index(drop=True)
-            state.save_bars(m, b)
-        grew = not new.empty and (before is None or new[TIME_COL].iloc[-1] > before)
-        _backoff(state, m, now, None if grew else "nothing new")
-        state.put(f"last_ok_poll:{m}", iso(now))
-        ok.append(m)
-        report.fetched.append(m)
+    for base in dict.fromkeys(b for _, b in due):
+        markets = [m for m, b in due if b == base]
+        keep = pd.Timedelta(days=history_days(cfg, base))
+        bar = BASE_BAR[base]
+        starts, stored = {}, {}
+        for m in markets:
+            b = state.bars(m, base)
+            stored[m] = b
+            recent = not b.empty and b[TIME_COL].iloc[-1] >= now - keep
+            starts[m] = (b[TIME_COL].iloc[-1] - 2 * bar) if recent else (now - keep).floor("D")
+        ms = [cfg.markets[m] for m in markets]
+        # the 5m call is made exactly as it always was, so any feed written for it still works
+        got = (feed.fetch(ms, starts, now) if base == "5m"
+               else feed.fetch(ms, starts, now, base=base))
+        for m, new in got.items():
+            key = _feed_key(m, base)
+            label = m if base == "5m" else f"{m} {base}"
+            if isinstance(new, Exception):
+                report.errors[label] = f"{type(new).__name__}: {new}"
+                state.put(f"feed_error:{key}", f"{iso(now)} {report.errors[label]}")
+                _backoff(state, key, now, "failed")
+                continue
+            old = stored[m]
+            before = None if old.empty else old[TIME_COL].iloc[-1]
+            if not new.empty:                        # an empty answer is not merged: its columns
+                b = pd.concat([old, new]) if not old.empty else new    # carry no dtypes
+                b = b.drop_duplicates(TIME_COL, keep="last").sort_values(TIME_COL)
+                b = b[b[TIME_COL] >= now - keep].reset_index(drop=True)
+                state.save_bars(m, b, base)
+            grew = not new.empty and (before is None or new[TIME_COL].iloc[-1] > before)
+            _backoff(state, key, now, None if grew else "nothing new")
+            state.put(f"last_ok_poll:{key}", iso(now))
+            ok.append((m, base))
+            report.fetched.append(label)
     return ok
 
 
-def detect(cfg, state, markets, now, report, news_note=None):
-    """Judge every new final bar of `markets`; record events and advance cursors. `news_note`
-    (from the news step) adds "news: USD CPI m/m in 12 min" to an alert closing near news."""
+def detect(cfg, state, fed, now, report, news_note=None):
+    """Judge every new final bar of the (market, base) feeds in `fed`; record events and advance
+    cursors. `news_note` (from the news step) adds "news: USD CPI m/m in 12 min" to an alert
+    closing near news."""
     d = cfg.delivery
     late_after = pd.Timedelta(minutes=d.catchup_max_age_minutes)
     for (m, tf), alerts in cfg.pairs().items():
-        if m not in markets:
+        base = base_of(tf)
+        if (m, base) not in fed:
             continue
-        frame = final_bars(state.bars(m), tf, now, d)
+        frame = final_bars(state.bars(m, base), tf, now, d, base)
         if frame.empty:
             continue
         last = frame[TIME_COL].iloc[-1]
@@ -214,14 +249,29 @@ def detect(cfg, state, markets, now, report, news_note=None):
                 state.set_cursor(a.name, m, tf, last)
 
 
+def _email_due(cfg, state, now, pending) -> bool:
+    """Is an email due now? Without `every_minutes`: an urgent event, or the digest is up. With it:
+    the first look after a boundary's bars are final, once per boundary -- whether or not anything
+    is waiting, so an event found later in the quarter hour waits for the next boundary."""
+    d = cfg.delivery
+    if d.every_minutes:
+        slot = now.floor(f"{d.every_minutes}min")
+        if now < slot + pd.Timedelta(seconds=d.settle_seconds) or state.get("email_slot") == iso(slot):
+            return False
+        state.put("email_slot", iso(slot))
+        return bool(pending)
+    if not pending:
+        return False
+    urgent = any(e["priority"] == "urgent" and not e["late"] for e in pending)
+    last = ts(state.get("last_email"))
+    return urgent or last is None or now - last >= pd.Timedelta(minutes=d.digest_minutes)
+
+
 def deliver(cfg, state, notifier, now, report):
     """Queue an email if one is due, then send everything in the outbox that is due."""
     pending = state.pending()
-    if pending:
-        urgent = any(e["priority"] == "urgent" and not e["late"] for e in pending)
-        last = ts(state.get("last_email"))
-        digest = last is None or now - last >= pd.Timedelta(minutes=cfg.delivery.digest_minutes)
-        if urgent or digest:
+    if pending or cfg.delivery.every_minutes:
+        if _email_due(cfg, state, now, pending):
             subject, text, html = compose(pending, cfg, now, host=socket.gethostname())
             with state:
                 state.queue_email(subject, text, html, [e["id"] for e in pending], now)
@@ -263,7 +313,9 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
     if due:
         ok = refresh_bars(cfg, state, feed, due, now, report)
         detect(cfg, state, ok, now, report, news_note=note)
-    deliver(cfg, state, notifier, now, report)
+    every = cfg.delivery.every_minutes
+    if not every:
+        deliver(cfg, state, notifier, now, report)
     if report.after:
         # news results still waiting for their number: asked only now that the candle emails are
         # out, and whatever came in is sent in this same tick
@@ -272,6 +324,8 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
                 fn()
             except Exception as e:
                 report.errors["news results"] = f"{type(e).__name__}: {e}"
+    if every or report.after:
+        # on a clock, ONE email per boundary: the results asked for above ride in it
         deliver(cfg, state, notifier, now, report)
     if cfg.news.on and hasattr(news, "background"):
         # the slow fetches nothing in this tick waits for -- after the candle emails are out
@@ -287,16 +341,24 @@ def preview(cfg: AlertsConfig, feed, *, hours: float = 48, now=None):
     """What WOULD have fired over the last `hours`, as the email it would have sent -- without
     touching the monitor's state. Returns (events, subject, text, html, feed errors)."""
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
-    keep = pd.Timedelta(days=history_days(cfg))
-    start = (now - keep).floor("D")
-    got = feed.fetch(list(cfg.markets.values()), {m: start for m in cfg.markets}, now)
+    got, errors = {}, {}
+    for base in dict.fromkeys(base_of(tf) for _, tf in cfg.pairs()):
+        keep = pd.Timedelta(days=history_days(cfg, base))
+        start = (now - keep).floor("D")
+        names = list(dict.fromkeys(m for m, tf in cfg.pairs() if base_of(tf) == base))
+        ms = [cfg.markets[m] for m in names]          # only the markets this base is needed for
+        got[base] = (feed.fetch(ms, {m: start for m in names}, now) if base == "5m"
+                     else feed.fetch(ms, {m: start for m in names}, now, base=base))
+        errors.update({(m if base == "5m" else f"{m} {base}"): f"{type(v).__name__}: {v}"
+                       for m, v in got[base].items() if isinstance(v, Exception)})
     since = now - pd.Timedelta(hours=hours)
     events = []
     for (m, tf), alerts in cfg.pairs().items():
-        bars = got.get(m)
+        base = base_of(tf)
+        bars = got[base].get(m)
         if bars is None or isinstance(bars, Exception) or bars.empty:
             continue
-        frame = final_bars(bars, tf, now, cfg.delivery)
+        frame = final_bars(bars, tf, now, cfg.delivery, base)
         for a in alerts:
             prev, cool = None, a.cooldown_bars * _tf(tf)
             for row, h in judge(a, frame, None, tf):
@@ -312,7 +374,6 @@ def preview(cfg: AlertsConfig, feed, *, hours: float = 48, now=None):
                                    side=h.get("side", ""), price=float(row["close"]),
                                    detail=json.dumps({"tv": cfg.markets[m].tv,
                                                       "note": h.get("note", "")}), late=0))
-    errors = {m: f"{type(v).__name__}: {v}" for m, v in got.items() if isinstance(v, Exception)}
     if not events:
         return events, None, None, None, errors
     subject, text, html = compose(events, cfg, now, host=socket.gethostname(),

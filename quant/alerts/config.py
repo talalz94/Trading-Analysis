@@ -22,7 +22,14 @@ DEFAULT_CONFIG = ROOT / "alerts" / "alerts_config.py"
 DEFAULT_STATE = ROOT / "alerts" / "state"
 
 BASE_TF = "5m"                                   # every market is stored at 5m; the rest is resampled
-TF_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240}
+TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240}
+BASE_MINUTES = {"1m": 1, "5m": 5}                # the bars a market is FETCHED at
+
+
+def base_of(tf: str) -> str:
+    """The stored bars a timeframe is built from: 1m from its own 1m bars (fetched only for a
+    market some 1m alert watches), everything else from the 5m bars, as it always was."""
+    return "1m" if TF_MINUTES[tf] < 5 else BASE_TF
 SOURCES = ("binance", "dukascopy")
 PRIORITIES = ("urgent", "normal")
 
@@ -59,6 +66,12 @@ class Delivery:
                                                  # lags ~1 min, and waiting the same for every market
                                                  # puts one bar close's alerts in ONE email
     subject_prefix: str = "[Alerts]"
+    every_minutes: int = 0                       # >0: email ONLY on these clock boundaries (15 =
+                                                 # :00 :15 :30 :45 UTC), one email per boundary
+                                                 # carrying everything found since -- urgent alerts
+                                                 # and news included. 0 = urgent at once + digest
+    collapse_repeats: bool = False               # one row per alert, market, timeframe and signal
+                                                 # in an email, with how many times and when
 
 
 @dataclass(frozen=True)
@@ -177,7 +190,16 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
             raise ConfigError(f"alert {name!r}: {e}") from None
         (alerts if on else off).append(alert)
 
-    delivery = Delivery(**(ns.get("DELIVERY") or {}))
+    dv = dict(ns.get("DELIVERY") or {})
+    known = set(Delivery.__dataclass_fields__)
+    if set(dv) - known:
+        raise ConfigError(f"DELIVERY has unknown settings {sorted(set(dv) - known)}; "
+                          f"known: {sorted(known)}")
+    delivery = Delivery(**dv)
+    em = delivery.every_minutes
+    if not isinstance(em, int) or em < 0 or (em and 60 % em):
+        raise ConfigError(f"DELIVERY every_minutes must be 0 or a whole divisor of 60 (5, 10, 15, "
+                          f"30, 60), got {em!r}")
     try:
         news = parse_news(ns.get("NEWS"))
     except NewsConfigError as e:

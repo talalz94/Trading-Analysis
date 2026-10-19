@@ -80,12 +80,15 @@ NEWS = dict(on=True, currencies={"USD": "medium", "EUR": "high"}, timezone="Asia
 
 
 class Rig:
-    def __init__(self, tmp_path, news_cfg=None, events=None, alerts=(), spikes=(), **fake):
+    def __init__(self, tmp_path, news_cfg=None, events=None, alerts=(), spikes=(), delivery=None,
+                 categories=None, **fake):
         tmp_path.mkdir(parents=True, exist_ok=True)
         p = tmp_path / "cfg.py"
         cfg = dict(NEWS, **(news_cfg or {}))
         p.write_text(f"MARKETS = {{'A': dict(symbol='XAUUSD', source='dukascopy')}}\n"
-                     f"ALERTS = {list(alerts)!r}\nNEWS = {cfg!r}\n")
+                     f"ALERTS = {list(alerts)!r}\nNEWS = {cfg!r}\n"
+                     + (f"DELIVERY = {delivery!r}\n" if delivery else "")
+                     + (f"CATEGORIES = {categories!r}\n" if categories else ""))
         self.cfg = load_config(p)
         self.state = State(tmp_path / "state")
         _OPEN.append(self.state)
@@ -378,3 +381,59 @@ def test_news_and_signals_on_one_tick_share_one_email(tmp_path):
     subject, text, html = r.mail.sent[-1]
     assert "+1 news" in subject and text.startswith("NEWS")
     assert html.index(">News</h3>") < html.index("spike")
+
+
+# ── on a 15-minute clock (DELIVERY every_minutes) ───────────────────────────────────────────
+def test_on_a_clock_each_reminder_rides_a_boundary_email_early_never_late(tmp_path):
+    # 12:40 is off the quarter hour: its 60 / 30 / 15 minute reminders fall at 11:40 / 12:10 /
+    # 12:25, and each goes in the email of the boundary BEFORE that -- never after it
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:40")),
+            news_cfg=dict(remind_before={"high": (60, 30, 15)}),
+            delivery=dict(every_minutes=15))
+    sent = []
+    for t in pd.date_range(at("2026-10-14 11:20"), at("2026-10-14 12:45"), freq="1min"):
+        n = len(r.mail.sent)
+        r.tick(f"{t:%Y-%m-%d %H:%M}")
+        sent += [t] * (len(r.mail.sent) - n)
+    assert sent == [at("2026-10-14 11:32"), at("2026-10-14 12:02"), at("2026-10-14 12:17")]
+    assert all("USD CPI m/m in" in s for s in r.subjects())
+    assert [x["status"] for x in r.rows(what="reminder")] == ["sent"] * 3
+
+
+def test_a_day_of_reminders_is_seven_emails_and_all_before_the_release(tmp_path):
+    offs = (1440, 720, 360, 120, 60, 30, 15)
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")),
+            news_cfg=dict(remind_before={"high": offs}), delivery=dict(every_minutes=15))
+    for t in pd.date_range(at("2026-10-13 12:00"), at("2026-10-14 12:45"), freq="5min"):
+        r.tick(f"{t:%Y-%m-%d %H:%M}")
+    rows = sorted(r.rows(what="reminder"), key=lambda x: int(x["tf"][2:]), reverse=True)
+    assert [x["tf"] for x in rows] == [f"T-{k}" for k in offs]
+    assert len(r.mail.sent) == 7 and all(x["status"] == "sent" for x in rows)
+    assert all(pd.Timestamp(x["created"]) < at("2026-10-14 12:30") for x in rows)
+
+
+def test_news_goes_last_when_placed_after_the_other_sections(tmp_path):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")), alerts=[SPIKE],
+            spikes=["2026-10-14 12:05"], categories=("Alerts", "News"))
+    r.tick("2026-10-14 11:00")
+    r.tick("2026-10-14 12:15")
+    subject, text, html = r.mail.sent[-1]
+    assert "+1 news" in subject and not text.startswith("NEWS")
+    assert text.index("spike") < text.index("NEWS") < text.index("-- quant alerts")
+    assert html.index("spike") < html.index(">News</h3>")
+
+
+def test_on_a_clock_a_result_polled_at_the_boundary_rides_in_that_email(tmp_path):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")), alerts=[SPIKE],
+            spikes=["2026-10-14 12:30"], news_cfg=dict(remind_before={}),
+            delivery=dict(every_minutes=15))
+    r.tick("2026-10-14 12:00")
+
+    def poll(now, pending=None):
+        r.news.ev = calendar(rel("2026-10-14 12:30", actual="0.5%"))   # the number lands
+        return {}
+    r.news.poll_results = poll
+    r.tick("2026-10-14 12:47")               # the 12:45 boundary: candles, then the poll, then ONE
+    assert len(r.mail.sent) == 1             # email with both
+    subject, text, _ = r.mail.sent[0]
+    assert "spike" in text and "0.5%" in text

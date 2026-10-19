@@ -44,7 +44,7 @@ Too many to list. Use Dukascopy's own code, e.g. `AAPL.US/USD`, `TSLA.US/USD`, `
 
 ## 2. Timeframes (tfs)
 
-`5m`, `15m`, `30m`, `1h`, `2h`, `4h`
+`1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`
 
 
 
