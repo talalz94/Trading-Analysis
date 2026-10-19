@@ -6,6 +6,7 @@
     python -m quant.alerts run          the monitor itself (what the scheduled task starts)
     python -m quant.alerts status       is it running, when did it last email, what is queued
     python -m quant.alerts news         the covered calendar for the next --days, with reminders
+    python -m quant.alerts show REF     the chart of one alert, from the ref on its email row
 """
 from __future__ import annotations
 
@@ -20,13 +21,17 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m quant.alerts", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["list", "check", "test-email", "tick", "run", "status",
-                                        "news"])
+                                        "news", "show"])
+    ap.add_argument("ref", nargs="?", help="show: the ref on an email row, e.g. "
+                                           "btc.1m.202610191349.trendline-broken")
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--hours", type=float, default=48, help="check: how far back to look")
     ap.add_argument("--days", type=float, default=7, help="news: how far ahead to look")
     ap.add_argument("--write-docs", action="store_true",
                     help="list: rewrite docs/ALERTS_CATALOGUE.md instead of printing")
+    ap.add_argument("--after", type=int, default=60, help="show: candles drawn after the alert")
+    ap.add_argument("--no-open", action="store_true", help="show: write the chart, do not open it")
     a = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):           # a cp1252 console cannot print the bolt
         try:
@@ -42,6 +47,25 @@ def main(argv=None) -> int:
     if a.command == "status":
         from .runner import status
         print(status(a.state))
+        return 0
+
+    if a.command == "show":
+        from .show import alert_chart
+        if not a.ref:
+            print("show needs the ref from an email row, e.g. "
+                  "python -m quant.alerts show btc.1m.202610191349.trendline-broken")
+            return 2
+        try:
+            c = alert_chart(a.ref, config=a.config if a.config != DEFAULT_CONFIG else None,
+                            after=a.after, show=not a.no_open)
+        except (ValueError, LookupError) as e:
+            print(e)
+            return 1
+        said = "; ".join(h["what"] + (f" ({h['note']})" if h.get("note") else "") for h in c.hits)
+        print(f"{c.alert} on {c.market} {c.tf}, candle closed {c.close:%Y-%m-%d %H:%M} UTC")
+        print(f"  re-run: {said}" if c.reproduced else
+              "  re-run: NOT reproduced on this data (drawn as the detector sees it now)")
+        print(f"  chart:  {c.path}")
         return 0
 
     if a.command == "news":

@@ -39,6 +39,12 @@ def _note(e) -> str:
     return json.loads(e["detail"] or "{}").get("note", "") or ""
 
 
+def _ref(e) -> str:
+    """The row's ref: `python -m quant.alerts show <ref>` draws that alert (quant.alerts.show)."""
+    from .show import make_ref
+    return make_ref(e["market"], e["tf"], e["close_time"], e["alert"]) if e.get("alert") else ""
+
+
 def _when(s: str) -> str:
     return pd.Timestamp(s).tz_convert("UTC").strftime("%a %d %b %H:%M")
 
@@ -149,7 +155,7 @@ def _compose_signals(events, cfg, now, *, host: str = "", title: str = ""):
             note = f"  ({_note(e)})" if _note(e) else ""
             t.append(f"{mark} {e['market']:<8} {e['tf']:>4}  {e['what']:<24} "
                      f"closed {_when(e['close_time'])} UTC  @ {_price(e['price'])}{note}  "
-                     f"{_link(e)}")
+                     f"{_link(e)}" + (f"  ref {_ref(e)}" if _ref(e) else ""))
     if late:
         t += ["", "WHILE OFFLINE -- found late, for the record", "-" * 43]
         for e in late_rows:
@@ -185,6 +191,8 @@ def _compose_signals(events, cfg, now, *, host: str = "", title: str = ""):
                 f'{esc(e["what"])}'
                 + (f'<br><span style="font-size:12px;color:#6b7280;font-weight:400;">'
                    f'{esc(_note(e))}</span>' if _note(e) else "")
+                + (f'<br><span style="font:11px Consolas,monospace;color:#9ca3af;">'
+                   f'ref {esc(_ref(e))}</span>' if with_link and _ref(e) else "")
                 + '</td>'
                 f'<td style="{td}font-variant-numeric:tabular-nums;">{_price(e["price"])}</td>'
                 f'<td style="{td}color:#6b7280;">{esc(_short(e["close_time"]))}</td>'

@@ -899,7 +899,13 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                 if _formed is not None:
                     _formed.append(dict(i=i, pattern=cand.name, direction=cand.direction,
                                         boundary=cand.boundary_at(i), stop=cand.stop,
-                                        height=cand.height, expires_i=cand.expires_i))
+                                        height=cand.height, expires_i=cand.expires_i,
+                                        # the geometry, so a chart can draw THIS shape
+                                        upper=(cand.upper.slope, cand.upper.intercept)
+                                        if cand.upper else None,
+                                        lower=(cand.lower.slope, cand.lower.intercept)
+                                        if cand.lower else None,
+                                        pivots=[(p.i, p.price) for p in cand.pivots]))
             pi += 1
 
         # 2) a live shape confirms when price CLOSES through its boundary

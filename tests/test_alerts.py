@@ -796,3 +796,63 @@ def test_email_settings_come_only_from_the_environment(monkeypatch):
     monkeypatch.setenv("ALERT_SMTP_PASSWORD", "x")
     n = SmtpNotifier.from_env()
     assert n.to == ["me@example.com"] and n.host == "smtp.gmail.com" and n.port == 587
+
+
+# ── from an email row to a chart (python -m quant.alerts show REF) ─────────────────────────
+def test_every_email_row_carries_a_ref_that_names_its_alert(tmp_path):
+    from quant.alerts.show import find_alert, make_ref, parse_ref
+    r = Rig(tmp_path, [spike_alert()], a=["2026-06-03 00:20"])
+    r.tick("2026-06-03 00:01:30")
+    r.tick("2026-06-03 01:01:30")
+    ref = make_ref("A", "1h", at("2026-06-03 01:00"), "spike")
+    assert ref == "a.1h.202606030100.spike" and f"ref {ref}" in r.mail.sent[0][1]
+    assert ref in r.mail.sent[0][2]
+    assert parse_ref(ref.upper())[1:3] == ("1h", at("2026-06-03 01:00"))
+    _, mk, alert = find_alert(ref, r.cfg.path)
+    assert (mk.name, alert.name) == ("A", "spike")
+
+
+@pytest.mark.parametrize("ref, says", [
+    ("a.1h.20260603.spike", "not an alert ref"),
+    ("a.3h.202606030100.spike", "not an alert ref"),
+    ("a.1h.202606030100.nothing", "no alert 'nothing'"),
+    ("zz.1h.202606030100.spike", "for market 'zz'"),
+])
+def test_a_ref_that_names_nothing_is_refused_by_name(tmp_path, ref, says):
+    from quant.alerts.show import find_alert
+    config(tmp_path, [spike_alert()])
+    with pytest.raises((ValueError, LookupError), match=says):
+        find_alert(ref, tmp_path / "cfg.py")
+
+
+def test_show_re_runs_the_alert_on_its_own_candle_and_draws_it(tmp_path):
+    from quant.alerts.show import alert_chart
+    r = Rig(tmp_path, [spike_alert()], a=["2026-06-03 00:20"])
+    c = alert_chart("a.1h.202606030100.spike", config=r.cfg.path, feed=r.feed,
+                    now=at("2026-06-03 06:00"), write=False)
+    assert c.reproduced and c.hits[0]["what"] == "spike"
+    assert c.frame[TIME_COL].iloc[c.k] == at("2026-06-03 00:00")       # the candle that closed
+    assert c.frame[TIME_COL].iloc[-1] < at("2026-06-03 06:00")        # nothing still forming
+    names = [tr.name for tr in c.fig.data]
+    assert names[0] == "A 1h" and "the alert's candle (its close)" in names
+    quiet = alert_chart("a.1h.202606030200.spike", config=r.cfg.path, feed=r.feed,
+                        now=at("2026-06-03 06:00"), write=False)
+    assert not quiet.reproduced                       # nothing fired there: said, not hidden
+
+
+def test_every_trendline_alert_the_monitor_sends_redraws_with_its_own_line(tmp_path):
+    # the real case: 1m lines on the 15-minute clock, where the monitor judges a quarter hour of
+    # candles at once -- show must re-run from the same window or the line can differ
+    from quant.alerts.show import alert_chart, make_ref
+    tl = dict(name="lines", kind="trendline", event="both", fit="strict", touch_tol=0.3,
+              markets=("B",), tfs="1m")
+    r = ClockRig(tmp_path, [tl])
+    r.run("2026-06-02 21:00:20", "2026-06-03 05:47:20")
+    ev = r.events()
+    assert len(ev) >= 3, "no trendline alerts to redraw"
+    for e in ev:
+        c = alert_chart(make_ref(e["market"], e["tf"], pd.Timestamp(e["close_time"]), e["alert"]),
+                        config=r.cfg.path, feed=r.feed, now=at("2026-06-03 06:00"), write=False)
+        assert e["what"] in [h["what"] for h in c.hits], (e["close_time"], e["what"])
+        assert any("line" in (tr.name or "") and "touches" in (tr.name or "")
+                   for tr in c.fig.data)
