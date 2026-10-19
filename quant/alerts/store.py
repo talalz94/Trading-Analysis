@@ -3,6 +3,7 @@ Everything the monitor must remember across a crash, a reboot or a week switched
 
   state/alerts.db           SQLite (WAL): cursors, events, outbox, meta -- see SCHEMA
   state/bars/<market>.parquet   the recent 5m bars of each market, rewritten atomically
+  state/bars/<market>@1m.parquet  its recent 1m bars, kept only while a 1m alert watches it
 
 The rules that make a restart safe:
 - an EVENT's id is a hash of (alert, market, timeframe, bar, what), and inserting it twice is a
@@ -157,18 +158,19 @@ class State:
         self.db.execute("UPDATE outbox SET attempts=?, next_try=?, last_error=?, status=?"
                         " WHERE id=?", (n, iso(now + wait), str(error)[:500], status, oid))
 
-    # ── 5m bars ────────────────────────────────────────────────────────────────────────────
-    def _bar_path(self, market) -> Path:
-        return self.root / "bars" / (re.sub(r"[^A-Za-z0-9_-]+", "_", market) + ".parquet")
+    # ── bars: 5m for every market, 1m for one a 1m alert watches ────────────────────────────
+    def _bar_path(self, market, base: str = "5m") -> Path:
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", market) + ("" if base == "5m" else "@" + base)
+        return self.root / "bars" / (name + ".parquet")
 
-    def bars(self, market) -> pd.DataFrame:
-        p = self._bar_path(market)
+    def bars(self, market, base: str = "5m") -> pd.DataFrame:
+        p = self._bar_path(market, base)
         if not p.exists():
             return pd.DataFrame(columns=[TIME_COL, "open", "high", "low", "close", "volume"])
         return pd.read_parquet(p)
 
-    def save_bars(self, market, df: pd.DataFrame):
-        p = self._bar_path(market)
+    def save_bars(self, market, df: pd.DataFrame, base: str = "5m"):
+        p = self._bar_path(market, base)
         tmp = p.with_suffix(".tmp")
         df.to_parquet(tmp, index=False)
         os.replace(tmp, p)

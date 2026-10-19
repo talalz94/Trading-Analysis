@@ -114,8 +114,13 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
     lines = [a for a in cfg.alerts + cfg.off if a.kind == "trendline"]
     assert [a for a in cfg.alerts if a.kind == "trendline"]
     assert all(a.params.get("fit") == "strict" for a in lines)
-    assert {a.kind for a in cfg.alerts} >= {"trendline", "candle", "chart"}
-    assert cfg.news.on and cfg.markets
+    # what the user asked for: no candle alerts, lines on 1m-4h, a 15-minute clock, news last
+    assert {a.kind for a in cfg.alerts} == {"trendline", "chart"}
+    assert all(set(a.tfs) == {"1m", "5m", "15m", "1h", "4h"} for a in cfg.alerts
+               if a.kind == "trendline")
+    assert cfg.delivery.every_minutes == 15 and cfg.delivery.collapse_repeats
+    assert cfg.categories[-1] == "News" and cfg.news.on and cfg.markets
+    assert cfg.news.remind_before["high"] == (1440, 720, 360, 120, 60, 30, 15)
 
 
 @pytest.mark.parametrize("bad, says", [
@@ -221,6 +226,114 @@ def test_rejudging_a_bar_after_a_crash_cannot_send_it_twice(tmp_path):
         r.state.set_cursor("spike", "A", "1h", at("2026-06-02 23:00"))
     assert r.tick("2026-06-03 01:03").events == 0
     assert len(r.mail.sent) == 1
+
+
+# ── 1m bars and the 15-minute clock ─────────────────────────────────────────────────────────
+def bars1(spikes=(), start="2026-06-02 12:00", end="2026-06-03 06:00", seed=3):
+    t = pd.date_range(start, end, freq="1min", tz="UTC", inclusive="left")
+    c = 100 + np.random.default_rng(seed).normal(0, 0.05, len(t)).cumsum()
+    o = np.r_[c[0], c[:-1]]
+    df = pd.DataFrame({TIME_COL: t, "open": o, "high": np.maximum(o, c) + 0.02,
+                       "low": np.minimum(o, c) - 0.02, "close": c, "volume": 1.0})
+    for s in spikes:
+        df.loc[df[TIME_COL] == at(s), "high"] = 1000.0
+    return df
+
+
+class ClockRig(Rig):
+    """A Rig whose market B also has 1m bars, on a 15-minute clock unless told otherwise."""
+
+    def __init__(self, tmp_path, alerts, spikes_1m=(), delivery=None, **kw):
+        super().__init__(tmp_path, alerts, delivery=delivery or dict(every_minutes=15), **kw)
+        self.feed = FakeFeed(self.feed.bars, bars_1m={"B": bars1(spikes_1m)})
+        self.when = {}                               # email index -> the tick that sent it
+
+    def run(self, start, end, step="1min"):
+        for t in pd.date_range(at(start), at(end), freq=step):
+            n = len(self.mail.sent)
+            tick(self.cfg, self.state, self.mail, self.feed, now=t)
+            for i in range(n, len(self.mail.sent)):
+                self.when[i] = t
+
+
+ONE_MIN = dict(name="1m spike", category="Spikes", kind="spike", level=999, markets=("B",),
+               tfs="1m", priority="urgent")
+
+
+def test_a_1m_alert_reads_1m_bars_and_waits_for_the_quarter_hour(tmp_path):
+    r = ClockRig(tmp_path, [ONE_MIN], spikes_1m=["2026-06-03 00:03", "2026-06-03 00:07",
+                                                 "2026-06-03 00:11"])
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:32:20")
+    assert len(r.events()) == 3 and {e["tf"] for e in r.events()} == {"1m"}
+    # ONE email, at the first look after 00:15's bars are final -- not one per 1m candle,
+    # and not at 00:04 when the first of them closed
+    assert len(r.mail.sent) == 1 and r.when[0] == at("2026-06-03 00:17:20")
+    calls = [c for c in r.feed.calls if c[-1] == "1m"]
+    assert calls and len(calls) == len(r.feed.calls)        # only the 1m feed: no 5m alert here
+    asked = sorted({c[2] for c in calls})
+    assert all(t.minute % 15 == 2 for t in asked[1:])      # after the first look: boundaries only
+    assert r.state.bars("B", "1m").shape[0] > 0 and r.state.bars("B").empty
+
+
+def test_on_a_clock_one_email_per_boundary_even_for_urgent_alerts(tmp_path):
+    alerts = [spike_alert(name="5m urgent", tfs="5m", priority="urgent", markets=("A",)),
+              spike_alert(name="1h", tfs="1h", markets=("A",))]
+    r = ClockRig(tmp_path, alerts, a=["2026-06-03 00:05", "2026-06-03 00:20", "2026-06-03 00:40",
+                                      "2026-06-03 01:10"])
+    r.run("2026-06-03 00:00:20", "2026-06-03 02:00:20")
+    sent = [r.when[i] for i in sorted(r.when)]
+    assert sent and all(t.minute % 15 == 2 and t.second == 20 for t in sent)
+    assert len({t.floor("15min") for t in sent}) == len(sent)        # never two in one slot
+    # four 5m spikes; on 1h the 00:00 bar (three of them) -- 01:00's closes after the run
+    assert len(r.events()) == 5 and all(e["status"] == "sent" for e in r.events())
+    # the 00:05 bar closed at 00:10 and is URGENT, yet it waits for the 00:15 boundary
+    assert r.when[0] == at("2026-06-03 00:17:20") and "00:10 UTC" in r.mail.sent[0][1]
+    # the 1h bar 00:00 closes at 01:00 and rides with the 5m bars that closed by then
+    one_am = [i for i, t in r.when.items() if t == at("2026-06-03 01:02:20")]
+    assert one_am and "  1h  " in r.mail.sent[one_am[0]][1]
+
+
+def test_on_a_clock_a_signal_found_after_its_boundary_email_waits_for_the_next(tmp_path):
+    # the feed fails at the 00:15 boundary and answers a minute later: what it brings must not
+    # make a second email in the same quarter hour
+    r = ClockRig(tmp_path, [spike_alert(tfs="5m", markets=("A",), priority="urgent")],
+                 a=["2026-06-03 00:05"])
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:16:20")
+    r.feed.fail = {"A"}
+    r.run("2026-06-03 00:17:20", "2026-06-03 00:17:20")
+    r.feed.fail = set()
+    r.run("2026-06-03 00:18:20", "2026-06-03 00:33:20")
+    assert len(r.events()) == 1 and r.events()[0]["created"] > "2026-06-03T00:17:20"   # backoff
+    assert [r.when[i] for i in sorted(r.when)] == [at("2026-06-03 00:32:20")]
+
+
+def test_repeats_in_one_window_are_one_row(tmp_path):
+    spikes = ["2026-06-03 00:03", "2026-06-03 00:07", "2026-06-03 00:11"]
+    r = ClockRig(tmp_path, [ONE_MIN], spikes_1m=spikes,
+                 delivery=dict(every_minutes=15, collapse_repeats=True))
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:17:20")
+    text = r.mail.sent[0][1]
+    rows = [line for line in text.splitlines() if line.lstrip("! ").startswith("B ")]
+    assert len(rows) == 1 and "3 times, 00:04-00:12 UTC" in rows[0]
+    assert "1 signal " in r.mail.sent[0][0]
+    # a preview spanning several windows keeps them apart
+    (tmp_path / "p").mkdir()
+    r2 = ClockRig(tmp_path / "p", [ONE_MIN], spikes_1m=spikes + ["2026-06-03 00:21"],
+                  delivery=dict(every_minutes=15, collapse_repeats=True))
+    events, subject, text, html, errors = preview(r2.cfg, r2.feed, hours=2,
+                                                  now=at("2026-06-03 00:40"))
+    assert len(events) == 4 and not errors
+    rows = [line for line in text.splitlines() if line.lstrip("! ").startswith("B ")]
+    assert len(rows) == 2 and "3 times" in text
+
+
+@pytest.mark.parametrize("delivery, says", [
+    (dict(every_minutes=7), "every_minutes"),
+    (dict(every_minute=15), r"unknown settings \['every_minute'\]"),
+])
+def test_a_delivery_mistake_is_refused_by_name(tmp_path, delivery, says):
+    with pytest.raises(ConfigError, match=says):
+        config(tmp_path, [spike_alert()], delivery)
 
 
 def test_a_market_is_fetched_only_when_one_of_its_bars_is_due(tmp_path):
@@ -600,7 +713,7 @@ def test_a_hanging_feed_times_out_by_name_and_is_not_asked_twice(monkeypatch):
     from quant.alerts import feeds
     from quant.alerts.config import Market
     gate = threading.Event()
-    monkeypatch.setitem(feeds._FETCHERS, "binance", lambda *a: gate.wait(5))
+    monkeypatch.setitem(feeds._FETCHERS, ("binance", "5m"), lambda *a: gate.wait(5))
     feed, m, now = feeds.Feed(timeout=0.2), Market("B", "BBBUSDT", "binance", ""), at("2026-06-03")
     try:
         first = feed.fetch([m], {"B": now - pd.Timedelta(minutes=10)}, now)["B"]

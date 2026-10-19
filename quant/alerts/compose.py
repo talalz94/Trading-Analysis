@@ -4,6 +4,10 @@ signal, urgent rows first and marked, and the events found late in their own sec
 
 Plain text and HTML are built from the same rows, and the HTML is inline-styled tables only --
 what every mail client renders the same way.
+
+With DELIVERY `collapse_repeats`, the same signal repeating -- one alert, market, timeframe and
+signal, five 1m closes through a line in one quarter hour -- is ONE row saying how many times and
+from when to when. With "News" placed after the other CATEGORIES, the news comes last.
 """
 from __future__ import annotations
 
@@ -43,6 +47,34 @@ def _short(s: str) -> str:
     return pd.Timestamp(s).tz_convert("UTC").strftime("%d %b %H:%M")
 
 
+def _hm(s: str) -> str:
+    return pd.Timestamp(s).tz_convert("UTC").strftime("%H:%M")
+
+
+def collapse(events, every_minutes: int = 0):
+    """One row per (alert, market, timeframe, signal) -- and per `every_minutes` window of bar
+    closes, so a preview spanning two days still reads window by window. The row kept is the
+    LATEST; its note says how many times and from when."""
+    groups = OrderedDict()
+    for e in sorted(events, key=lambda e: e["close_time"]):
+        slot = (pd.Timestamp(e["close_time"]).tz_convert("UTC").floor(f"{every_minutes}min")
+                if every_minutes else None)
+        key = (e["alert"], e["market"], e["tf"], e["what"], bool(e["late"]), slot)
+        groups.setdefault(key, []).append(e)
+    out = []
+    for g in groups.values():
+        last = dict(g[-1])
+        if len(g) > 1:
+            d = json.loads(last["detail"] or "{}")
+            span = f"{len(g)} times, {_hm(g[0]['close_time'])}-{_hm(g[-1]['close_time'])} UTC"
+            d["note"] = span + (f" · last: {d['note']}" if d.get("note") else "")
+            last["detail"] = json.dumps(d)
+            if any(x["priority"] == "urgent" for x in g):
+                last["priority"] = "urgent"
+        out.append(last)
+    return out
+
+
 def _rows(events):
     order = {"urgent": 0, "normal": 1}
     return sorted(events, key=lambda e: (order.get(e["priority"], 2), e["close_time"],
@@ -55,8 +87,11 @@ _OPEN_DIV = '<div style="font:14px -apple-system,Segoe UI,Arial,sans-serif;color
 def compose(events, cfg, now, *, host: str = "", title: str = ""):
     """-> (subject, text, html). News notices (quant.alerts.news) come first, in their own
     section; an email without them is exactly what it always was."""
-    from .news import is_news, news_html, news_subject, news_text
+    from .news import CATEGORY, is_news, news_html, news_subject, news_text
     news = [e for e in events if is_news(e)]
+    if getattr(cfg.delivery, "collapse_repeats", False):
+        events = news + collapse([e for e in events if not is_news(e)],
+                                 getattr(cfg.delivery, "every_minutes", 0))
     if not news:
         return _compose_signals(events, cfg, now, host=host, title=title)
     rest = [e for e in events if not is_news(e)]
@@ -65,6 +100,13 @@ def compose(events, cfg, now, *, host: str = "", title: str = ""):
     nhtml = '<h3 style="margin:18px 0 6px;font-size:15px;">News</h3>' + news_html(news)
     if rest:
         subject, text, html = _compose_signals(rest, cfg, now, host=host, title=title)
+        cats = list(cfg.categories)
+        if CATEGORY in cats and cats.index(CATEGORY) > 0:
+            # News placed after the other sections: it goes last, above the footer
+            foot = text.rfind("\n-- quant alerts")
+            text = text[:foot] + "\n\n" + ntext + text[foot:]
+            cut = html.rfind('<p style="margin-top:22px;color:#9ca3af;font-size:12px;">')
+            return f"{subject} · +{len(news)} news", text, html[:cut] + nhtml + html[cut:]
         return (f"{subject} · +{len(news)} news", ntext + "\n\n" + text,
                 html.replace(_OPEN_DIV, _OPEN_DIV + nhtml, 1))
     bolt = "⚡ " if any(e["priority"] == "urgent" for e in news) else ""

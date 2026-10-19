@@ -418,11 +418,19 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
 
     # ── reminders ─────────────────────────────────────────────────────────────────────────
     if nc.remind_before and len(timed):
+        # on a clock (DELIVERY every_minutes) a reminder is due from the boundary at or BEFORE its
+        # time, so it rides in that boundary's email -- early by up to a quarter hour, never late
+        every = getattr(cfg.delivery, "every_minutes", 0)
+
+        def due_at(t, k):
+            at = t - pd.Timedelta(minutes=k)
+            return at.floor(f"{every}min") if every else at
+
         for t, cur, g in _groups(timed[timed["t"] > now]):
             offs = reminder_offsets(nc, max(g["level"], key=RANK.get))
             if not offs:
                 continue
-            due = [k for k in offs if t - pd.Timedelta(minutes=k) <= now]
+            due = [k for k in offs if due_at(t, k) <= now]
             if not due:
                 continue
             keep = min(due)                        # the latest reminder still ahead of the news
