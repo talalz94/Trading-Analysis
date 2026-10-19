@@ -254,6 +254,10 @@ Importing twice changes nothing, so do it whenever you like.
 
 - **The install stops at "No email settings":** step 8 was skipped or the password line is empty.
 - **`status` shows a feed error for BTC:** Binance refuses both hosts. Do step 7's switch.
+- **The install says "did not stay up", and the journal shows "another monitor ... is already
+  running":** a second copy holds the lock -- typically a user-level service from a setup done
+  without sudo, which keeps running old code and an old config. `systemctl --user disable --now
+  quant-alerts`, then run the install again (it now does this itself).
 - **The SSH button keeps failing:** wait a minute after creating the server, then try again.
   Stop/Start on the VM page also helps.
 - **A charge appears:** check the server is e2-micro, in us-central1, us-west1 or us-east1, on a

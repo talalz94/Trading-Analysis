@@ -16,7 +16,18 @@ NAME=quant-alerts
 UNIT=/etc/systemd/system/$NAME.service
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# A user-level copy (systemctl --user), left from a setup done without sudo, holds the monitor's
+# lock: this service then starts, finds "another monitor running" and exits every 30 s, while the
+# other copy runs whatever code and config it loaded. Seen on the GCP server, 19 Oct 2026.
+user_copy_off() {
+    if systemctl --user is-enabled --quiet "$NAME" 2>/dev/null        || systemctl --user is-active --quiet "$NAME" 2>/dev/null; then
+        echo "a user-level $NAME service is also installed; turning it off so only one monitor runs"
+        systemctl --user disable --now "$NAME" 2>/dev/null || true
+    fi
+}
+
 if [[ "${1:-}" == "--uninstall" ]]; then
+    user_copy_off
     sudo systemctl disable --now "$NAME" 2>/dev/null || true
     sudo rm -f "$UNIT"
     sudo systemctl daemon-reload
@@ -50,8 +61,11 @@ if [[ ! -x .venv/bin/pip ]]; then
 fi
 .venv/bin/python -m pip install --quiet --disable-pip-version-check --upgrade pip
 .venv/bin/python -m pip install --quiet --disable-pip-version-check -r requirements-alerts.txt
-.venv/bin/python -m quant.alerts list > /dev/null          # imports load, the config is valid
+# imports load AND the config is valid (`list` alone never reads the config)
+.venv/bin/python -c "from quant.alerts.config import load_config; load_config()"
 echo "packages installed; alerts/alerts_config.py loads"
+
+user_copy_off
 
 echo "== systemd service ($UNIT) =="
 sudo tee "$UNIT" > /dev/null <<EOF
