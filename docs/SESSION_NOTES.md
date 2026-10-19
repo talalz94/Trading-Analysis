@@ -2465,3 +2465,28 @@ Gotchas:
   script that did came back with zero 15m alerts.
 - one guard in strict mode (a refit must be clean from the incumbent's start) is not reached by any
   random or hand-built series tried; it is kept as cheap insurance, and the mutation run says so.
+
+### Alerts on a 15-minute clock, 1m bars, the user's trendline config (2026-10-20)
+
+The user's spec: no candle alerts; trendline FORMATION on 1m 5m 15m 1h 4h (their example was five
+1m closes through a line, so BREAKS too); wedges/triangles forming; high/critical news reminders
+1 day, 12 h, 6 h, 2 h, 1 h, 30 and 15 min before; at most one email per 15 minutes carrying every
+layer -- and a 1m/5m signal reported once, after its quarter hour, however many candles fired.
+
+- 1m: the monitor was 5m-only (every timeframe resampled from 5m). A market a 1m alert watches is now
+  also fetched at 1m into its own store (`state/bars/<m>@1m.parquet`, ~4 days: the alert's warm-up),
+  with its own backoff keys; config.base_of(tf) picks the store. The 5m path is unchanged.
+- DELIVERY every_minutes=15: emails only at boundaries (first tick >= boundary + settle, i.e.
+  :02:20 :17:20 :32:20 :47:20 with the runner's :20 offset), one per boundary, urgent included.
+  Pairs finer than the clock are DUE only at boundaries, so 1m is fetched 4x an hour, not 60x.
+  News reminders on the clock are due from floor(release - k) -- early by up to 15 min, never late
+  (tested with a release at 12:40, off the quarter hour). The result poll runs BEFORE the one
+  deliver of the tick, so a result polled at a boundary rides in that email.
+- collapse_repeats: one row per (alert, market, tf, signal, window); "3 times, 00:04-00:12 UTC".
+- Measured rates (per day; 5m-4h on Gold+USDJPY+BTC Mar-Aug 2026, 1m on BTC Jun-Aug 2026):
+  trendline formed 1m 9.8 / 5m 3.9 / 15m 1.2 / 1h 0.2 / 4h 0.1; broken 4.4 / 1.9 / 0.6 / 0.1 / 0;
+  wedges+triangles formed 22 / 9.2 / 3.0 / 0.6 / 0.1 -- so patterns are ON for 15m-4h only and
+  1m/5m is written OFF. Expect many quarter hours to carry something: ~30-40 emails a day as set.
+- A Claude crash in the middle of a mutation run left news.py mutated while the orphaned script
+  kept running; it restored itself on finishing. Check `git diff` and running python processes
+  after any interrupted mutation run before editing anything.

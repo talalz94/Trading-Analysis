@@ -221,6 +221,22 @@ Open the terminal with the **SSH** button (step 4), then:
 | startup errors | `journalctl -u quant-alerts -n 50 --no-pager` |
 | remove it | `bash scripts/install_alerts_linux.sh --uninstall` |
 
+### Switch to the trendline alerts (one email per quarter hour)
+
+`alerts/alerts_config_trendlines.py` watches trendlines on 1m-4h, wedges and triangles, and news
+reminders from a day ahead, and sends at most one email per quarter hour. It needs the code of 20
+Oct 2026 or later, so update first, then copy it over your config (the old one is kept):
+
+```bash
+cd ~/quant && git stash && git pull && git stash pop && bash scripts/install_alerts_linux.sh
+cp alerts/alerts_config.py alerts/alerts_config_before_trendlines.py
+cp alerts/alerts_config_trendlines.py alerts/alerts_config.py
+.venv/bin/python -c "from quant.alerts.config import load_config; load_config(); print('config OK')"
+.venv/bin/python -m quant.alerts status
+```
+
+Back to the old alerts: `cp alerts/alerts_config_before_trendlines.py alerts/alerts_config.py`.
+
 ### Forecasts your PC missed
 
 Forex Factory's feed only ever shows the current week, so a week in which nothing fetched it loses

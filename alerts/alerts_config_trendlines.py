@@ -1,30 +1,36 @@
 """
-ALERTS — TRENDLINES AND A FEW CHOSEN PATTERNS.  A READY-TO-USE COPY OF alerts_config.py.
+ALERTS — TRENDLINES, WEDGES & TRIANGLES, NEWS. ONE EMAIL PER QUARTER HOUR AT MOST.
 
-What it watches, on the same markets as alerts_config.py (Gold, USDJPY, BTC):
-  TRENDLINES  fitted STRICT: each line runs exactly through two real swing highs or lows, and no
-              candle between its first touch and the moment it is drawn closes through it. (The
-              default fit only checks the swings, so a wick could cross a "support" by two ATR --
-              docs/CHART_GUIDE.md, "Trendlines".)
-  PATTERNS    engulfing, hammer / shooting star and morning / evening star on 4h; double tops /
-              bottoms and head & shoulders on 1h and 4h
-  NEWS        exactly as in alerts_config.py
-  About 4.7 alerts a day with the switches as set; most go in the digest, not one email each.
+What it watches, on Gold, USDJPY and BTC:
+  TRENDLINES  a line FORMS or price BREAKS it, on 1m 5m 15m 1h 4h, fitted STRICT: each line runs
+              exactly through two real swing highs or lows and no candle closes through it before
+              it is drawn (docs/CHART_GUIDE.md, "Trendlines")
+  PATTERNS    rising / falling wedge, ascending / descending / symmetrical triangle FORMED, on
+              15m 1h 4h (1m and 5m are written below, switched off: ~40 a day between them)
+  NEWS        high and critical releases: reminders 1 day, 12 h, 6 h, 2 h, 1 h, 30 and 15 min
+              before; the evening preview, the weekly outlook and the results as before
+  No candlestick alerts.
 
-HOW TO USE IT -- three steps
+HOW THE EMAILS COME (§3 DELIVERY)
+  Every 15 minutes at most: at :02 :17 :32 :47 UTC, once the quarter hour's candles have closed,
+  ONE email with everything found in that quarter hour -- sections Chart patterns, Trendlines,
+  News, in that order. A 1m or 5m signal waits for the quarter hour it falls in, wherever in it
+  the candle closed. The same signal repeating -- five 1m closes through a line between :00 and
+  :15 -- is ONE row: "5 times, 10:01-10:13 UTC". Nothing found, no email.
+  A news reminder comes in the email of the quarter hour at or before its time: a 15-minute
+  reminder for a release at 08:30 arrives at 08:17. Never after the release.
+
+HOW TO USE IT
   1. LOOK FIRST. This sends nothing; it shows what WOULD have fired in the last 48 hours:
          python -m quant.alerts check --config alerts/alerts_config_trendlines.py
      then open alerts/state/preview.html in your browser.
 
   2. SWITCH TO IT. The monitor only ever reads alerts/alerts_config.py, so this file goes there
      (keep a backup of the old one). An alert it has not seen before starts from NOW, so nothing
-     from the past is mailed.
+     from the past is mailed. It needs the code of 20 Oct 2026 or later (1m bars, the 15-minute
+     clock, the strict trendlines): older code refuses its settings BY NAME and keeps the old file.
 
-     The trendline alerts use settings added on 18 Oct 2026 (fit= / touch_tol= / wick_tol=). A
-     monitor running OLDER code refuses them by name and keeps its old config, so the code goes
-     first, then the file.
-
-     On the Google Cloud server, in the browser SSH window (once this code has been pushed):
+     On the Google Cloud server, in the browser SSH window:
          cd ~/quant && git stash && git pull && git stash pop && bash scripts/install_alerts_linux.sh
      That updates the code and restarts the monitor; this file arrives with it. Then:
          cp alerts/alerts_config.py alerts/alerts_config_before_trendlines.py
@@ -39,15 +45,14 @@ HOW TO USE IT -- three steps
          Stop-ScheduledTask quant-alerts; Start-ScheduledTask quant-alerts
 
   3. GOING BACK is the same copy the other way round:
-         Copy-Item alerts/alerts_config_before_trendlines.py alerts/alerts_config.py
-     (on the server: cp alerts/alerts_config_before_trendlines.py alerts/alerts_config.py)
+         cp alerts/alerts_config_before_trendlines.py alerts/alerts_config.py
+     (on this PC: Copy-Item alerts/alerts_config_before_trendlines.py alerts/alerts_config.py)
 
   A typo cannot stop the monitor: a config that does not load is refused BY NAME in the log
   (python -m quant.alerts status) and the last good one stays in use.
 
-CHANGE IT like the original: flip on=True / False, add a timeframe to tfs, move an alert between
-"urgent" (emailed at once) and "normal" (the next digest). Every setting, pattern name and kind is
-in docs/ALERTS_CATALOGUE.md (or: python -m quant.alerts list).
+CHANGE IT: flip on=True / False, add or drop a timeframe in tfs. Every setting, pattern name and
+kind is in docs/ALERTS_CATALOGUE.md (or: python -m quant.alerts list).
 
   §1 MARKETS     §2 ALERTS: trendlines, then patterns     §3 DELIVERY     §4 NEWS
 """
@@ -69,79 +74,66 @@ GROUPS = {                           # a name markets= can use; "all" = every ma
     "metals & FX": ("Gold", "USDJPY"),
 }
 
+# The email's sections, in this order (News last).
+CATEGORIES = ("Chart patterns", "Trendlines", "News")
+
 # ══ §2  ALERTS ══════════════════════════════════════════════════════════════════════════════════
 #   on        True = watching · False = kept here, switched off
 #   name      any name, unique (renaming an alert starts it afresh)
-#   markets   "all", a group, or names from §1     tfs   "5m" "15m" "30m" "1h" "2h" "4h"
-#   priority  "urgent" = email at once · "normal" = next digest
-#   cooldown_bars  (optional) after firing, quiet for this many of that timeframe's bars
+#   markets   "all", a group, or names from §1     tfs   "1m" "5m" "15m" "30m" "1h" "2h" "4h"
+#   priority  "urgent" / "normal": marks the row; on the 15-minute clock both wait for it
 #
-#   ~N/day = how often it fired on Gold + USDJPY + BTC together, Mar-Aug 2026, as set here.
+#   ~N/day = how often it fired, as set: 5m-4h on Gold + USDJPY + BTC, Mar-Aug 2026; 1m on BTC
+#   alone, Jun-Aug 2026 (the only 1m history kept) -- the three markets together are ~2-3x that.
 
 STRICT = dict(fit="strict", touch_tol=0.3, wick_tol=0.15)
 #   fit="strict"   through two real swing extremes; no candle closes through the line
-#   touch_tol=0.3  a third swing within 0.3 ATR of the line counts as a touch (default fit: 0.6)
+#   touch_tol=0.3  a third swing within 0.3 ATR of the line counts as a touch
 #   wick_tol=0.15  a wick may poke through by at most 0.15 ATR before the line is drawn
-#   Delete **STRICT from an alert to get the default fit back (about twice as many lines).
 
 ALERTS = [
 
-    # ── TRENDLINES ── event: "formed" (a new line is drawn) · "break" (price breaks it by a RULE)
-    #      the rule is counted from the first close through:
-    #      closes=N  N closes in a row beyond · full=N  N whole candles beyond (wicks too)
-    #      colour=N  N candles of the break's colour · confirm=N  then, within N candles, one of
-    #      the break's colour must close beyond the WHOLE candle that broke it (notebook 21's rule)
-    #      direction="up" = resistance lines only · "down" = support lines only · default both
-    dict(on=True,  name="trendline formed, 1h/4h", kind="trendline",               # ~0.3/day
-         event="formed", **STRICT, markets="all", tfs=("1h", "4h"), priority="normal"),
+    # ── TRENDLINES ── "formed": a new line is drawn · "break": a candle CLOSES through a line
+    #      (closes=2 would want two in a row). direction="up" = resistance lines only, "down" =
+    #      support lines only; both by default.
+    #      ~N/day   1m (BTC)  5m    15m   1h    4h
+    #      formed    9.8      3.9   1.2   0.2   0.1
+    #      broken    4.4      1.9   0.6   0.1   0.0
+    dict(on=True,  name="trendline formed", kind="trendline", category="Trendlines",
+         event="formed", **STRICT,
+         markets="all", tfs=("1m", "5m", "15m", "1h", "4h"), priority="normal"),
 
-    dict(on=True,  name="trendline broken, 2 closes, 1h/4h", kind="trendline",    # ~0.1/day
-         event="break", closes=2, **STRICT, markets="all", tfs=("1h", "4h"), priority="urgent"),
+    dict(on=True,  name="trendline broken", kind="trendline", category="Trendlines",
+         event="break", closes=1, **STRICT,
+         markets="all", tfs=("1m", "5m", "15m", "1h", "4h"), priority="urgent"),
 
-    dict(on=True,  name="15m trendline break, confirmed", kind="trendline",        # ~0.3/day
-         event="break", closes=1, confirm=3, **STRICT, markets="all", tfs="15m",
-         priority="urgent"),
+    # ── WEDGES & TRIANGLES ── "formed": the shape is in place (its pivots confirmed); the note
+    #      says where it would break and the measured target. "both" would add the breakout.
+    #      ~N/day   1m (BTC) 22 · 5m 9.2 · 15m 3.0 · 1h 0.6 · 4h 0.1
+    dict(on=True,  name="wedge / triangle formed", kind="chart", event="formed",
+         patterns=("rising_wedge", "falling_wedge", "ascending_triangle",
+                   "descending_triangle", "symmetrical_triangle"),
+         markets="all", tfs=("15m", "1h", "4h"), priority="normal"),
 
-    dict(on=False, name="15m trendline formed", kind="trendline",                   # ~1.2/day
-         event="formed", **STRICT, markets="all", tfs="15m", priority="normal"),
-
-    dict(on=False, name="5m trendline, 2 closes beyond", kind="trendline",         # ~1.4/day
-         event="break", closes=2, **STRICT, markets="all", tfs="5m", priority="urgent"),
-
-    # ── CANDLE PATTERNS ── on the bar the pattern COMPLETES (docs/CHART_GUIDE.md lists all 62)
-    dict(on=True,  name="engulfing 4h", kind="candle",                              # ~2.5/day
-         patterns=("engulfing_bull", "engulfing_bear"),
-         markets="all", tfs="4h", priority="urgent"),
-
-    dict(on=True,  name="hammer / shooting star 4h", kind="candle",                 # ~0.6/day
-         patterns=("hammer", "shooting_star"),
-         markets="all", tfs="4h", priority="normal"),
-
-    dict(on=True,  name="morning / evening star 4h", kind="candle",                 # ~0.3/day
-         patterns=("morning_star", "evening_star"),
-         markets="all", tfs="4h", priority="normal"),
-
-    dict(on=False, name="engulfing 1h", kind="candle",                              # ~9.6/day
-         patterns=("engulfing_bull", "engulfing_bear"),
-         markets="all", tfs="1h", priority="normal"),
-
-    # ── CHART PATTERNS ── event: "formed" (shape in place) · "breakout" (close through) · "both"
-    dict(on=True,  name="tops & bottoms, 1h/4h", kind="chart", event="both",       # ~0.6/day
-         patterns=("double_top", "double_bottom", "head_shoulders", "inverse_head_shoulders"),
-         markets="all", tfs=("1h", "4h"), priority="urgent"),
+    dict(on=False, name="wedge / triangle formed, 1m 5m", kind="chart", event="formed",
+         patterns=("rising_wedge", "falling_wedge", "ascending_triangle",
+                   "descending_triangle", "symmetrical_triangle"),
+         markets="all", tfs=("1m", "5m"), priority="normal"),
 ]
 
 # ══ §3  DELIVERY ════════════════════════════════════════════════════════════════════════════════
 DELIVERY = dict(
-    digest_minutes=15,               # normal alerts: at most one email this often
+    every_minutes=15,                # ONE email per quarter hour at most, at :02 :17 :32 :47 UTC,
+                                     #   with everything found in it -- urgent and news included
+    collapse_repeats=True,           # a signal repeating in that quarter hour is one row, with
+                                     #   how many times and from when to when
     catchup_max_age_minutes=30,      # found later than this after its candle closed (PC was off)
 )                                    #   -> listed under "While offline", never sent as urgent
 
 # ══ §4  NEWS ════════════════════════════════════════════════════════════════════════════════════
 #   Driven by the economic calendar, not by candles. See what it covers right now:
 #       python -m quant.alerts news
-#   ~24 emails a week as set (measured on 2024's calendar): ~19 reminders + results, ~4 evening
-#   previews, 1 weekly outlook. Results need JBLANKED_API_KEY in .env; without it they are skipped.
+#   Results need JBLANKED_API_KEY in .env for non-US releases; US ones come from the agencies.
 
 NEWS = dict(
     on=True,
@@ -152,7 +144,8 @@ NEWS = dict(
     timezone="Asia/Karachi",                                # the times in your news emails
     week_ahead="Sun 20:00",                                 # the week's high + critical news
     day_ahead="20:00",                                      # tomorrow's covered news, each evening
-    remind_before={"critical": (60, 15), "high": (15,)},    # minutes before the release
+    remind_before={"high": (1440, 720, 360, 120, 60, 30, 15)},   # minutes before; "high" covers
+                                                            #   critical too, never medium
     results="high",                    # actual vs forecast, and what it means for the currency
-    warn_alerts=30,                    # a candle alert within 30 min of high news says so
+    warn_alerts=30,                    # an alert within 30 min of high news says so
 )                                      #   (None turns week_ahead / day_ahead / results off)

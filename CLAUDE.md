@@ -54,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **898 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **908 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -761,7 +761,9 @@ quant/
     │                    #     timeout, and a market whose last call still hangs gets no second one.
     │                    #     Binance answers a US / blocked server with HTTP 451: the feed then
     │                    #     tries data-api.binance.vision (same candles, 71/71 identical) and
-    │                    #     remembers whichever host answered
+    │                    #     remembers whichever host answered. base="1m": 1m bars, fetched only
+    │                    #     for a market a 1m alert watches, into state/bars/<market>@1m.parquet
+    │                    #     (config.base_of(tf): 1m from 1m, everything else from 5m as before)
     ├── detectors.py     #   REGISTRY of 15 alert kinds, each a thin wrapper over a tested causal
     │                    #     indicator: candle · chart · trendline · sr_zone · fvg · ma_cross · rsi ·
     │                    #     rsi_divergence · macd · stochastic · supertrend · heikin_ashi ·
@@ -791,10 +793,17 @@ quant/
     │                    #     "While offline", urgent = this tick, normal = digest, and any email
     │                    #     sweeps every pending event. Backoff on failed AND empty polls.
     │                    #     tf_bars() = UTC-aligned buckets, equal to resample_ohlcv (tested)
+    │                    #     DELIVERY every_minutes=15 = ON A CLOCK: one email per boundary, at
+    │                    #     the first tick >= boundary + settle, whatever is urgent; a timeframe
+    │                    #     finer than the clock is FETCHED only at boundaries (due = ceil(close,
+    │                    #     clock) + settle); the result poll runs before the single deliver so
+    │                    #     results ride in that email. 0 = the old urgent + digest, byte-identical
     ├── store.py         #   SQLite WAL: cursors / events (id = hash, INSERT OR IGNORE, so a re-judged
     │                    #     bar can never mail twice) / outbox (written BEFORE sending, retried
     │                    #     with backoff) / meta; bars as parquet written tmp + os.replace
-    ├── compose.py       #   one email: a section per category in config order, urgent rows first
+    ├── compose.py       #   one email: a section per category in config order, urgent rows first;
+    │                    #     collapse_repeats = one row per (alert, market, tf, signal, window) with
+    │                    #     "5 times, 10:01-10:13 UTC"; "News" placed after other CATEGORIES -> last
     ├── notify.py        #   SmtpNotifier (Gmail App Password from .env ALERT_SMTP_*), File/ListNotifier
     ├── news.py          #   the NEWS block: week ahead, day ahead, reminders (60/15 critical, 15
     │                    #     high; any minutes up to 2880), results (the agencies for US, JBlanked
@@ -1001,8 +1010,11 @@ requirements-alerts.txt           # ONLY what quant.alerts imports (measured by 
                                   #   Ubuntu 24.04 python) by test_alerts.py passing there
 alerts/alerts_config.py           # THE ALERTS CONFIG, the user's: markets, groups, categories,
                                   #   alerts, delivery. alerts/state/ is git-ignored
-alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy: strict trendline alerts + a few chosen
-                                  #   patterns, ~4.7/day, with preview/switch/revert steps on top.
+alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy (the user's spec, 2026-10-20): NO candle
+                                  #   alerts; strict trendlines formed + broken on 1m 5m 15m 1h 4h;
+                                  #   wedges/triangles formed 15m-4h (1m/5m written, OFF: ~40/day);
+                                  #   high news reminders 1440/720/360/120/60/30/15 min; every_minutes
+                                  #   15 + collapse_repeats; CATEGORIES patterns, trendlines, News last.
                                   #   The monitor reads only alerts_config.py; `--config` previews it
 examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
 ```
@@ -1245,7 +1257,7 @@ BACKWARDS from the first candle). `test_patterns.py` also: a STRICT trendline is
 candle it spans (no close beyond; no wick either at wick_tol 0) and passes exactly through two of its
 touches, strict lines are causal by truncation, the default fit is unchanged and lets closes through
 on the same data, a bad fit is refused. `test_alerts.py` also: the strict trendline alert never
-repaints, and alerts_config_trendlines.py loads with every trendline alert strict. **898 total.**
+repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked. **908 total.**
 
 ## 12. Known limitations / honest caveats
 

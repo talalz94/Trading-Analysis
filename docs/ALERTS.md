@@ -128,7 +128,7 @@ DELIVERY = dict(digest_minutes=15, catchup_max_age_minutes=30)
 | `name` | Unique. It is the alert's identity in the state, so **renaming an alert starts it afresh**. |
 | `kind` | What to look for, followed by that kind's own settings (table below). |
 | `markets` | Market names, group names, or `"all"`. |
-| `tfs` | Any of `5m 15m 30m 1h 2h 4h`, as one string or a tuple. All are built from the 5m feed. |
+| `tfs` | Any of `1m 5m 15m 30m 1h 2h 4h`, as one string or a tuple. All but 1m are built from the 5m feed; 1m alerts read 1m bars, fetched only for the markets a 1m alert watches and kept only for its few hours of warm-up. |
 | `priority` | `urgent`: emailed on the tick that finds it. `normal`: waits for the digest. |
 | `cooldown_bars` | (optional) After it fires on a market and timeframe, stay quiet there for this many of its bars. |
 | `category` | (optional) The email section. Defaults to the kind's own: Candle patterns, Chart patterns, Levels & lines, Indicators, Setups. |
@@ -193,8 +193,9 @@ through two real swing extremes with no candle closing through it before it is d
 fit checks the swings alone, so a wick can cross a line by two ATR (docs/CHART_GUIDE.md,
 "Trendlines"). Strict roughly halves the lines and the alerts: on Gold + USDJPY + BTC, Mar–Aug
 2026, "formed" on 1h/4h went from ~0.5 to ~0.3 a day. **`alerts/alerts_config_trendlines.py`** is
-a ready-made config built on it: strict trendline alerts plus a few chosen candlestick and chart
-patterns, with the steps to preview it and switch to it at the top of the file.
+a ready-made config built on it: strict trendlines forming and breaking on 1m-4h, wedges and
+triangles forming on 15m-4h, high-impact news reminders from a day ahead down to 15 minutes, and
+one email per quarter hour, with the steps to preview it and switch to it at the top of the file.
 
 **Rules that keep it honest:**
 - **A setting a kind does not have is refused by name.** `perod=14` on an RSI alert is an error,
@@ -230,6 +231,17 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
 - **Urgent** alerts are emailed on the tick that finds them. **Normal** ones wait for the digest:
   at most one email every `digest_minutes`. **Any email carries every pending alert**, so an urgent
   email also clears the waiting digest.
+- **Or on a clock: `DELIVERY = dict(every_minutes=15)`.** Emails go only at the quarter hours
+  (sent at :02 :17 :32 :47 UTC, once that boundary's bars are final), at most one each, carrying
+  everything found since -- urgent alerts and news included; urgent no longer means "at once".
+  A timeframe finer than the clock (1m, 5m) is fetched and judged only at the boundary, so a 1m
+  signal waits for the quarter hour it falls in. A news reminder rides in the email of the quarter
+  hour at or BEFORE its time (a 15-minute reminder for 08:30 arrives at 08:17), never after the
+  release. A signal found after its boundary's email has gone (a late feed) waits for the next one.
+- **`collapse_repeats=True`** makes a signal that repeats inside one window ONE row: same alert,
+  market, timeframe and signal, with "5 times, 10:01-10:13 UTC" in its note.
+- **Section order** follows `CATEGORIES`; put `"News"` last there and the news comes after the
+  signals instead of first.
 - **One email covers several markets.** The subject reads like
   `[Alerts] ⚡ 3 signals (1 urgent) · Gold, BTC · 14:01 UTC`. The body has a section per category,
   urgent rows first, with a TradingView link per row.
