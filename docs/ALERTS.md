@@ -249,6 +249,14 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
   that moment. Adding an alert, or switching one back on, does not mail you past matches.
 - **A signal may carry a note**, such as a chart pattern's target and stop, the trendline's level
   and touches, the gap's range or the RSI value. It is shown under the signal in the email.
+- **Every row carries a ref**, like `btc.1m.202610191349.trendline-broken` (market, timeframe, the
+  candle's close in UTC, the alert's name). On your PC, `python -m quant.alerts show <ref>` fetches
+  that market's candles again, re-runs the alert on them exactly as the monitor judged them (on a
+  15-minute clock, from the start of that quarter hour), says whether it fires there again, and
+  opens a chart in `reports/alerts/<ref>.html`: the candles around it, THE line or shape that fired
+  (with its touches or pivots, the level it would break and the measured target), the candle it
+  fired on, and what came after (`--after 60` candles). The alert is found by name in
+  `alerts/alerts_config.py` or any `alerts_config_*.py` beside it.
 
 ## 6. What survives an outage, and how
 
