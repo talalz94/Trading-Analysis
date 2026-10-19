@@ -40,7 +40,19 @@ def acquire_lock(path: Path):
     except OSError:
         f.close()
         return None
+    f.seek(0)                                        # who holds it, for the one that is turned away
+    f.truncate()
+    f.write(str(os.getpid()))
+    f.flush()
     return f
+
+
+def lock_holder(path: Path) -> str:
+    """The pid written by whoever holds the lock, or '?'."""
+    try:
+        return Path(path).read_text().strip() or "?"
+    except OSError:
+        return "?"
 
 
 def setup_logging(state_dir: Path, *, console: bool = False):
@@ -71,8 +83,10 @@ def run_forever(config_path: Path, state_dir: Path, notifier, feed, *, offset_s:
     from .store import State
     from .news import LiveNews
     lock = acquire_lock(state_dir / "alerts.lock")
-    if lock is None:
-        return 0                                       # already running: the watchdog's no-op
+    if lock is None:                                   # already running: the watchdog's no-op --
+        print(f"quant alerts: another monitor (pid {lock_holder(state_dir / 'alerts.lock')}) "
+              "is already running; this copy exits", flush=True)       # said, not silent
+        return 0
     state = None
     try:
         setup_logging(state_dir)

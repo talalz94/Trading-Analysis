@@ -54,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **908 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **909 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -1257,7 +1257,7 @@ BACKWARDS from the first candle). `test_patterns.py` also: a STRICT trendline is
 candle it spans (no close beyond; no wick either at wick_tol 0) and passes exactly through two of its
 touches, strict lines are causal by truncation, the default fit is unchanged and lets closes through
 on the same data, a bad fit is refused. `test_alerts.py` also: the strict trendline alert never
-repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked. **908 total.**
+repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock. **909 total.**
 
 ## 12. Known limitations / honest caveats
 
