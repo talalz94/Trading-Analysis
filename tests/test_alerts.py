@@ -674,6 +674,23 @@ def test_only_one_monitor_can_hold_the_lock(tmp_path):
     again.close()
 
 
+def test_the_lock_names_its_holder_and_a_second_copy_says_so(tmp_path, capsys):
+    # on a server, a second copy that exits in silence looks like a broken service
+    import os
+    from quant.alerts import runner
+    held = acquire_lock(tmp_path / "state" / "alerts.lock")
+    try:
+        assert runner.lock_holder(tmp_path / "state" / "alerts.lock") in (str(os.getpid()), "?")
+        assert runner.run_forever(tmp_path / "cfg.py", tmp_path / "state", ListNotifier(),
+                                  FakeFeed({})) == 0
+    finally:
+        held.close()
+    out = capsys.readouterr().out
+    assert "another monitor" in out and "already running" in out
+    if os.name != "nt":                              # Windows locks the bytes against reading
+        assert f"pid {os.getpid()}" in out
+
+
 def test_the_loop_survives_a_broken_config_and_a_second_copy_exits(tmp_path, monkeypatch):
     from quant.alerts import runner
     config(tmp_path, [spike_alert()])
