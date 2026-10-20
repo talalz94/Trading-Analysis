@@ -155,7 +155,7 @@ def test_reminders_go_once_each_and_never_after_the_release(tmp_path):
         r.tick(f"2026-10-14 {m}")
     s = r.subjects()
     assert len(s) == 2
-    assert "USD CPI m/m in 60 min" in s[0] and "in 15 min" in s[1] and "⚡" in s[0]
+    assert "USD CPI m/m in 1 h" in s[0] and "in 15 min" in s[1] and "⚡" in s[0]
 
 
 def test_after_an_outage_only_the_latest_reminder_still_ahead_goes(tmp_path):
@@ -183,7 +183,7 @@ def test_releases_at_the_same_minute_share_one_reminder_and_levels_decide(tmp_pa
         tick(r.cfg, r.state, r.mail, r.feed, now=t, news=r.news)
     s = r.subjects()
     assert len(s) == 3, s
-    assert "CPI m/m +2 in 60 min" in s[0]                    # one email, all three titles
+    assert "CPI m/m +2 in 1 h" in s[0]                       # one email, all three titles
     assert "Core CPI m/m" in r.mail.sent[0][1] and "Unemployment Claims" in r.mail.sent[0][1]
     assert "German" not in "".join(x[1] for x in r.mail.sent)
     assert "ISM Services PMI in 15 min" in s[2]
@@ -437,3 +437,44 @@ def test_on_a_clock_a_result_polled_at_the_boundary_rides_in_that_email(tmp_path
     assert len(r.mail.sent) == 1             # email with both
     subject, text, _ = r.mail.sent[0]
     assert "spike" in text and "0.5%" in text
+
+
+@pytest.mark.parametrize("minutes, says", [
+    (15, "15 min"), (60, "1 h"), (150, "2 h 30 min"), (720, "12 h"), (1440, "1 day"),
+    (1560, "1 day 2 h"), (2880, "2 days"), (0, "0 min"),
+])
+def test_a_wait_reads_in_days_hours_and_minutes(minutes, says):
+    from quant.alerts.news import span
+    assert span(minutes) == says
+
+
+def test_a_day_ahead_reminder_says_so_in_its_subject(tmp_path):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")),
+            news_cfg=dict(remind_before={"high": (1440, 720)}))
+    r.tick("2026-10-13 12:30")
+    r.tick("2026-10-14 00:30")
+    s = r.subjects()
+    assert "USD CPI m/m in 1 day" in s[0] and "USD CPI m/m in 12 h" in s[1]
+
+
+# ── the tiered subject (DELIVERY subject="tiers") ───────────────────────────────────────────
+@pytest.mark.parametrize("cur, title, k, want", [
+    ("USD", "CPI m/m", 15, 1),                          # critical
+    ("USD", "ISM Services PMI", 15, 1),                 # high, and US
+    ("USD", "ISM Services PMI", 120, 2),
+    ("USD", "CPI m/m", 1440, 3),                        # a day out: for the record
+    ("GBP", "CPI y/y", 30, 1),                          # critical anywhere
+    ("EUR", "German ZEW Economic Sentiment", 15, 2),    # high, not US
+    ("EUR", "German ZEW Economic Sentiment", 120, 3),
+])
+def test_a_news_reminder_is_tiered_by_level_currency_and_nearness(tmp_path, cur, title, k, want):
+    from quant.alerts.compose import TIER_TAG, tier
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30", title=title, cur=cur)),
+            news_cfg=dict(currencies={"USD": "medium", "EUR": "high", "GBP": "high"},
+                          remind_before={"high": (k,)}),
+            delivery=dict(subject="tiers"))
+    t = at("2026-10-14 12:30") - pd.Timedelta(minutes=k)
+    r.tick(f"{t:%Y-%m-%d %H:%M}")
+    (row,) = r.rows(what="reminder")
+    assert tier(row) == want
+    assert r.subjects()[0].startswith(f"[Alerts] {TIER_TAG[want]} · {cur} {title} in ")

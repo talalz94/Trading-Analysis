@@ -328,6 +328,7 @@ def test_repeats_in_one_window_are_one_row(tmp_path):
 
 
 @pytest.mark.parametrize("delivery, says", [
+    (dict(subject="loud"), "subject must be"),
     (dict(every_minutes=7), "every_minutes"),
     (dict(every_minute=15), r"unknown settings \['every_minute'\]"),
 ])
@@ -856,3 +857,32 @@ def test_every_trendline_alert_the_monitor_sends_redraws_with_its_own_line(tmp_p
         assert e["what"] in [h["what"] for h in c.hits], (e["close_time"], e["what"])
         assert any("line" in (tr.name or "") and "touches" in (tr.name or "")
                    for tr in c.fig.data)
+
+
+# ── the tiered subject (DELIVERY subject="tiers") ───────────────────────────────────────────
+@pytest.mark.parametrize("tf, what, late, want", [
+    ("1h", "broke a support trendline", 0, 1), ("4h", "falling wedge breakout", 0, 1),
+    ("15m", "broke a resistance trendline", 0, 2), ("1h", "support trendline formed", 0, 2),
+    ("4h", "rising wedge formed", 0, 2), ("1m", "broke a support trendline", 0, 3),
+    ("5m", "falling wedge breakout", 0, 3), ("15m", "rising wedge formed", 0, 3),
+    ("1h", "broke a support trendline", 1, 3),          # found late: for the record
+])
+def test_a_signal_is_tiered_by_what_it_is_and_its_timeframe(tf, what, late, want):
+    from quant.alerts.compose import tier
+    assert tier(dict(alert="x", market="BTC", tf=tf, what=what, late=late, detail="{}")) == want
+
+
+def test_a_tiered_subject_leads_with_the_most_important_row(tmp_path):
+    from quant.alerts.compose import compose
+    rows = [("1m", "support trendline formed"), ("1h", "broke a support trendline"),
+            ("15m", "rising wedge formed"), ("1h", "support trendline formed"),
+            ("4h", "rising wedge formed")]                 # two P2: the coarser one leads
+    ev = [dict(alert="lines", category="Spikes", priority="normal", market="BTC", tf=tf, what=w,
+               side="", price=1.0, close_time="2026-06-03T01:00:00+00:00", late=0, detail="{}")
+          for tf, w in rows]
+    tiered = compose(ev, config(tmp_path, [spike_alert()], dict(subject="tiers")),
+                     at("2026-06-03 01:02"))[0]
+    assert tiered == ("[Alerts] 🔴 P1 · BTC 1h broke support line · BTC 4h rising wedge formed"
+                      " · +3 more · 01:02 UTC")
+    classic = compose(ev, config(tmp_path, [spike_alert()]), at("2026-06-03 01:02"))[0]
+    assert classic.startswith("[Alerts] 5 signals")      # the default is what it always was

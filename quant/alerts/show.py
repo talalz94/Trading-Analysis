@@ -104,9 +104,11 @@ def alert_chart(ref: str, *, config=None, after: int = 60, before: int = 150, fe
     warm = det.warmup_bars(alert.params)
     start = (bar - (warm + before) * step * 7 / 5 - pd.Timedelta(days=3)).floor("D")
     base = base_of(tf)
-    feed = feed or Feed()
-    got = (feed.fetch([mk], {mk.name: start}, end) if base == "5m"
-           else feed.fetch([mk], {mk.name: start}, end, base=base))[mk.name]
+    got = _cached(mk, base, start, end) if feed is None else None
+    if got is None:
+        feed = feed or Feed()
+        got = (feed.fetch([mk], {mk.name: start}, end) if base == "5m"
+               else feed.fetch([mk], {mk.name: start}, end, base=base))[mk.name]
     if isinstance(got, Exception):
         raise got
     frame = tf_bars(got, tf, base)
@@ -130,10 +132,38 @@ def alert_chart(ref: str, *, config=None, after: int = 60, before: int = 150, fe
     out = AlertChart(ref, mk.name, tf, alert.name, close, frame, k, hits)
     out.fig = _figure(out, alert, win, lo, before)
     if write:
-        from quant.viz import open_in_browser
+        # written and opened HERE, not through quant.viz: importing that package pulls in
+        # plotly-resampler and Dash, 11 of the 20 s a `show` took
+        import webbrowser
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        out.path = open_in_browser(out.fig, OUT_DIR / f"{ref}.html", show=show)
+        out.path = (OUT_DIR / f"{ref}.html").resolve()
+        out.fig.write_html(str(out.path), include_plotlyjs=True, full_html=True)
+        if show:
+            webbrowser.open(out.path.as_uri())   # hands the file to the browser and returns
     return out
+
+
+def _cached(mk, base: str, start, end) -> Optional[pd.DataFrame]:
+    """The same candles through the PC's research cache (data/, incremental): the same provider,
+    the same bid side, but months of 5m history are fetched once instead of on every `show` --
+    a 4h alert took 2 min straight from the feed. None when the cache cannot serve it."""
+    import logging
+    from quant.data import get_ohlcv
+    from .feeds import BASE_BAR, COLS
+    quiet = logging.getLogger("quant.data")
+    level = quiet.level
+    quiet.setLevel(logging.WARNING)
+    try:
+        df = get_ohlcv(mk.symbol, base, start=start.strftime("%Y-%m-%d %H:%M"),
+                       end=end.strftime("%Y-%m-%d %H:%M"), source=mk.source, tz="UTC")
+    except Exception:
+        return None
+    finally:
+        quiet.setLevel(level)
+    if df is None or not len(df):
+        return None
+    df = df[COLS]
+    return df[df[TIME_COL] + BASE_BAR[base] <= end].reset_index(drop=True)
 
 
 # ── drawing ──────────────────────────────────────────────────────────────────────────────────
