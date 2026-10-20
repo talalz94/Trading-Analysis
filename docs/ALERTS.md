@@ -242,6 +242,15 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
   market, timeframe and signal, with "5 times, 10:01-10:13 UTC" in its note.
 - **Section order** follows `CATEGORIES`; put `"News"` last there and the news comes after the
   signals instead of first.
+- **`subject="tiers"`** leads the subject with the email's most important row and its tier, so
+  nothing important hides behind "12 signals": 🔴 **P1** act now (critical news, or any high US
+  news, within the hour and its result; a trendline break or pattern breakout on 1h/4h), 🟠 **P2**
+  look soon (other high news within the hour, critical/US news 2-6 h out, a moved release, a 15m
+  break, a 1h/4h formation), ⚪ **P3** for the record (1m/5m, smaller formations, far reminders).
+  For example `[Alerts] 🔴 P1 · USD CPI m/m in 15 min · BTC 1h broke support line · +4 more ·
+  13:17 UTC`. A Gmail filter on `subject:"P1"` can star it and mark it important; one on
+  `subject:"P3"` can skip the inbox. Waits read as people say them: `in 1 day`, `in 12 h`,
+  `in 2 h 30 min`, `in 15 min`.
 - **One email covers several markets.** The subject reads like
   `[Alerts] ⚡ 3 signals (1 urgent) · Gold, BTC · 14:01 UTC`. The body has a section per category,
   urgent rows first, with a TradingView link per row.

@@ -54,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **916 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **943 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -804,6 +804,9 @@ quant/
     ├── compose.py       #   one email: a section per category in config order, urgent rows first;
     │                    #     collapse_repeats = one row per (alert, market, tf, signal, window) with
     │                    #     "5 times, 10:01-10:13 UTC"; "News" placed after other CATEGORIES -> last
+    │                    #     subject="tiers": tier() ranks every row 1 act now / 2 look soon / 3 record
+    │                    #     (critical or high-USD news within the hour, 1h+ breaks/breakouts = 1)
+    │                    #     and the subject leads with "🔴 P1 · <top row> · <next> · +N more
     ├── notify.py        #   SmtpNotifier (Gmail App Password from .env ALERT_SMTP_*), File/ListNotifier
     ├── news.py          #   the NEWS block: week ahead, day ahead, reminders (60/15 critical, 15
     │                    #     high; any minutes up to 2880), results (the agencies for US, JBlanked
@@ -826,7 +829,10 @@ quant/
     │                    #     re-runs the alert on the window the monitor judged (on a clock, from
     │                    #     the quarter hour's first candle), and draws THE line / shape (the
     │                    #     chart `_formed` record now carries upper/lower/pivots for this) ->
-    │                    #     reports/alerts/<ref>.html. Live: 4 of 4 refs re-ran to the same note
+    │                    #     reports/alerts/<ref>.html. Live: 4 of 4 refs re-ran to the same note.
+    │                    #     Reads candles through the research cache (get_ohlcv; same provider,
+    │                    #     bid side) and writes the HTML itself: quant.viz pulls in plotly-resampler
+    │                    #     + Dash (11 s). A 4h ref went 132 s -> ~15 s; the process exits after
     └── runner.py        #   the minute loop, an OS file lock (one copy only), rotating log, status;
                          #     the lock file names its holder's pid, and a turned-away copy says so
 
@@ -1264,7 +1270,7 @@ BACKWARDS from the first candle). `test_patterns.py` also: a STRICT trendline is
 candle it spans (no close beyond; no wick either at wick_tol 0) and passes exactly through two of its
 touches, strict lines are causal by truncation, the default fit is unchanged and lets closes through
 on the same data, a bad fit is refused. `test_alerts.py` also: the strict trendline alert never
-repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock; every email row carries a ref that names its alert, a ref naming nothing is refused by name, `show` re-runs the alert on its own candle and says when it does not fire there, and every 1m trendline alert the monitor sends on the 15-minute clock redraws with its own line. **916 total.**
+repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock; every email row carries a ref that names its alert, a ref naming nothing is refused by name, `show` re-runs the alert on its own candle and says when it does not fire there, and every 1m trendline alert the monitor sends on the 15-minute clock redraws with its own line; waits read in days, hours and minutes; every row and every news reminder gets its tier (P1 act now, P2 look soon, P3 record) and a tiered subject leads with the most important row, coarser first -- 8 rules mutation-checked. **943 total.**
 
 ## 12. Known limitations / honest caveats
 
