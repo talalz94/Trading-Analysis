@@ -320,6 +320,19 @@ def _item_line(i, tz, *, with_day=True) -> str:
             + (f"  ({nums})" if nums else ""))
 
 
+def span(minutes: int) -> str:
+    """Minutes as a person says them: 15 min · 1 h · 2 h 30 min · 12 h · 1 day · 1 day 2 h."""
+    m = max(0, int(minutes))
+    if m < 60:
+        return f"{m} min"
+    if m < 1440:
+        h, r = divmod(m, 60)
+        return f"{h} h" + (f" {r} min" if r else "")
+    d, rest = divmod(m, 1440)
+    h = rest // 60
+    return f"{d} day{'s' * (d > 1)}" + (f" {h} h" if h else "")
+
+
 def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
     """Subject, text lines and an HTML block for one notice."""
     esc = _html.escape
@@ -330,10 +343,10 @@ def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
         t = pd.Timestamp(first["t"])
         mins = max(0, int(round((t - now).total_seconds() / 60)))
         names = ", ".join(i["title"] for i in items)
-        head = (f"{cur} {names} in {mins} min -- {_local(t, tz)} {zone} "
+        head = (f"{cur} {names} in {span(mins)} -- {_local(t, tz)} {zone} "
                 f"({_ny(t)} New York)")
         subject = f"{cur} {items[0]['title']}{' +' + str(len(items) - 1) if len(items) > 1 else ''}" \
-                  f" in {mins} min"
+                  f" in {span(mins)}"
         lines = [head] + [f"    {i['title']}: {_nums(i) or 'no forecast'}" for i in items]
     elif kind == "result":
         t = pd.Timestamp(first["t"])
@@ -605,7 +618,7 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
             return ""
         e = near.iloc[(near["t"] - c).abs().argmin()]
         m = int(round((e["t"] - c).total_seconds() / 60))
-        rel = f"in {m} min" if m > 0 else ("now" if m == 0 else f"{-m} min ago")
+        rel = f"in {span(m)}" if m > 0 else ("now" if m == 0 else f"{span(-m)} ago")
         return f"news: {e['currency']} {e['title']} {rel}"
     return note
 
@@ -648,7 +661,7 @@ def upcoming_table(news, cfg, now, days: float = 7) -> List[str]:
     lines = []
     for t, cur, g in _groups(ev):
         offs = reminder_offsets(nc, max(g["level"], key=RANK.get))
-        rem = ", ".join(f"{k} min before" for k in offs) or "no reminder"
+        rem = ", ".join(f"{span(k)} before" for k in offs) or "no reminder"
         for i, e in enumerate(g.to_dict("records")):
             lines.append(_item_line(_item(e), nc.timezone) + (f"   [{rem}]" if i == 0 else ""))
     return lines

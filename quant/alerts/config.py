@@ -72,6 +72,8 @@ class Delivery:
                                                  # and news included. 0 = urgent at once + digest
     collapse_repeats: bool = False               # one row per alert, market, timeframe and signal
                                                  # in an email, with how many times and when
+    subject: str = "classic"                     # "tiers": lead with the top row and its tier,
+                                                 # 🔴 P1 / 🟠 P2 / ⚪ P3 (compose.tier) -- filterable
 
 
 @dataclass(frozen=True)
@@ -196,6 +198,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
         raise ConfigError(f"DELIVERY has unknown settings {sorted(set(dv) - known)}; "
                           f"known: {sorted(known)}")
     delivery = Delivery(**dv)
+    if delivery.subject not in ("classic", "tiers"):
+        raise ConfigError(f"DELIVERY subject must be 'classic' or 'tiers', got {delivery.subject!r}")
     em = delivery.every_minutes
     if not isinstance(em, int) or em < 0 or (em and 60 % em):
         raise ConfigError(f"DELIVERY every_minutes must be 0 or a whole divisor of 60 (5, 10, 15, "

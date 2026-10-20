@@ -5,6 +5,15 @@ signal, urgent rows first and marked, and the events found late in their own sec
 Plain text and HTML are built from the same rows, and the HTML is inline-styled tables only --
 what every mail client renders the same way.
 
+With DELIVERY `subject="tiers"`, the subject leads with the email's most important row and its TIER,
+so a mail filter can act on it (tier() has the rules):
+  🔴 P1  act now   critical news, or high USD news, within the hour, and its result;
+                   a trendline BREAK or a pattern BREAKOUT on 1h or above
+  🟠 P2  look soon other high news within the hour; critical / USD news 2-6 h ahead; a moved
+                   release; a break on 15m-30m; a line or pattern FORMED on 1h or above
+  ⚪ P3  record    everything else: 1m / 5m signals, smaller formations, far reminders, digests
+  e.g.  [Alerts] 🔴 P1 · USD CPI m/m in 15 min · BTC 1h broke support line · +4 more · 13:17 UTC
+
 With DELIVERY `collapse_repeats`, the same signal repeating -- one alert, market, timeframe and
 signal, five 1m closes through a line in one quarter hour -- is ONE row saying how many times and
 from when to when. With "News" placed after the other CATEGORIES, the news comes last.
@@ -90,7 +99,69 @@ def _rows(events):
 _OPEN_DIV = '<div style="font:14px -apple-system,Segoe UI,Arial,sans-serif;color:#111827;">'
 
 
+TIER_TAG = {1: "🔴 P1", 2: "🟠 P2", 3: "⚪ P3"}
+
+
+def tier(e) -> int:
+    """1 = act now, 2 = look soon, 3 = for the record (see the module docstring)."""
+    from quant.news.catalog import RANK
+    from .news import is_news, notice_of
+    if is_news(e):
+        items = notice_of(e).get("items") or []
+        lv = max((RANK.get(i.get("level"), 0) for i in items), default=0)
+        usd = any(i.get("currency") == "USD" for i in items)
+        top = lv >= RANK["critical"] or (usd and lv >= RANK["high"])
+        if e["what"] == "reminder":
+            tf = str(e["tf"])
+            k = int(tf[2:]) if tf.startswith("T-") and tf[2:].isdigit() else 0
+            if top:
+                return 1 if k <= 60 else 2 if k <= 360 else 3
+            return 2 if k <= 60 and lv >= RANK["high"] else 3
+        if e["what"] == "result":
+            return 1 if top else 2
+        return 2 if e["tf"] in ("moved", "removed") else 3
+    if e.get("late"):
+        return 3
+    m = TF_MINUTES.get(e["tf"], 0)
+    w = e["what"].lower()
+    if "broke" in w or "breakout" in w:
+        return 1 if m >= 60 else 2 if m >= 15 else 3
+    if "formed" in w:
+        return 2 if m >= 60 else 3
+    return 2 if m >= 240 else 3
+
+
+def _headline(e) -> str:
+    """A row in a few words, for the subject."""
+    from .news import is_news, notice_of
+    if is_news(e):
+        return notice_of(e).get("subject") or e["what"]
+    w = (e["what"].replace("broke a ", "broke ").replace(" trendline", " line"))
+    return f"{e['market']} {e['tf']} {w}"
+
+
+def tier_subject(events, cfg, now) -> str:
+    """[Alerts] 🔴 P1 · <the most important row> · <the next> · +N more · HH:MM UTC"""
+    ranked = sorted(events, key=lambda e: (tier(e), 0 if e.get("alert") == "news" else 1,
+                                           -TF_MINUTES.get(e["tf"], 0),
+                                           str(e.get("close_time", ""))))
+    heads = list(dict.fromkeys(_headline(e) for e in ranked))
+    more = len(heads) - 2
+    now = pd.Timestamp(now).tz_convert("UTC")
+    return (f"{cfg.delivery.subject_prefix} {TIER_TAG[tier(ranked[0])]} · "
+            + " · ".join(heads[:2]) + (f" · +{more} more" if more > 0 else "")
+            + f" · {now:%H:%M} UTC")
+
+
 def compose(events, cfg, now, *, host: str = "", title: str = ""):
+    """-> (subject, text, html); with DELIVERY subject="tiers" the subject is tier_subject()."""
+    subject, text, html = _compose(events, cfg, now, host=host, title=title)
+    if getattr(cfg.delivery, "subject", "classic") == "tiers" and events:
+        subject = tier_subject(events, cfg, now)
+    return subject, text, html
+
+
+def _compose(events, cfg, now, *, host: str = "", title: str = ""):
     """-> (subject, text, html). News notices (quant.alerts.news) come first, in their own
     section; an email without them is exactly what it always was."""
     from .news import CATEGORY, is_news, news_html, news_subject, news_text
