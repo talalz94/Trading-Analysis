@@ -5,8 +5,8 @@ What it watches, on Gold, USDJPY and BTC:
   TRENDLINES  a line FORMS or price BREAKS it, on 1m 5m 15m 1h 4h, fitted STRICT: each line runs
               exactly through two real swing highs or lows and no candle closes through it before
               it is drawn (docs/CHART_GUIDE.md, "Trendlines")
-  PATTERNS    rising / falling wedge, ascending / descending / symmetrical triangle FORMED, on
-              15m 1h 4h (1m and 5m are written below, switched off: ~40 a day between them)
+  PATTERNS    rising / falling wedge, ascending / descending / symmetrical triangle FORMED and
+              BROKEN OUT of, on 15m 1h 4h (1m and 5m are written below, switched off: ~40 a day)
   NEWS        high and critical releases: reminders 1 day, 12 h, 6 h, 2 h, 1 h, 30 and 15 min
               before; the evening preview, the weekly outlook and the results as before
   No candlestick alerts.
@@ -19,6 +19,16 @@ HOW THE EMAILS COME (§3 DELIVERY)
   :15 -- is ONE row: "5 times, 10:01-10:13 UTC". Nothing found, no email.
   A news reminder comes in the email of the quarter hour at or before its time: a 15-minute
   reminder for a release at 08:30 arrives at 08:17. Never after the release.
+
+THE SUBJECT SAYS HOW IMPORTANT THE EMAIL IS -- it leads with the most important row in it:
+  🔴 P1  act now    critical news (CPI, payrolls, rate decisions), or ANY high US news, within the
+                    hour, and its result; a trendline break or pattern breakout on 1h / 4h
+  🟠 P2  look soon  other high news within the hour; critical / US news 2-6 h ahead; a moved
+                    release; a break on 15m; a line or pattern forming on 1h / 4h
+  ⚪ P3  record     1m / 5m signals, 15m formations, reminders a day or 12 h ahead
+  e.g.  [Alerts] 🔴 P1 · USD CPI m/m in 15 min · BTC 1h broke support line · +4 more · 13:17 UTC
+  In Gmail, a filter on  subject:"P1"  can star it and mark it important (and send it to your
+  phone); one on  subject:"P3"  can skip the inbox. Back to the plain subject: subject="classic".
 
 HOW TO USE IT
   1. LOOK FIRST. This sends nothing; it shows what WOULD have fired in the last 48 hours:
@@ -108,9 +118,11 @@ ALERTS = [
          markets="all", tfs=("1m", "5m", "15m", "1h", "4h"), priority="urgent"),
 
     # ── WEDGES & TRIANGLES ── "formed": the shape is in place (its pivots confirmed); the note
-    #      says where it would break and the measured target. "both" would add the breakout.
-    #      ~N/day   1m (BTC) 22 · 5m 9.2 · 15m 3.0 · 1h 0.6 · 4h 0.1
-    dict(on=True,  name="wedge / triangle formed", kind="chart", event="formed",
+    #      says where it would break and the measured target. "breakout": price CLOSED through
+    #      it; the note gives the target and the stop. "both" = the two.
+    #      ~N/day formed    1m (BTC) 22 · 5m 9.2 · 15m 3.0 · 1h 0.6 · 4h 0.1
+    #             breakout  15m 0.9 · 1h 0.2 · 4h 0.0
+    dict(on=True,  name="wedges & triangles", kind="chart", event="both",
          patterns=("rising_wedge", "falling_wedge", "ascending_triangle",
                    "descending_triangle", "symmetrical_triangle"),
          markets="all", tfs=("15m", "1h", "4h"), priority="normal"),
@@ -127,6 +139,8 @@ DELIVERY = dict(
                                      #   with everything found in it -- urgent and news included
     collapse_repeats=True,           # a signal repeating in that quarter hour is one row, with
                                      #   how many times and from when to when
+    subject="tiers",                 # 🔴 P1 / 🟠 P2 / ⚪ P3 first (see the top of this file);
+                                     #   "classic" = "N signals · markets · time"
     catchup_max_age_minutes=30,      # found later than this after its candle closed (PC was off)
 )                                    #   -> listed under "While offline", never sent as urgent
 
