@@ -30,6 +30,11 @@ THE SUBJECT SAYS HOW IMPORTANT THE EMAIL IS -- it leads with the most important 
   In Gmail, a filter on  subject:"P1"  can star it and mark it important (and send it to your
   phone); one on  subject:"P3"  can skip the inbox. Back to the plain subject: subject="classic".
 
+CHARTS IN THE EMAIL (charts=3): the 3 most important signals are drawn at the top of the email --
+the candles, the line or shape that fired, a star on the candle it fired on. ~40 KB each. On the
+server they need matplotlib (the install script adds it); without it the email simply goes
+without pictures and the log says why.
+
 HOW TO USE IT
   1. LOOK FIRST. This sends nothing; it shows what WOULD have fired in the last 48 hours:
          python -m quant.alerts check --config alerts/alerts_config_trendlines.py
@@ -120,14 +125,20 @@ ALERTS = [
     # ── WEDGES & TRIANGLES ── "formed": the shape is in place (its pivots confirmed); the note
     #      says where it would break and the measured target. "breakout": price CLOSED through
     #      it; the note gives the target and the stop. "both" = the two.
-    #      ~N/day formed    1m (BTC) 22 · 5m 9.2 · 15m 3.0 · 1h 0.6 · 4h 0.1
-    #             breakout  15m 0.9 · 1h 0.2 · 4h 0.0
-    dict(on=True,  name="wedges & triangles", kind="chart", event="both",
+    #      fit="strict": each boundary through two real swing extremes, no candle closing through
+    #      it before the shape forms; touch_tol=0.5: a third swing within 0.5 ATR of it counts.
+    #      ~N/day formed  15m 0.5 · 1h 0.2 · 4h 0.0   (the default fit: 15m 3.0 · 1h 0.6 · 4h 0.1,
+    #      including the Gold 15m "falling wedge" of 20 Oct whose top line price had closed above)
+    # (named "formed" though it now fires on breakouts too: a renamed alert gets new email refs,
+    #  and the refs in emails already sent would no longer open with `show`)
+    dict(on=True,  name="wedge / triangle formed", kind="chart", event="both",
+         fit="strict", touch_tol=0.5,
          patterns=("rising_wedge", "falling_wedge", "ascending_triangle",
                    "descending_triangle", "symmetrical_triangle"),
          markets="all", tfs=("15m", "1h", "4h"), priority="normal"),
 
     dict(on=False, name="wedge / triangle formed, 1m 5m", kind="chart", event="formed",
+         fit="strict", touch_tol=0.5,
          patterns=("rising_wedge", "falling_wedge", "ascending_triangle",
                    "descending_triangle", "symmetrical_triangle"),
          markets="all", tfs=("1m", "5m"), priority="normal"),
@@ -141,6 +152,9 @@ DELIVERY = dict(
                                      #   how many times and from when to when
     subject="tiers",                 # 🔴 P1 / 🟠 P2 / ⚪ P3 first (see the top of this file);
                                      #   "classic" = "N signals · markets · time"
+    charts=3,                        # a picture of the top 3 signal rows, in the email: the line
+                                     #   or shape that fired on its candles. 3 covered every row
+                                     #   of every email in a 48 h test; 0 = no pictures
     catchup_max_age_minutes=30,      # found later than this after its candle closed (PC was off)
 )                                    #   -> listed under "While offline", never sent as urgent
 

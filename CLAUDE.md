@@ -54,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **943 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **954 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -132,6 +132,12 @@ quant/
 │   │                    #     `_formed=[]` (opt-in, changes nothing else -- tested) receives every
 │   │                    #     shape on the bar it is REGISTERED, broken out later or not: the only
 │   │                    #     honest "has formed", since the breakout rows are known only later.
+│   │                    #     fit="strict" (opt-in; default "ransac" byte-identical) = the strict
+│   │                    #     trendline fit for each BOUNDARY (_Bars passed into _best_line through
+│   │                    #     _detect/_shapes_from_window): no close beyond, wick ≤ wick_tol_atr, from
+│   │                    #     its first touch to the registration bar; line_tol_atr= overrides every
+│   │                    #     spec's touch tolerance. _formed records carry upper/lower_touches.
+│   │                    #     Gold+USDJPY+BTC wedges/triangles/day: 3.7 default, 1.9 strict, 0.7 at 0.5
 │   │                    #     They are tuned for WELL-FORMED, FREQUENT shapes, NOT for direction:
 │   │                    #     hit rate 0.48, below a coin flip. See docs/WHAT_WORKS.md.
 │   │                    #     CHANNELS (channel_up/down/flat) = two PARALLEL boundaries holding a
@@ -833,6 +839,15 @@ quant/
     │                    #     Reads candles through the research cache (get_ohlcv; same provider,
     │                    #     bid side) and writes the HTML itself: quant.viz pulls in plotly-resampler
     │                    #     + Dash (11 s). A 4h ref went 132 s -> ~15 s; the process exits after
+    ├── snapshot.py      #   DELIVERY charts=N: PNG pictures of the top N rows (ranked like the subject)
+    │                    #     at the top of the email, as inline Content-ID attachments (Gmail drops
+    │                    #     data: images). Drawn from show.build_chart's MARKS (lines/points in
+    │                    #     candle-index space, shared with the browser chart) with matplotlib's OO
+    │                    #     API -- no pyplot, lazily imported only when charts > 0, ≤400 candles,
+    │                    #     bodies as one vlines collection (ax.bar was 4x slower). Budget per email
+    │                    #     (chart_budget_seconds); a failure costs that picture only. Outbox keeps
+    │                    #     them (images column, added by migration). N=3 from a 48 h test: rows
+    │                    #     per email 1:37 2:13 3:1. ~0.1 s build + 0.3 s draw, +8 MB, ~40 KB
     └── runner.py        #   the minute loop, an OS file lock (one copy only), rotating log, status;
                          #     the lock file names its holder's pid, and a turned-away copy says so
 
@@ -1270,7 +1285,7 @@ BACKWARDS from the first candle). `test_patterns.py` also: a STRICT trendline is
 candle it spans (no close beyond; no wick either at wick_tol 0) and passes exactly through two of its
 touches, strict lines are causal by truncation, the default fit is unchanged and lets closes through
 on the same data, a bad fit is refused. `test_alerts.py` also: the strict trendline alert never
-repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock; every email row carries a ref that names its alert, a ref naming nothing is refused by name, `show` re-runs the alert on its own candle and says when it does not fire there, and every 1m trendline alert the monitor sends on the 15-minute clock redraws with its own line; waits read in days, hours and minutes; every row and every news reminder gets its tier (P1 act now, P2 look soon, P3 record) and a tiered subject leads with the most important row, coarser first -- 8 rules mutation-checked. **943 total.**
+repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock; every email row carries a ref that names its alert, a ref naming nothing is refused by name, `show` re-runs the alert on its own candle and says when it does not fire there, and every 1m trendline alert the monitor sends on the 15-minute clock redraws with its own line; waits read in days, hours and minutes; every row and every news reminder gets its tier (P1 act now, P2 look soon, P3 record) and a tiered subject leads with the most important row, coarser first -- 8 rules mutation-checked. EMAIL PICTURES: an email carries pictures of its top rows, ranked, one per row at its latest repeat in any order, at the top; charts=0 is the old email; no matplotlib or a broken picture still sends; a retried email keeps them; the SMTP message carries them inline; a pattern line is drawn candle by candle from its own first touch. STRICT PATTERNS: every boundary clear of every candle with touches inside the tolerance, causal by truncation, the default fit unchanged -- 11 rules mutation-checked (two of them equivalent mutants). **954 total.**
 
 ## 12. Known limitations / honest caveats
 
