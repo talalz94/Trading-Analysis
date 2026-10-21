@@ -1034,8 +1034,10 @@ scripts/install_alerts_linux.sh   # the same on a Linux SERVER (docs/ALERTS_CLOU
                                   #   Syntax-checked only: no systemd on the dev PC
 requirements-alerts.txt           # ONLY what quant.alerts imports (measured by running every kind):
                                   #   numpy pandas numba pyarrow scipy requests dukascopy-python
-                                  #   python-dotenv, pinned; proved in a clean Python 3.12 venv (the
-                                  #   Ubuntu 24.04 python) by test_alerts.py passing there
+                                  #   python-dotenv + matplotlib (the email pictures), pinned; proved
+                                  #   in a clean Python 3.12 venv (the Ubuntu 24.04 python) by
+                                  #   test_alerts.py + test_alerts_news.py passing there (195, the two
+                                  #   `show` tests skip: plotly is the PC's browser chart)
 alerts/alerts_config.py           # THE ALERTS CONFIG, the user's: markets, groups, categories,
                                   #   alerts, delivery. alerts/state/ is git-ignored
 alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy (the user's spec, 2026-10-20): NO candle

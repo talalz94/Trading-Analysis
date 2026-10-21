@@ -828,6 +828,7 @@ def test_a_ref_that_names_nothing_is_refused_by_name(tmp_path, ref, says):
 
 
 def test_show_re_runs_the_alert_on_its_own_candle_and_draws_it(tmp_path):
+    pytest.importorskip("plotly")    # `show` is the PC's browser chart; the server has no plotly
     from quant.alerts.show import alert_chart
     r = Rig(tmp_path, [spike_alert()], a=["2026-06-03 00:20"])
     c = alert_chart("a.1h.202606030100.spike", config=r.cfg.path, feed=r.feed,
@@ -843,6 +844,7 @@ def test_show_re_runs_the_alert_on_its_own_candle_and_draws_it(tmp_path):
 
 
 def test_every_trendline_alert_the_monitor_sends_redraws_with_its_own_line(tmp_path):
+    pytest.importorskip("plotly")    # `show` is the PC's browser chart; the server has no plotly
     # the real case: 1m lines on the 15-minute clock, where the monitor judges a quarter hour of
     # candles at once -- show must re-run from the same window or the line can differ
     from quant.alerts.show import alert_chart, make_ref
