@@ -131,6 +131,52 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
     assert cfg.news.remind_before["high"] == (1440, 720, 360, 120, 60, 30, 15)
 
 
+def test_a_longer_warm_up_fetches_the_older_history_once(tmp_path, monkeypatch):
+    # the pattern warm-up went 400 -> 1,200 candles, so a store holding 121 days must reach back
+    # to 285 -- once, and a market with nothing older to give is not asked for it every tick
+    r = Rig(tmp_path, [spike_alert(tfs=("1h",))])
+    r.feed = FakeFeed({"A": bars(start="2026-05-01"), "B": bars(start="2026-06-05", seed=1)})
+    r.tick("2026-06-07 00:00")
+
+    def first(m):
+        return r.state.bars(m, "5m")[TIME_COL].iloc[0]
+
+    assert first("A") == at("2026-06-03")                    # 5 candles of 1h: 4 days kept
+    monkeypatch.setattr(REGISTRY["spike"], "warmup_bars", lambda p: 300)    # now 21 days
+    r.feed.calls.clear()
+    r.tick("2026-06-07 00:10")
+    assert {m: s for m, s, _ in r.feed.calls} == {"A": at("2026-05-17"), "B": at("2026-05-17")}
+    assert first("A") == at("2026-05-17 00:10") and first("B") == at("2026-06-05")
+    r.feed.calls.clear()
+    r.tick("2026-06-07 01:05")                               # the next 1h close
+    assert {m for m, _, _ in r.feed.calls} == {"A", "B"}
+    assert all(s > at("2026-06-06 23:00") for _, s, _ in r.feed.calls)   # forward only
+
+
+BTC_5M = Path(__file__).resolve().parents[1] / "data" / "binance_spot_BTCUSDT_5m.parquet"
+
+
+@pytest.mark.skipif(not BTC_5M.is_file(), reason="needs the local BTC 5m cache")
+def test_the_monitors_look_finds_every_pattern_the_whole_history_finds():
+    # with a 400-candle warm-up it found 8 of 22 (Gold/USDJPY/BTC 15m+1h, 7-21 Oct 2026): a
+    # wedge spans hundreds of candles and its zigzag needs more before it to settle
+    from quant.alerts.engine import judge
+    cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
+    shapes = next(a for a in cfg.alerts if a.kind == "chart")
+    b = pd.read_parquet(BTC_5M)
+    b = b[(b[TIME_COL] >= at("2026-02-01")) & (b[TIME_COL] < at("2026-09-01"))]
+    f = tf_bars(b.reset_index(drop=True), "15m").reset_index(drop=True)
+    f["t"] = f[TIME_COL]
+    det = REGISTRY["chart"]
+    whole = sorted({(f[TIME_COL].iat[h["i"]], h["what"]) for h in det.evaluate(f, shapes.params, "15m")
+                    if "formed" in h["what"] and f[TIME_COL].iat[h["i"]] >= at("2026-07-01")})
+    assert len(whole) >= 5
+    for t, what in whole:
+        k = int(np.flatnonzero((f[TIME_COL] == t).to_numpy())[0])
+        look = judge(shapes, f.iloc[:k + 1].reset_index(drop=True), f[TIME_COL].iat[k - 1], "15m")
+        assert what in [h["what"] for _, h in look], f"{t} {what}"
+
+
 GOLD_1M = Path(__file__).parent / "data" / "gold_1m_2026-10-21.csv"
 
 

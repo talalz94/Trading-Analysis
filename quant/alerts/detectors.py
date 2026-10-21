@@ -170,7 +170,10 @@ class ChartDetector(Detector):
             raise ValueError("touch_tol and wick_tol must be 0 or more")
 
     def warmup_bars(self, params):
-        return 400         # 24 zigzag pivots, and a shape may wait 150 bars for its breakout
+        # 24 zigzag pivots, and a shape may wait 150 bars for its breakout. 400 was too few: on
+        # Gold/USDJPY/BTC 15m+1h, 7-21 Oct 2026, the monitor's 400-candle look found 8 of the 22
+        # wedges/triangles the whole history finds; 1,200 found all 22 and nothing else
+        return 1200
 
     def evaluate(self, frame, params, tf):
         from quant.indicators import add_chart_patterns, CHART_PATTERN_DIRECTION

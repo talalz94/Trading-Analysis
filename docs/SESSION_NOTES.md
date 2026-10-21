@@ -2533,3 +2533,20 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
 - Delay: on the 15-minute clock the 18:48 break would have been mailed at 19:02, at the low; on a
   5-minute clock at 18:52. The trendline config is now every_minutes=5 (a 1m signal arrives 2-7
   minutes after its candle).
+
+### The pattern alert looked at too few candles (2026-10-21)
+
+- The server mailed 3 wedge/triangle formations between 20 Oct 15:00 and 21 Oct 12:00; `check`
+  had listed ~10. A replay of the monitor quarter hour by quarter hour with the server's own
+  config gave exactly the server's 3, so nothing was lost in delivery: the two judge differently.
+  `check` runs the detector once over ALL stored history (121 days); the monitor passes only the
+  kind's warm-up before the newest candle -- 400 for chart patterns.
+- Measured (Gold/USDJPY/BTC 15m+1h, every candle 7-21 Oct, strict and default fit): the whole
+  history found 22 formations; a 400-candle look found 8 of them; a 1,200-candle look found all 22
+  and nothing else. A wedge spans 200+ candles and the zigzag needs its earlier pivots to settle.
+  ChartDetector.warmup_bars 400 -> 1,200. Cost: one 15m look 0.64 s on the PC (~2-2.5 s on the
+  e2-micro), 1h 0.29 s, 4h 0.24 s; 4h at 1,200 candles needs 285 days of 5m (7.4 MB per market).
+- The bar store only ever fetched forward from its newest candle, so a longer warm-up never got its
+  older history. refresh_bars now backfills once (meta history_from:<feed>).
+- So the pattern rates quoted earlier (0.7/day strict at touch 0.5) were whole-history counts the
+  monitor could not reach; with 1,200 it does.
