@@ -225,7 +225,8 @@ def _trendline_marks(alert, win, lo, last, hits):
     d = add_trendlines(win[["open", "high", "low", "close"]].copy(),
                        min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]),
                        fit=p["fit"], line_tol_atr=float(p["touch_tol"]),
-                       wick_tol_atr=float(p["wick_tol"]))
+                       wick_tol_atr=float(p["wick_tol"]),
+                       max_distance_atr=float(p["max_distance"]))
     tb = trendline_table(d)
     k = len(win) - 1
     out, first = [], lo + k

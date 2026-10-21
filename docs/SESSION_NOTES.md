@@ -2510,3 +2510,26 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
 - A renamed alert gets new email refs and the old ones stop resolving -- keep names stable.
 - Dukascopy 1m once raised IndexError inside dukascopy_python for USDJPY; not reproducible minutes
   later. The monitor backs off a minute and retries, so it costs one email's delay at most.
+
+### 1m trendlines: the Gold drop of 21 Oct, and a 5-minute clock (2026-10-21)
+
+- Gold fell 4,140 -> 4,104.6 between 18:44 and 19:02 UTC (oil +1.4%, USDJPY +0.12%, BTC -0.6%
+  in the same half hour) through a rising 1m support the user had drawn (lows 16:37 4127.28, 17:04
+  4128.76, 17:28 4131.01). The monitor said nothing, for two separate reasons:
+  - Tolerance. Gold's 1m ATR is ~1 point, so touch 0.3 / wick 0.15 ATR asked for touches within
+    0.3 points of the line -- the middle low sits ~0.5 off. No line was ever drawn.
+  - Distance. At 0.5 ATR the fitter draws the line (touches 14:09, 16:38, 17:04; formed 17:17) and
+    then DROPS it at 18:03: max_distance_atr=8 retires a line price closed 8 ATR from, and in the
+    quiet 18:00 rally the ATR shrank to 0.82, so 6.5 points was 7.8 ATR. Without the drop it breaks
+    on the 18:48 close. The ATR yardstick shrinking in quiet hours is the 1m-specific fault.
+- In the monitor's own window (500 candles before the look) the break is caught only when BOTH change:
+  touch >= 0.4 with wick >= 0.3, and max_distance >= 12. Chosen: 0.4 / 0.3 / 20 on 1m only (5m-4h
+  keep 0.3 / 0.15 / 8, the clean lines asked for). 1m alerts per market per day, 19-21 Oct: Gold
+  9.6 formed / 6.0 broken (was 9.6 / 4.6), USDJPY 10.0 / 6.5 (8.6 / 4.5), BTC 10.0 / 6.9 (5.8 / 3.4).
+  `max_distance` is now a trendline alert setting (default 8 = the fitter's, so nothing else moved).
+- A 3-day one-pass count found an extra break at 18:50 with only max_distance raised -- from a line
+  anchored on swings before the monitor's window. One-pass counts are rates, not what the monitor
+  sends: check a specific case in the monitor's window (500 candles before the look).
+- Delay: on the 15-minute clock the 18:48 break would have been mailed at 19:02, at the low; on a
+  5-minute clock at 18:52. The trendline config is now every_minutes=5 (a 1m signal arrives 2-7
+  minutes after its candle).

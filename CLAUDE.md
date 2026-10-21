@@ -54,7 +54,7 @@ external backup). Everything lives in `quant/` + `experiments/`.
   not needed for data — the public API is used).
 - **Not committed (git-ignored):** `.env`, `data/` (parquet cache), `**/reports/`,
   `**/experiments/results/`, `__pycache__`, notebooks' checkpoints.
-- **Tests:** `python -m pytest tests/` → **954 passing**. Keep them green.
+- **Tests:** `python -m pytest tests/` → **958 passing**. Keep them green.
 
 ## 3. Architecture & data flow
 
@@ -1041,11 +1041,16 @@ requirements-alerts.txt           # ONLY what quant.alerts imports (measured by 
 alerts/alerts_config.py           # THE ALERTS CONFIG, the user's: markets, groups, categories,
                                   #   alerts, delivery. alerts/state/ is git-ignored
 alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy (the user's spec, 2026-10-20): NO candle
-                                  #   alerts; strict trendlines formed + broken on 1m 5m 15m 1h 4h;
+                                  #   alerts; strict trendlines formed + broken on 5m 15m 1h 4h, and on
+                                  #   1m as their own alerts with STRICT_1M = touch 0.4 / wick 0.3 ATR /
+                                  #   max_distance 20 (2026-10-21: the Gold 1m support that broke at
+                                  #   18:48 before a 34-point drop was never drawn at 0.3/0.15, and was
+                                  #   dropped at 18:03 at 8 ATR, a 6.5-point rally on a 0.8-point ATR);
                                   #   wedges/triangles formed 15m-4h (1m/5m written, OFF: ~40/day);
                                   #   high news reminders 1440/720/360/120/60/30/15 min; every_minutes
-                                  #   15 + collapse_repeats; CATEGORIES patterns, trendlines, News last.
+                                  #   5 + collapse_repeats; CATEGORIES patterns, trendlines, News last.
                                   #   The monitor reads only alerts_config.py; `--config` previews it
+tests/data/                       # committed fixtures: gold_1m_2026-10-21.csv (the 1m line above)
 examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
 ```
 
@@ -1287,7 +1292,7 @@ BACKWARDS from the first candle). `test_patterns.py` also: a STRICT trendline is
 candle it spans (no close beyond; no wick either at wick_tol 0) and passes exactly through two of its
 touches, strict lines are causal by truncation, the default fit is unchanged and lets closes through
 on the same data, a bad fit is refused. `test_alerts.py` also: the strict trendline alert never
-repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock; every email row carries a ref that names its alert, a ref naming nothing is refused by name, `show` re-runs the alert on its own candle and says when it does not fire there, and every 1m trendline alert the monitor sends on the 15-minute clock redraws with its own line; waits read in days, hours and minutes; every row and every news reminder gets its tier (P1 act now, P2 look soon, P3 record) and a tiered subject leads with the most important row, coarser first -- 8 rules mutation-checked. EMAIL PICTURES: an email carries pictures of its top rows, ranked, one per row at its latest repeat in any order, at the top; charts=0 is the old email; no matplotlib or a broken picture still sends; a retried email keeps them; the SMTP message carries them inline; a pattern line is drawn candle by candle from its own first touch. STRICT PATTERNS: every boundary clear of every candle with touches inside the tolerance, causal by truncation, the default fit unchanged -- 11 rules mutation-checked (two of them equivalent mutants). **954 total.**
+repaints, and alerts_config_trendlines.py loads with every trendline alert strict. `test_alerts.py` also: ON A CLOCK -- a 1m alert reads 1m bars only, fetched at the quarter hours, and three 1m signals are one email at 00:17:20; one email per boundary even for urgent alerts; a signal found after its boundary's email (a late feed) waits for the next; repeats in a window are one row and a preview keeps windows apart; a bad DELIVERY is refused by name. `test_alerts_news.py` also: a reminder rides the boundary at or before its time, never after the release; a day of seven reminders is seven emails; a result polled at the boundary rides in it; News placed last goes last -- 12 rules mutation-checked; a second monitor copy says which pid holds the lock; every email row carries a ref that names its alert, a ref naming nothing is refused by name, `show` re-runs the alert on its own candle and says when it does not fire there, and every 1m trendline alert the monitor sends on the 15-minute clock redraws with its own line; waits read in days, hours and minutes; every row and every news reminder gets its tier (P1 act now, P2 look soon, P3 record) and a tiered subject leads with the most important row, coarser first -- 8 rules mutation-checked. EMAIL PICTURES: an email carries pictures of its top rows, ranked, one per row at its latest repeat in any order, at the top; charts=0 is the old email; no matplotlib or a broken picture still sends; a retried email keeps them; the SMTP message carries them inline; a pattern line is drawn candle by candle from its own first touch. STRICT PATTERNS: every boundary clear of every candle with touches inside the tolerance, causal by truncation, the default fit unchanged -- 11 rules mutation-checked (two of them equivalent mutants). 1M LINES (tests/data/gold_1m_2026-10-21.csv, real candles): the Gold 1m support of 21 Oct 17:17 breaks on the 18:48 close with the config's 1m settings and is missed if EITHER the old tolerances or the 8-ATR drop come back; the email picture / `show` redraw that line from its first touch; max_distance left out is the fitter's own 8; 0 is refused -- 4 rules mutation-checked. **958 total.**
 
 ## 12. Known limitations / honest caveats
 

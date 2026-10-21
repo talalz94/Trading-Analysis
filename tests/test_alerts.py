@@ -5,6 +5,8 @@ the history it was switched on into, and survive outages of the feed, the mail s
 Everything runs on synthetic bars through FakeFeed and ListNotifier, with an explicit `now`, so each
 test states exactly what the clock said and what the feed had.
 """
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -114,13 +116,75 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
     lines = [a for a in cfg.alerts + cfg.off if a.kind == "trendline"]
     assert [a for a in cfg.alerts if a.kind == "trendline"]
     assert all(a.params.get("fit") == "strict" for a in lines)
-    # what the user asked for: no candle alerts, lines on 1m-4h, a 15-minute clock, news last
+    # what the user asked for: no candle alerts, lines formed AND broken on 1m-4h, a 5-minute
+    # clock, news last -- and 1m a little looser than the rest, for the reason the Gold test gives
     assert {a.kind for a in cfg.alerts} == {"trendline", "chart"}
-    assert all(set(a.tfs) == {"1m", "5m", "15m", "1h", "4h"} for a in cfg.alerts
-               if a.kind == "trendline")
-    assert cfg.delivery.every_minutes == 15 and cfg.delivery.collapse_repeats
+    on = [a for a in cfg.alerts if a.kind == "trendline"]
+    for event in ("formed", "break"):
+        tfs = [tf for a in on if a.params["event"] == event for tf in a.tfs]
+        assert sorted(tfs) == sorted(("1m", "5m", "15m", "1h", "4h"))     # each once
+    for a in on:
+        loose = a.tfs == ("1m",)
+        assert (a.params["touch_tol"], a.params["wick_tol"], a.params.get("max_distance", 8)) ==             ((0.4, 0.3, 20) if loose else (0.3, 0.15, 8))
+    assert cfg.delivery.every_minutes == 5 and cfg.delivery.collapse_repeats
     assert cfg.categories[-1] == "News" and cfg.news.on and cfg.markets
     assert cfg.news.remind_before["high"] == (1440, 720, 360, 120, 60, 30, 15)
+
+
+GOLD_1M = Path(__file__).parent / "data" / "gold_1m_2026-10-21.csv"
+
+
+def _gold_1m():
+    b = pd.read_csv(GOLD_1M, comment="#")
+    b[TIME_COL] = pd.to_datetime(b[TIME_COL], utc=True)
+    return b
+
+
+def test_a_1m_line_price_rallied_away_from_still_breaks():
+    # 21 Oct 2026, Gold 1m: a rising support through the 14:09, 16:38 and 17:04 lows, formed
+    # 17:17, broke on the 18:48 close -- and 34 points of drop followed. The monitor said nothing,
+    # twice over: at 0.3 / 0.15 ATR (0.3 points on a 1-point ATR) the line never existed, and at
+    # the fitter's 8 ATR it was dropped at 18:03, when a quiet 6.5-point rally counted as 7.8 ATR
+    import dataclasses
+    from quant.alerts.engine import judge
+    cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
+    one = next(a for a in cfg.alerts if a.name == "trendline broken, 1m")
+    bars = _gold_1m()
+    frame = bars[bars[TIME_COL] < at("2026-10-21 18:50")].reset_index(drop=True)   # that look
+
+    def breaks(alert):
+        return [(row[TIME_COL] + pd.Timedelta(minutes=1), h)
+                for row, h in judge(alert, frame, at("2026-10-21 18:44"), "1m")
+                if h["what"] == "broke a support trendline"]
+
+    got = breaks(one)
+    assert [t for t, _ in got] == [at("2026-10-21 18:48")]
+    assert "line formed 21 Oct 17:17" in got[0][1]["note"]
+    # each change is needed on its own
+    assert breaks(dataclasses.replace(one, params=dict(one.params, touch_tol=0.3, wick_tol=0.15))) == []
+    assert breaks(dataclasses.replace(one, params=dict(one.params, max_distance=8))) == []
+
+
+def test_the_1m_break_redraws_with_the_line_that_broke():
+    # the email picture and `show` fit their own line from the alert's settings: without
+    # max_distance they would draw nothing for the break above
+    from quant.alerts.show import build_chart
+    cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
+    one = next(a for a in cfg.alerts if a.name == "trendline broken, 1m")
+    c = build_chart(cfg, one, "Gold", "1m", at("2026-10-21 18:48"), _gold_1m(),
+                    what="broke a support trendline")
+    assert c.reproduced
+    lines = [m for m in c.marks if m.kind == "line" and m.dash == "solid"]
+    assert len(lines) == 1 and lines[0].xs[-1] == c.k                   # it ends on the break
+    assert c.frame[TIME_COL].iat[c.first] == at("2026-10-21 14:09")     # from its first touch
+
+
+def test_max_distance_left_out_is_the_fitters_own():
+    # every alert written before the setting existed must fit exactly as it did
+    import inspect
+    from quant.indicators import add_trendlines
+    fitter = inspect.signature(add_trendlines).parameters["max_distance_atr"].default
+    assert REGISTRY["trendline"].params["max_distance"][0] == fitter == 8.0
 
 
 @pytest.mark.parametrize("bad, says", [
@@ -145,6 +209,7 @@ def plain(kind, **kw):
     (plain("ma_cross", fast=200, slow=50), "fast must be shorter"),
     (plain("fvg", event="sweep"), "formed | filled | both"),
     (plain("trendline", direction="sideways"), "direction must be"),
+    (plain("trendline", max_distance=0), "max_distance must be above 0"),
     (plain("setup", setup="time_entry_long@v1"), "unknown setup"),        # the metronome
     (plain("setup", setup="bos_long@v1", options=dict(zz_mult=2)), r"no option \['zz_mult'\]"),
     (dict(plain("rsi"), on=False, perod=14), "perod"),                  # checked while OFF too
