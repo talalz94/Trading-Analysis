@@ -2542,7 +2542,8 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   `check` runs the detector once over ALL stored history (121 days); the monitor passes only the
   kind's warm-up before the newest candle -- 400 for chart patterns.
 - Measured (Gold/USDJPY/BTC 15m+1h, every candle 7-21 Oct, strict and default fit): the whole
-  history found 22 formations; a 400-candle look found 8 of them; a 1,200-candle look found all 22
+  history found 52 formations (7 strict, 45 default fit); a 400-candle look found 19 of them
+  (37%); a 1,200-candle look found all 52
   and nothing else. A wedge spans 200+ candles and the zigzag needs its earlier pivots to settle.
   ChartDetector.warmup_bars 400 -> 1,200. Cost: one 15m look 0.64 s on the PC (~2-2.5 s on the
   e2-micro), 1h 0.29 s, 4h 0.24 s; 4h at 1,200 candles needs 285 days of 5m (7.4 MB per market).
