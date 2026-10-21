@@ -2490,3 +2490,23 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
 - A Claude crash in the middle of a mutation run left news.py mutated while the orphaned script
   kept running; it restored itself on finishing. Check `git diff` and running python processes
   after any interrupted mutation run before editing anything.
+
+### Email charts, tiered subjects, strict chart patterns (2026-10-21)
+
+- Pictures in the email (DELIVERY charts=N, quant/alerts/snapshot.py). Measured on live data: build
+  (re-run the alert) median 0.1 s, draw 0.3 s after drawing candle bodies as one vlines collection
+  (ax.bar: 1.1-1.6 s), PNG 30-53 KB, +8 MB process memory and none after 45 more pictures. Rows per
+  15-minute email in a 48 h test: 1 row 37 emails, 2 rows 13, 3 rows 1 -> charts=3. The rollback
+  point for the server is the tag alerts-live-2026-10-20 (the code it ran before this).
+- A pattern line drawn from two ENDPOINTS on a time axis bends wherever the market shut: the Gold
+  15m falling wedge the user flagged had its top line drawn ~20 points too high on 15-16 Oct because
+  the straight segment crossed the weekend. Lines are now drawn candle by candle, each boundary from
+  its OWN first touch (the record now carries upper/lower_touches), not the pattern's earliest pivot.
+- The same wedge was also a poor fit: a close above its top line after the first touch, touches up
+  to 0.49 ATR off. add_chart_patterns(fit="strict", line_tol_atr=) gives patterns the strict
+  trendline fit; strict alone still let 0.9 ATR count as a touch, hence touch_tol. 0.7/day at 0.5.
+- Since the server went live (19 Oct 23:46 UTC) to 21 Oct 00:43 the default fit found 10 wedge/
+  triangle formations + 2 breakouts; the user had not noticed them under "N signals" subjects.
+- A renamed alert gets new email refs and the old ones stop resolving -- keep names stable.
+- Dukascopy 1m once raised IndexError inside dukascopy_python for USDJPY; not reproducible minutes
+  later. The monitor backs off a minute and retries, so it costs one email's delay at most.

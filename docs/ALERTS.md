@@ -188,6 +188,13 @@ candle itself. In the research version, "2 whole candles below" fired only when 
 that crossed the line was already wholly below it: 0.02 a day on BTC 5m, against 0.8 counted this
 way.
 
+**Which shapes.** Chart patterns take the same choice: `fit="strict"` fits each boundary through
+two real swing extremes and keeps the shape only if no candle closed through either boundary
+before it formed, and `touch_tol` sets how close a third swing must be to count (0 = each
+pattern's own, 0.6-1.0 ATR). The default checks swing points only: a Gold 15m falling wedge (20 Oct
+2026) had a top line price had closed above. Wedges and triangles on Gold + USDJPY + BTC, Mar-Aug
+2026, per day: default 3.7, strict 1.9, strict with `touch_tol=0.5` 0.7.
+
 **Which lines.** `fit="strict"` (with `touch_tol=0.3`) only accepts a line that runs exactly
 through two real swing extremes with no candle closing through it before it is drawn; the default
 fit checks the swings alone, so a wick can cross a line by two ATR (docs/CHART_GUIDE.md,
@@ -258,6 +265,16 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
   that moment. Adding an alert, or switching one back on, does not mail you past matches.
 - **A signal may carry a note**, such as a chart pattern's target and stop, the trendline's level
   and touches, the gap's range or the RSI value. It is shown under the signal in the email.
+- **`charts=N` puts pictures in the email**: the top N signal rows, ranked like the subject, drawn
+  at the top of the email -- the candles, THE line or shape that fired with its touches, the level it
+  breaks and its target, a star on the candle it fired on. Sent as inline attachments (Gmail does
+  not show images embedded in the HTML), ~40 KB each. Measured for N: in a 48 h test 37 of 51
+  emails had one signal row, 13 two and 1 three, so `charts=3` drew every row of every email; a
+  picture costs ~0.1 s to rebuild the alert and ~0.3 s to draw on a desktop (x3-4 on an e2-micro),
+  and the monitor's memory grew 8 MB with charts on and none after 45 more. It needs matplotlib
+  (in requirements-alerts.txt); without it, or if a picture fails, or past `chart_budget_seconds`
+  (20), the email goes without that picture and `status` / the log say why. `charts=0` (the
+  default) is the email it always was.
 - **Every row carries a ref**, like `btc.1m.202610191349.trendline-broken` (market, timeframe, the
   candle's close in UTC, the alert's name). On your PC, `python -m quant.alerts show <ref>` fetches
   that market's candles again, re-runs the alert on them exactly as the monitor judged them (on a
