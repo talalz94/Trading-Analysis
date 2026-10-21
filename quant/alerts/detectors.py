@@ -171,8 +171,9 @@ class ChartDetector(Detector):
 
     def warmup_bars(self, params):
         # 24 zigzag pivots, and a shape may wait 150 bars for its breakout. 400 was too few: on
-        # Gold/USDJPY/BTC 15m+1h, 7-21 Oct 2026, the monitor's 400-candle look found 8 of the 22
-        # wedges/triangles the whole history finds; 1,200 found all 22 and nothing else
+        # Gold/USDJPY/BTC 15m+1h, 7-21 Oct 2026 (strict and default fit), the monitor's
+        # 400-candle look found 19 of the 52 wedges/triangles the whole history finds; 1,200 found
+        # all 52 and nothing else
         return 1200
 
     def evaluate(self, frame, params, tf):

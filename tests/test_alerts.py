@@ -158,7 +158,7 @@ BTC_5M = Path(__file__).resolve().parents[1] / "data" / "binance_spot_BTCUSDT_5m
 
 @pytest.mark.skipif(not BTC_5M.is_file(), reason="needs the local BTC 5m cache")
 def test_the_monitors_look_finds_every_pattern_the_whole_history_finds():
-    # with a 400-candle warm-up it found 8 of 22 (Gold/USDJPY/BTC 15m+1h, 7-21 Oct 2026): a
+    # with a 400-candle warm-up it found 19 of 52 (Gold/USDJPY/BTC 15m+1h, 7-21 Oct 2026): a
     # wedge spans hundreds of candles and its zigzag needs more before it to settle
     from quant.alerts.engine import judge
     cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))

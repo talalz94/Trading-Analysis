@@ -807,8 +807,8 @@ quant/
     │                    #     The store only ever fetched FORWARD: a longer warm-up now backfills the
     │                    #     older history ONCE (meta history_from:<feed>, so a young market is not
     │                    #     asked every tick). The chart kind's warm-up is 1,200 candles: at 400
-    │                    #     the monitor's look found 8 of the 22 wedges/triangles the whole history
-    │                    #     finds (7-21 Oct 2026); at 1,200 all 22. 4h patterns -> 285 days of 5m
+    │                    #     the monitor's look found 19 of the 52 wedges/triangles the whole history
+    │                    #     finds (7-21 Oct 2026); at 1,200 all 52. 4h patterns -> 285 days of 5m
     ├── store.py         #   SQLite WAL: cursors / events (id = hash, INSERT OR IGNORE, so a re-judged
     │                    #     bar can never mail twice) / outbox (written BEFORE sending, retried
     │                    #     with backoff) / meta; bars as parquet written tmp + os.replace
