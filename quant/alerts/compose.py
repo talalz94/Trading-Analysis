@@ -140,11 +140,15 @@ def _headline(e) -> str:
     return f"{e['market']} {e['tf']} {w}"
 
 
+def rank_key(e):
+    """Most important first: the tier, news before signals, the coarser timeframe, the earlier."""
+    return (tier(e), 0 if e.get("alert") == "news" else 1, -TF_MINUTES.get(e["tf"], 0),
+            str(e.get("close_time", "")))
+
+
 def tier_subject(events, cfg, now) -> str:
     """[Alerts] 🔴 P1 · <the most important row> · <the next> · +N more · HH:MM UTC"""
-    ranked = sorted(events, key=lambda e: (tier(e), 0 if e.get("alert") == "news" else 1,
-                                           -TF_MINUTES.get(e["tf"], 0),
-                                           str(e.get("close_time", ""))))
+    ranked = sorted(events, key=rank_key)
     heads = list(dict.fromkeys(_headline(e) for e in ranked))
     more = len(heads) - 2
     now = pd.Timestamp(now).tz_convert("UTC")

@@ -107,6 +107,9 @@ dict(on=True, name="...", kind="candle", patterns=('engulfing_bull', 'engulfing_
 | `patterns` | `'all'` | names, or 'all' / 'bullish' / 'bearish' |
 | `event` | `'breakout'` | formed \| breakout \| both |
 | `sensitivity` | `'normal'` | major \| normal \| minor -- bigger or smaller swings |
+| `fit` | `'ransac'` | ransac = the default fit \| strict = each boundary through two swing extremes, no candle closing through it before it forms |
+| `wick_tol` | `0.15` | strict only: how far a wick may poke through a boundary, in ATR |
+| `touch_tol` | `0.0` | how far off a boundary a swing may sit and still count as a touch, in ATR; 0 = each pattern's own (0.6-1.0) |
 
 ```python
 dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom', 'head_shoulders', 'inverse_head_shoulders'), event='both', markets="all", tfs="1h")

@@ -329,6 +329,7 @@ def test_repeats_in_one_window_are_one_row(tmp_path):
 
 @pytest.mark.parametrize("delivery, says", [
     (dict(subject="loud"), "subject must be"),
+    (dict(charts=11), "charts must be"),
     (dict(every_minutes=7), "every_minutes"),
     (dict(every_minute=15), r"unknown settings \['every_minute'\]"),
 ])
@@ -886,3 +887,100 @@ def test_a_tiered_subject_leads_with_the_most_important_row(tmp_path):
                       " · +3 more · 01:02 UTC")
     classic = compose(ev, config(tmp_path, [spike_alert()]), at("2026-06-03 01:02"))[0]
     assert classic.startswith("[Alerts] 5 signals")      # the default is what it always was
+
+
+# ── pictures in the email (DELIVERY charts=N) ───────────────────────────────────────────────
+def _picture_rig(tmp_path, charts, **kw):
+    # one 15-minute email with two rows: three 1m spikes (one row, its latest) and a 5m spike
+    return ClockRig(tmp_path, [ONE_MIN, spike_alert(name="5m spike", tfs="5m", markets=("B",))],
+                    spikes_1m=["2026-06-03 00:03", "2026-06-03 00:07", "2026-06-03 00:11"],
+                    b=["2026-06-03 00:05"],
+                    delivery=dict(every_minutes=15, collapse_repeats=True, charts=charts), **kw)
+
+
+def test_an_email_carries_pictures_of_its_top_rows_ranked(tmp_path):
+    r = _picture_rig(tmp_path, charts=3)
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:17:20")
+    (subject, text, html), imgs = r.mail.sent[0], r.mail.images[0]
+    assert len(imgs) == 2                              # one per ROW, not per repeat
+    assert all(png.startswith(b"\x89PNG") and 5_000 < len(png) < 150_000 for _, png in imgs)
+    assert [html.count(f"cid:{cid}") for cid, _ in imgs] == [1, 1]
+    assert html.index(">Charts</h3>") < html.index("<table")    # at the top, above the list
+    (tmp_path / "one").mkdir()
+    one = _picture_rig(tmp_path / "one", charts=1)
+    one.run("2026-06-03 00:00:20", "2026-06-03 00:17:20")
+    assert len(one.mail.images[0]) == 1 and "B 5m spike" in one.mail.sent[0][2].split("<img")[0]
+
+
+def test_charts_off_is_the_email_it_always_was(tmp_path):
+    r = _picture_rig(tmp_path, charts=0)
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:17:20")
+    assert r.mail.images[0] == [] and ">Charts</h3>" not in r.mail.sent[0][2]
+
+
+def test_without_matplotlib_or_with_a_broken_chart_the_email_still_goes(tmp_path, monkeypatch):
+    import sys
+    from quant.alerts import snapshot
+    monkeypatch.setitem(sys.modules, "matplotlib", None)       # as on a server without it
+    r = _picture_rig(tmp_path, charts=3)
+    reps = []
+    for t in pd.date_range(at("2026-06-03 00:00:20"), at("2026-06-03 00:17:20"), freq="1min"):
+        reps.append(tick(r.cfg, r.state, r.mail, r.feed, now=t))
+    assert len(r.mail.sent) == 1 and r.mail.images[0] == []
+    assert any("matplotlib is not installed" in x.errors.get("charts", "") for x in reps)
+    monkeypatch.delitem(sys.modules, "matplotlib")
+    monkeypatch.setattr(snapshot, "render_png", lambda *a, **k: 1 / 0)
+    (tmp_path / "b").mkdir()
+    r2 = _picture_rig(tmp_path / "b", charts=3)
+    r2.run("2026-06-03 00:00:20", "2026-06-03 00:17:20")
+    assert len(r2.mail.sent) == 1 and r2.mail.images[0] == []
+
+
+def test_a_retried_email_keeps_its_pictures(tmp_path):
+    r = _picture_rig(tmp_path, charts=3, fail=1)
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:20:20")
+    assert len(r.mail.sent) == 1 and len(r.mail.images[0]) == 2   # sent on the retry, intact
+
+
+def test_the_smtp_message_carries_the_pictures_inline():
+    msg = SmtpNotifier("me@x.com", "pw", "me@x.com").build(
+        "s", "text", '<p><img src="cid:chart0.1@quant-alerts"></p>',
+        images=[("chart0.1@quant-alerts", b"\x89PNG fake")])
+    parts = {p.get_content_type(): p for p in msg.walk()}
+    assert "multipart/related" in parts and "text/html" in parts and "text/plain" in parts
+    assert parts["image/png"]["Content-ID"] == "<chart0.1@quant-alerts>"
+
+
+def test_a_pattern_line_is_drawn_candle_by_candle_from_its_own_first_touch():
+    # two endpoints on a time axis bent the line wherever the market shut: 20 points off on Gold
+    import sys as _sys
+    _sys.path.insert(0, "tests")
+    from test_patterns import _ascending_triangle_frame
+    from quant.alerts.config import Alert
+    from quant.alerts.show import _shape_marks
+    f = _ascending_triangle_frame()
+    f["t"] = f[TIME_COL]
+    alert = Alert(name="x", category="Chart patterns", kind="chart", markets=("A",), tfs=("1h",),
+                  params=dict(patterns=("ascending_triangle",), event="formed"))
+    det = REGISTRY["chart"]
+    hits = det.evaluate(f, alert.params, "1h")
+    assert hits, "no triangle formed on the hand-built candles"
+    k = hits[0]["i"]
+    marks, first = _shape_marks(alert, f.iloc[:k + 1].reset_index(drop=True), 0, len(f) - 1,
+                                [h for h in hits if h["i"] == k])
+    lines = [m for m in marks if m.kind == "line" and len(set(m.ys)) > 1]
+    touches = [m for m in marks if m.kind == "points"]
+    assert lines and touches
+    for m in lines:
+        assert np.all(np.diff(m.xs) == 1)                         # every candle, no jumps
+    assert {m.xs[0] for m in lines} == {min(t.xs) for t in touches}  # each from ITS first touch
+
+
+def test_a_repeating_signal_is_drawn_once_at_its_latest_candle_in_any_order(tmp_path):
+    # the preview hands its rows over grouped by alert, not in time order
+    from quant.alerts.snapshot import email_charts
+    r = _picture_rig(tmp_path, charts=3)
+    ev = [dict(alert="1m spike", market="B", tf="1m", what="spike", late=0, priority="urgent",
+               close_time=f"2026-06-03T00:{m}:00+00:00", detail="{}") for m in ("12", "04", "08")]
+    charts, err = email_charts(ev, r.cfg, lambda m, b: r.feed.bars_1m[m], at("2026-06-03 00:20"))
+    assert err is None and [c["close"] for c in charts] == ["2026-06-03T00:12:00+00:00"]
