@@ -273,13 +273,25 @@ def deliver(cfg, state, notifier, now, report):
     if pending or cfg.delivery.every_minutes:
         if _email_due(cfg, state, now, pending):
             subject, text, html = compose(pending, cfg, now, host=socket.gethostname())
+            images = None
+            if cfg.delivery.charts:                    # pictures of the top rows; never blocks
+                from .snapshot import attach, email_charts, pack
+                charts, err = email_charts(pending, cfg, state.bars, now)
+                if err:
+                    report.errors["charts"] = err
+                html, images = attach(html, charts), pack(charts)
             with state:
-                state.queue_email(subject, text, html, [e["id"] for e in pending], now)
+                state.queue_email(subject, text, html, [e["id"] for e in pending], now, images)
                 state.put("last_email", iso(now))
             report.queued += 1
     for mail in state.due_emails(now):
         try:
-            notifier.send(mail["subject"], mail["text"], mail["html"])
+            if mail.get("images"):
+                from .snapshot import unpack
+                notifier.send(mail["subject"], mail["text"], mail["html"],
+                              images=unpack(mail["images"]))
+            else:                                      # exactly the call it always was
+                notifier.send(mail["subject"], mail["text"], mail["html"])
         except Exception as e:
             state.mark_failed(mail["id"], now, f"{type(e).__name__}: {e}")
             report.errors[f"email {mail['id']}"] = f"{type(e).__name__}: {e}"
@@ -378,4 +390,10 @@ def preview(cfg: AlertsConfig, feed, *, hours: float = 48, now=None):
         return events, None, None, None, errors
     subject, text, html = compose(events, cfg, now, host=socket.gethostname(),
                                   title=f"Preview: the last {hours:g} hours")
+    if cfg.delivery.charts:                            # in a local file the pictures are inline
+        from .snapshot import attach, email_charts
+        charts, err = email_charts(events, cfg, lambda m, b: got[b][m], now)
+        if err:
+            errors["charts"] = err
+        html = attach(html, charts, inline="data")
     return events, subject, text, html, errors

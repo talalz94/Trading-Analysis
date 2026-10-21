@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created TEXT, subject TEXT, text TEXT, html TEXT,
     attempts INTEGER DEFAULT 0, next_try TEXT, sent_at TEXT, last_error TEXT,
-    status TEXT DEFAULT 'pending');      -- pending -> sent | failed
+    status TEXT DEFAULT 'pending',       -- pending -> sent | failed
+    images TEXT);                        -- the email's chart pictures (snapshot.pack), if any
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -73,6 +74,9 @@ class State:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
+        # a state made before email charts has no images column: add it, keeping every row
+        if "images" not in {r[1] for r in self.db.execute("PRAGMA table_info(outbox)")}:
+            self.db.execute("ALTER TABLE outbox ADD COLUMN images TEXT")
 
     def close(self):
         self.db.close()
@@ -134,9 +138,10 @@ class State:
             "SELECT * FROM events WHERE status='new' ORDER BY close_time, market, tf")]
 
     # ── outbox ─────────────────────────────────────────────────────────────────────────────
-    def queue_email(self, subject, text, html, event_ids, now) -> int:
-        cur = self.db.execute("INSERT INTO outbox (created, subject, text, html, next_try)"
-                              " VALUES (?,?,?,?,?)", (iso(now), subject, text, html, iso(now)))
+    def queue_email(self, subject, text, html, event_ids, now, images=None) -> int:
+        cur = self.db.execute("INSERT INTO outbox (created, subject, text, html, next_try, images)"
+                              " VALUES (?,?,?,?,?,?)",
+                              (iso(now), subject, text, html, iso(now), images))
         oid = cur.lastrowid
         self.db.executemany("UPDATE events SET status='queued', outbox_id=? WHERE id=?",
                             [(oid, e) for e in event_ids])

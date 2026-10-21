@@ -74,6 +74,9 @@ class Delivery:
                                                  # in an email, with how many times and when
     subject: str = "classic"                     # "tiers": lead with the top row and its tier,
                                                  # 🔴 P1 / 🟠 P2 / ⚪ P3 (compose.tier) -- filterable
+    charts: int = 0                              # a picture of the top N signal rows, inside the
+                                                 # email (quant.alerts.snapshot); 0 = none
+    chart_budget_seconds: int = 20               # stop drawing after this; the email still goes
 
 
 @dataclass(frozen=True)
@@ -200,6 +203,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
     delivery = Delivery(**dv)
     if delivery.subject not in ("classic", "tiers"):
         raise ConfigError(f"DELIVERY subject must be 'classic' or 'tiers', got {delivery.subject!r}")
+    if not isinstance(delivery.charts, int) or not 0 <= delivery.charts <= 10:
+        raise ConfigError(f"DELIVERY charts must be a whole number 0-10, got {delivery.charts!r}")
     em = delivery.every_minutes
     if not isinstance(em, int) or em < 0 or (em and 60 % em):
         raise ConfigError(f"DELIVERY every_minutes must be 0 or a whole divisor of 60 (5, 10, 15, "
