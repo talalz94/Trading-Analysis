@@ -1626,3 +1626,56 @@ def test_the_sustain_count_resets_and_zero_is_the_old_behaviour():
     one = add_trendlines(df, **_SUSTAIN_KW, break_sustain_bars=1)
     assert not bool(one["tl_break_dn"].iloc[150]), "a single reclaimed close is not a break"
     assert bool(one["tl_break_dn"].iloc[180:200].any()), "the sustained break must still register"
+
+
+# ---------------------------------------------------------------------------
+# chart patterns, strict fit
+# ---------------------------------------------------------------------------
+_TWO_LINE = ["rising_wedge", "falling_wedge", "ascending_triangle", "descending_triangle",
+             "symmetrical_triangle", "channel_up", "channel_down", "rectangle_bull"]
+
+
+def test_strict_pattern_boundaries_are_clear_of_every_candle_and_touch_within_tolerance(rnd):
+    # the default checks swing points only: a Gold 15m falling wedge (20 Oct 2026) had a top
+    # line price had closed above, with touches 0.49 ATR off it
+    from quant.indicators.volatility import atr
+    formed = []
+    add_chart_patterns(rnd, patterns=_TWO_LINE, _formed=formed, fit="strict", wick_tol_atr=0.0,
+                       line_tol_atr=0.4)
+    assert formed, "strict found no two-line shapes at all"
+    a = atr(rnd, 14).to_numpy()
+    hi, lo, cl = (rnd[c].to_numpy(float) for c in ("high", "low", "close"))
+    eps = 1e-7 * float(rnd["close"].abs().max())
+    for r in formed:
+        i = r["i"]
+        for side, key in ((+1, "upper"), (-1, "lower")):
+            sl, ic = r[key]
+            t = r[f"{key}_touches"]
+            assert len(t) >= 2
+            x0 = min(j for j, _ in t)
+            y = sl * np.arange(x0, i + 1) + ic
+            if side > 0:
+                assert (cl[x0:i + 1] <= y + eps).all() and (hi[x0:i + 1] <= y + eps).all()
+            else:
+                assert (cl[x0:i + 1] >= y - eps).all() and (lo[x0:i + 1] >= y - eps).all()
+            # a touch is a swing within the tolerance of ITS line; two sit exactly on it
+            dev = [abs(px - (sl * j + ic)) for j, px in t]
+            assert max(dev) <= 0.4 * a[i] + eps and sum(d <= eps for d in dev) >= 2
+
+
+def test_strict_patterns_are_causal(rnd):
+    k = 2200
+    kw = dict(patterns=_TWO_LINE, fit="strict", line_tol_atr=0.5)
+    full = add_chart_patterns(rnd, **kw)
+    part = add_chart_patterns(rnd.iloc[:k].copy(), **kw)
+    cols = [c for c in full.columns if c.startswith("pat_")]
+    pd.testing.assert_frame_equal(full[cols].iloc[:k].reset_index(drop=True),
+                                  part[cols].reset_index(drop=True))
+
+
+def test_the_default_pattern_fit_is_unchanged_and_a_bad_fit_is_refused(rnd):
+    a = add_chart_patterns(rnd)
+    b = add_chart_patterns(rnd, fit="ransac", wick_tol_atr=0.9)   # wick_tol is strict-only
+    pd.testing.assert_frame_equal(a, b)
+    with pytest.raises(ValueError, match="fit"):
+        add_chart_patterns(rnd, fit="tight")

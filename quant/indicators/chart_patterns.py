@@ -504,8 +504,11 @@ def _levels_equal(prices: Sequence[float], spec: PatternSpec, atr: float,
 # detection
 # ---------------------------------------------------------------------------
 def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr: float,
-                        n_bars: int, names: Sequence[str]) -> List[_Candidate]:
-    """Fit both boundaries over one pivot window and emit whichever shapes the fit supports."""
+                        n_bars: int, names: Sequence[str],
+                        bars: Optional["_Bars"] = None) -> List[_Candidate]:
+    """Fit both boundaries over one pivot window and emit whichever shapes the fit supports.
+    `bars` = the strict fit (add_chart_patterns(fit="strict")): each boundary must be clear of
+    every candle from its first touch to the bar the shape is registered on."""
     highs = [p for p in pv if p.kind > 0]
     lows = [p for p in pv if p.kind < 0]
     if len(highs) < 2 or len(lows) < 2 or atr <= 0:
@@ -526,8 +529,8 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
     tol_ref = max((specs[n].line_tol_atr for n in names if n in specs), default=0.6) * atr
     need_up = min((specs[n].min_touches_upper for n in names if n in specs), default=3)
     need_lo = min((specs[n].min_touches_lower for n in names if n in specs), default=3)
-    up = _best_line(highs, tol_ref, need_up, +1)
-    lo = _best_line(lows, tol_ref, need_lo, -1)
+    up = _best_line(highs, tol_ref, need_up, +1, bars=bars)
+    lo = _best_line(lows, tol_ref, need_lo, -1, bars=bars)
     if up is not None and lo is not None:
         w0 = up.at(x0) - lo.at(x0)
         w1 = up.at(x1) - lo.at(x1)
@@ -699,7 +702,8 @@ def _shapes_from_window(pv: List[_Pivot], *, specs: Dict[str, PatternSpec], atr:
 
 def _detect(pivots: List[_Pivot], upto: int, *, specs: Dict[str, PatternSpec], atr: float,
             n_bars: int, names: Sequence[str], min_pivots: int,
-            lookback_pivots: int, pivot_step: int = 1) -> List[_Candidate]:
+            lookback_pivots: int, pivot_step: int = 1,
+            bars: Optional["_Bars"] = None) -> List[_Candidate]:
     """Search several pivot windows ending at the newest pivot and keep the best shape per name.
 
     Trying a range of window sizes is what lets a large structure be found: the old code looked only
@@ -710,7 +714,8 @@ def _detect(pivots: List[_Pivot], upto: int, *, specs: Dict[str, PatternSpec], a
         if k > upto + 1:
             break
         window = pivots[upto + 1 - k: upto + 1]
-        for cand in _shapes_from_window(window, specs=specs, atr=atr, n_bars=n_bars, names=names):
+        for cand in _shapes_from_window(window, specs=specs, atr=atr, n_bars=n_bars, names=names,
+                                        bars=bars):
             key = (cand.name, cand.direction)
             if key not in best or cand.score > best[key].score:
                 best[key] = cand
@@ -778,6 +783,8 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                        prefix: str = "pat",
                        _collect: Optional[List[dict]] = None,
                        _formed: Optional[List[dict]] = None,
+                       fit: str = "ransac", wick_tol_atr: float = 0.15,
+                       line_tol_atr: Optional[float] = None,
                        **removed) -> pd.DataFrame:
     """Detect classical chart patterns and publish their entry / stop / target levels.
 
@@ -798,6 +805,15 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
     pivots); `min_pivots`/`lookback_pivots` bound the window search; `max_wait` is how long a formed
     shape waits for its break; `overlap_frac` is how much two same-name detections may overlap
     before the weaker is dropped.
+
+    `fit="strict"` (default "ransac", unchanged) fits each boundary the way the strict trendlines
+    are fitted: the pair's own line through two real swing extremes, kept only if no candle CLOSES
+    beyond it -- and no wick pokes past it by more than `wick_tol_atr` ATR -- from its first touch
+    to the bar the shape is registered on. The default checks swing points only and refits by least
+    squares, so a boundary could run through candles: a Gold 15m falling wedge (20 Oct 2026) had a
+    top line price had closed above on 19 Oct, with touches up to 0.49 ATR off it. `line_tol_atr`
+    (None = each pattern's own, 0.6-1.0) overrides how far off a boundary a pivot may sit and still
+    count as a touch: strict alone kept a triangle whose "touches" were 0.9 ATR away.
 
     `_formed`, if given a list, receives one dict per shape on the bar it is REGISTERED -- its
     pivots are confirmed and it starts waiting for its break -- whether or not it ever breaks out.
@@ -820,11 +836,16 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
               "settings={'ascending_triangle': dict(min_touches_upper=4), ...}. "
               "If this came from notebook 14, reload it from disk — the kernel is holding an "
               "older copy of the cell.")
+    if fit not in ("ransac", "strict"):
+        raise ValueError(f"fit must be 'ransac' or 'strict', got {fit!r}")
     names = list(patterns) if patterns is not None else ALL_PATTERNS
     unknown = [p for p in names if p not in PATTERN_DIRECTION]
     if unknown:
         raise KeyError(f"unknown chart pattern(s) {unknown}; available: {ALL_PATTERNS}")
     specs = resolve_specs(sensitivity, settings)
+    if line_tol_atr is not None:
+        from dataclasses import replace
+        specs = {k: replace(v, line_tol_atr=float(line_tol_atr)) for k, v in specs.items()}
 
     out = df.copy()
     if "zz_label" not in out.columns:
@@ -851,9 +872,10 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
         # 1) register candidates from every pivot CONFIRMED on this bar
         while pi < len(pivots) and pivots[pi].confirm_i == i:
             a = atr_s[i] if np.isfinite(atr_s[i]) else 0.0
+            bars = _Bars(low, high, close, wick_tol_atr * a, i) if fit == "strict" else None
             for cand in _detect(pivots, pi, specs=specs, atr=a, n_bars=n, names=names,
                                 min_pivots=min_pivots, lookback_pivots=lookback_pivots,
-                                pivot_step=pivot_step):
+                                pivot_step=pivot_step, bars=bars):
                 pole = _flagpole(pivots[:pi + 1], cand, pole_mult=pole_mult)
                 if pole and cand.name in _FLAGGABLE:
                     # A textbook flag is a consolidation that DRIFTS AGAINST the pole — that is what
@@ -905,7 +927,11 @@ def add_chart_patterns(df: pd.DataFrame, *, sensitivity: str = "normal",
                                         if cand.upper else None,
                                         lower=(cand.lower.slope, cand.lower.intercept)
                                         if cand.lower else None,
-                                        pivots=[(p.i, p.price) for p in cand.pivots]))
+                                        pivots=[(p.i, p.price) for p in cand.pivots],
+                                        upper_touches=[(p.i, p.price) for p in cand.upper.pivots]
+                                        if cand.upper else [],
+                                        lower_touches=[(p.i, p.price) for p in cand.lower.pivots]
+                                        if cand.lower else []))
             pi += 1
 
         # 2) a live shape confirms when price CLOSES through its boundary
