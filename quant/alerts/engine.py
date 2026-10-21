@@ -165,12 +165,20 @@ def refresh_bars(cfg, state, feed, due, now, report) -> List[Tuple[str, str]]:
         markets = [m for m, b in due if b == base]
         keep = pd.Timedelta(days=history_days(cfg, base))
         bar = BASE_BAR[base]
-        starts, stored = {}, {}
+        starts, stored, deeper = {}, {}, {}
+        want = (now - keep).floor("D")
         for m in markets:
             b = state.bars(m, base)
             stored[m] = b
             recent = not b.empty and b[TIME_COL].iloc[-1] >= now - keep
-            starts[m] = (b[TIME_COL].iloc[-1] - 2 * bar) if recent else (now - keep).floor("D")
+            starts[m] = (b[TIME_COL].iloc[-1] - 2 * bar) if recent else want
+            # a longer warm-up (a new alert, a new release) wants history the store never had:
+            # fetched ONCE from where it should start. Marked once it is in, so a market with
+            # nothing older to give (a young listing) is not asked for months every tick
+            mark = state.get(f"history_from:{_feed_key(m, base)}")
+            if recent and b[TIME_COL].iloc[0] > want + pd.Timedelta(days=3) and (
+                    mark is None or pd.Timestamp(mark) > want + pd.Timedelta(days=3)):
+                starts[m] = deeper[m] = want
         ms = [cfg.markets[m] for m in markets]
         # the 5m call is made exactly as it always was, so any feed written for it still works
         got = (feed.fetch(ms, starts, now) if base == "5m"
@@ -190,6 +198,8 @@ def refresh_bars(cfg, state, feed, due, now, report) -> List[Tuple[str, str]]:
                 b = b.drop_duplicates(TIME_COL, keep="last").sort_values(TIME_COL)
                 b = b[b[TIME_COL] >= now - keep].reset_index(drop=True)
                 state.save_bars(m, b, base)
+            if m in deeper:
+                state.put(f"history_from:{key}", iso(deeper[m]))
             grew = not new.empty and (before is None or new[TIME_COL].iloc[-1] > before)
             _backoff(state, key, now, None if grew else "nothing new")
             state.put(f"last_ok_poll:{key}", iso(now))
