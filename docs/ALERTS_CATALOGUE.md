@@ -132,6 +132,7 @@ dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom',
 | `fit` | `'ransac'` | ransac = the default fit \| strict = exactly through two swing extremes, and no candle closes through it before it is drawn |
 | `touch_tol` | `0.6` | how far off the line a pivot may sit and still count as a touch, in ATR (0.3 with strict) |
 | `wick_tol` | `0.15` | strict only: how far a wick may poke through the line, in ATR |
+| `max_distance` | `8.0` | a line is dropped once price closes this many ATR away from it; 1m wants 20, as its ATR shrinks in quiet hours |
 
 ```python
 dict(on=True, name="...", kind="trendline", event='both', closes=2, markets="all", tfs="1h")

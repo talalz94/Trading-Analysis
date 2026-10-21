@@ -1,10 +1,10 @@
 """
-ALERTS — TRENDLINES, WEDGES & TRIANGLES, NEWS. ONE EMAIL PER QUARTER HOUR AT MOST.
+ALERTS — TRENDLINES, WEDGES & TRIANGLES, NEWS. ONE EMAIL EVERY 5 MINUTES AT MOST.
 
 What it watches, on Gold, USDJPY and BTC:
   TRENDLINES  a line FORMS or price BREAKS it, on 1m 5m 15m 1h 4h, fitted STRICT: each line runs
               exactly through two real swing highs or lows and no candle closes through it before
-              it is drawn (docs/CHART_GUIDE.md, "Trendlines")
+              it is drawn (docs/CHART_GUIDE.md, "Trendlines"); 1m a little looser (§2, STRICT_1M)
   PATTERNS    rising / falling wedge, ascending / descending / symmetrical triangle FORMED and
               BROKEN OUT of, on 15m 1h 4h (1m and 5m are written below, switched off: ~40 a day)
   NEWS        high and critical releases: reminders 1 day, 12 h, 6 h, 2 h, 1 h, 30 and 15 min
@@ -12,13 +12,14 @@ What it watches, on Gold, USDJPY and BTC:
   No candlestick alerts.
 
 HOW THE EMAILS COME (§3 DELIVERY)
-  Every 15 minutes at most: at :02 :17 :32 :47 UTC, once the quarter hour's candles have closed,
-  ONE email with everything found in that quarter hour -- sections Chart patterns, Trendlines,
-  News, in that order. A 1m or 5m signal waits for the quarter hour it falls in, wherever in it
-  the candle closed. The same signal repeating -- five 1m closes through a line between :00 and
-  :15 -- is ONE row: "5 times, 10:01-10:13 UTC". Nothing found, no email.
-  A news reminder comes in the email of the quarter hour at or before its time: a 15-minute
-  reminder for a release at 08:30 arrives at 08:17. Never after the release.
+  Every 5 minutes at most: at :02 :07 :12 ... UTC, once those 5 minutes' candles have closed,
+  ONE email with everything found in them -- sections Chart patterns, Trendlines, News, in that
+  order. A 1m signal waits for the 5 minutes it falls in, wherever in them the candle closed: it
+  arrives 2-7 minutes after its candle; a 5m, 15m, 1h or 4h one ~2 minutes after its close. The
+  same signal repeating -- three 1m closes through a line between :00 and :05 -- is ONE row:
+  "3 times, 10:01-10:04 UTC". Nothing found, no email.
+  A news reminder comes in the email at or before its time: a 15-minute reminder for a release
+  at 08:30 arrives at 08:17. Never after the release.
 
 THE SUBJECT SAYS HOW IMPORTANT THE EMAIL IS -- it leads with the most important row in it:
   🔴 P1  act now    critical news (CPI, payrolls, rate decisions), or ANY high US news, within the
@@ -106,21 +107,39 @@ STRICT = dict(fit="strict", touch_tol=0.3, wick_tol=0.15)
 #   touch_tol=0.3  a third swing within 0.3 ATR of the line counts as a touch
 #   wick_tol=0.15  a wick may poke through by at most 0.15 ATR before the line is drawn
 
+STRICT_1M = dict(fit="strict", touch_tol=0.4, wick_tol=0.3, max_distance=20)
+#   1m is looser, because its ATR is tiny (Gold: ~1 point) and shrinks further in quiet hours:
+#   touch_tol=0.4 / wick_tol=0.3  0.3 / 0.15 ATR asked for a hand-drawn Gold line's touches to sit
+#                                 within 0.3 points, so the line of 21 Oct 17:17 never existed
+#   max_distance=20               a line is dropped once price closes this many ATR away; at 8 the
+#                                 same line was dropped at 18:03, in a 6.5-point rally that a 0.8-
+#                                 point ATR made 7.8 ATR -- 45 minutes before the 18:48 break
+
 ALERTS = [
 
     # ── TRENDLINES ── "formed": a new line is drawn · "break": a candle CLOSES through a line
     #      (closes=2 would want two in a row). direction="up" = resistance lines only, "down" =
     #      support lines only; both by default.
-    #      ~N/day   1m (BTC)  5m    15m   1h    4h
-    #      formed    9.8      3.9   1.2   0.2   0.1
-    #      broken    4.4      1.9   0.6   0.1   0.0
+    #      ~N/day   5m    15m   1h    4h       (Gold + USDJPY + BTC, Mar-Aug 2026)
+    #      formed   3.9   1.2   0.2   0.1
+    #      broken   1.9   0.6   0.1   0.0
     dict(on=True,  name="trendline formed", kind="trendline", category="Trendlines",
          event="formed", **STRICT,
-         markets="all", tfs=("1m", "5m", "15m", "1h", "4h"), priority="normal"),
+         markets="all", tfs=("5m", "15m", "1h", "4h"), priority="normal"),
 
     dict(on=True,  name="trendline broken", kind="trendline", category="Trendlines",
          event="break", closes=1, **STRICT,
-         markets="all", tfs=("1m", "5m", "15m", "1h", "4h"), priority="urgent"),
+         markets="all", tfs=("5m", "15m", "1h", "4h"), priority="urgent"),
+
+    #      1m, PER MARKET per day (19-21 Oct 2026):  Gold 9.6 formed 6.0 broken · USDJPY 10.0 / 6.5
+    #      · BTC 10.0 / 6.9   (with STRICT, as before: 9.6 / 4.6 · 8.6 / 4.5 · 5.8 / 3.4)
+    dict(on=True,  name="trendline formed, 1m", kind="trendline", category="Trendlines",
+         event="formed", **STRICT_1M,
+         markets="all", tfs=("1m",), priority="normal"),
+
+    dict(on=True,  name="trendline broken, 1m", kind="trendline", category="Trendlines",
+         event="break", closes=1, **STRICT_1M,
+         markets="all", tfs=("1m",), priority="urgent"),
 
     # ── WEDGES & TRIANGLES ── "formed": the shape is in place (its pivots confirmed); the note
     #      says where it would break and the measured target. "breakout": price CLOSED through
@@ -146,9 +165,11 @@ ALERTS = [
 
 # ══ §3  DELIVERY ════════════════════════════════════════════════════════════════════════════════
 DELIVERY = dict(
-    every_minutes=15,                # ONE email per quarter hour at most, at :02 :17 :32 :47 UTC,
-                                     #   with everything found in it -- urgent and news included
-    collapse_repeats=True,           # a signal repeating in that quarter hour is one row, with
+    every_minutes=5,                 # ONE email every 5 minutes at most, at :02 :07 :12 ... UTC,
+                                     #   with everything found in it -- urgent and news included.
+                                     #   15 = one a quarter hour: fewer emails, but a 1m break can
+                                     #   arrive 17 min late (21 Oct: at the low, not 4 min after)
+    collapse_repeats=True,           # a signal repeating in those 5 minutes is one row, with
                                      #   how many times and from when to when
     subject="tiers",                 # 🔴 P1 / 🟠 P2 / ⚪ P3 first (see the top of this file);
                                      #   "classic" = "N signals · markets · time"
