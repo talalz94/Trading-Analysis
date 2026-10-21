@@ -144,7 +144,12 @@ class ChartDetector(Detector):
                "and/or BREAKS OUT: price closes through its neckline / boundary (22 of them)")
     params = {"patterns": ("all", "names, or 'all' / 'bullish' / 'bearish'"),
               "event": ("breakout", "formed | breakout | both"),
-              "sensitivity": ("normal", "major | normal | minor -- bigger or smaller swings")}
+              "sensitivity": ("normal", "major | normal | minor -- bigger or smaller swings"),
+              "fit": ("ransac", "ransac = the default fit | strict = each boundary through two "
+                                "swing extremes, no candle closing through it before it forms"),
+              "wick_tol": (0.15, "strict only: how far a wick may poke through a boundary, in ATR"),
+              "touch_tol": (0.0, "how far off a boundary a swing may sit and still count as a "
+                                 "touch, in ATR; 0 = each pattern's own (0.6-1.0)")}
     example = dict(patterns=("double_top", "double_bottom", "head_shoulders",
                              "inverse_head_shoulders"), event="both")
 
@@ -159,6 +164,10 @@ class ChartDetector(Detector):
             raise ValueError("event must be formed | breakout | both")
         if p["sensitivity"] not in ("major", "normal", "minor"):
             raise ValueError("sensitivity must be major | normal | minor")
+        if p["fit"] not in ("ransac", "strict"):
+            raise ValueError("fit must be ransac | strict")
+        if float(p["touch_tol"]) < 0 or float(p["wick_tol"]) < 0:
+            raise ValueError("touch_tol and wick_tol must be 0 or more")
 
     def warmup_bars(self, params):
         return 400         # 24 zigzag pivots, and a shape may wait 150 bars for its breakout
@@ -169,7 +178,9 @@ class ChartDetector(Detector):
         pats = self._names(p)
         formed = [] if p["event"] in ("formed", "both") else None
         out = add_chart_patterns(frame[["open", "high", "low", "close", "volume"]],
-                                 sensitivity=p["sensitivity"], patterns=pats, _formed=formed)
+                                 sensitivity=p["sensitivity"], patterns=pats, _formed=formed,
+                                 fit=p["fit"], wick_tol_atr=float(p["wick_tol"]),
+                                 line_tol_atr=float(p["touch_tol"]) or None)
         side = {1: "bull", -1: "bear", 0: ""}
         hits = []
         if formed:
