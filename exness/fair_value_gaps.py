@@ -1,8 +1,7 @@
 # indie:lang_version = 5
 # FAIR VALUE GAPS -- the quant project's FVG (quant/indicators/fvg.py), ported to Indie for the
 # Exness web terminal: Indicators -> Create (the code editor) -> paste this file -> Save -> Add to
-# chart. It works on the chart's own timeframe: for 15m, 1h and 4h gaps, open those charts (or
-# add it once per chart).
+# chart. It shows the gaps of the chart's own timeframe.
 #
 # THE RULES ARE THE RESEARCH CODE'S, value for value (tests/test_exness_fvg.py runs this file
 # against quant.indicators.add_fvgs on real candles and requires the same gaps):
@@ -57,7 +56,9 @@ class Main(MainContext):
         self._max_dead = max_dead
         self._bull = bull_color
         self._bear = bear_color
-        self._bar_secs = float(self.time_frame.to_seconds())
+        # to_minutes, not to_seconds: Exness's Indie (Oct 2026) has only __eq__ __le__ __lt__
+        # to_minutes on TimeFrame -- to_seconds came in a later release and failed to compile
+        self._bar_secs = float(self.time_frame.to_minutes()) * 60.0
         # the OPEN gaps, one entry per list each, oldest first
         self._kind: list[int] = []           # +1 bullish, -1 bearish
         self._top: list[float] = []          # always the HIGHER edge

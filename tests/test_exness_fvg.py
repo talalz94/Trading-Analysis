@@ -113,7 +113,9 @@ def run(monkeypatch, bars, bar_secs=60, realtime_last=0, **settings):
     Main, Atr = load_indicator(monkeypatch)
     kw = dict(DEFAULTS, **settings)
     ctx = Main.__new__(Main)
-    ctx.time_frame = types.SimpleNamespace(to_seconds=lambda: bar_secs)
+    # what Exness's TimeFrame offers (its compiler listed __eq__ __le__ __lt__ to_minutes):
+    # anything newer, like to_seconds, must fail here as it failed there
+    ctx.time_frame = types.SimpleNamespace(to_minutes=lambda: bar_secs // 60)
     ctx.chart = Chart()
     full = {c: bars[c].to_numpy(float).copy() for c in ("open", "high", "low", "close")}
     full["time"] = (bars["open_time"].astype("int64") // 10**9).to_numpy(float)

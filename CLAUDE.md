@@ -1052,10 +1052,12 @@ exness/fair_value_gaps.py         # the research FVG (quant/indicators/fvg.py) p
                                   #   update) -- Indie rolls state back on every tick of the live candle,
                                   #   so anything done mid-candle would flicker; open boxes are stretched
                                   #   only on is_last_bar (stretching all of them on every history bar
-                                  #   was millions of redraws on a 1m chart). Chart's own timeframe only:
-                                  #   another timeframe needs calc_on, whose history alignment cannot be
-                                  #   checked without the platform. tests/test_exness_fvg.py runs it on
-                                  #   a stand-in `indie` and requires add_fvgs' exact gaps
+                                  #   was millions of redraws on a 1m chart). Chart's own timeframe only
+                                  #   (the user's choice). EXNESS RUNS AN OLDER INDIE than TakeProfit's
+                                  #   docs: its TimeFrame has to_minutes but NOT to_seconds (compile
+                                  #   error, Oct 2026) -- check the docs' Changelog before using anything
+                                  #   new. tests/test_exness_fvg.py runs it on a stand-in `indie` that
+                                  #   offers only what Exness has, and requires add_fvgs' exact gaps
 scripts/fetch_gold_dukascopy.py   # resumable true-spot XAUUSD fetch (1m/5m/15m/1h/4h)
 scripts/install_alerts_task.ps1   # the USER runs it: registers the `quant-alerts` scheduled task
                                   #   (at logon + every 5 min as a watchdog; -Uninstall removes it)
