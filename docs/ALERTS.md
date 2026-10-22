@@ -176,6 +176,18 @@ candle's `trendline` alert is the signal and no early one is sent after it. Meas
 ranks an early break by its LINE: 1h / 4h lines P2, finer ones P3 -- a step below the confirmed
 break.
 
+**Which line, and when it breaks (trendlines).** One support and one resistance line are live at
+a time. `prefer_newer=True` lets a new line with as many touches take the place of the live one
+when its last touch is more recent (default: the live one stays). `hold=N` makes a break wait
+for N more closes in a row; a close back across meanwhile keeps the line alive and the count
+restarts. That is different from `closes=2` below, which counts from the first close through
+-- and at that first close the line is retired, so a break that wobbles back once is lost
+altogether. On Gold 1m both of the user's lines (21 and 22 Oct) were lost with `closes=2` and
+caught with `hold=1`. Measured on 1m (12-22 Oct, three markets): single-close breaks were closed
+back across within 10 minutes ~70% of the time; with `hold=1`, 42% are still beyond the line 10
+minutes later (31% before), at about the same number of alerts. The trendline config sets both
+on its 1m alerts.
+
 **Breaking a level by a rule.** Trendline and S/R-zone breaks take a rule. It is counted from the
 first close through, over consecutive candles, against the level as it stood there: a trendline is
 carried along its own slope, a zone is held flat. A close back across the level ends that break.

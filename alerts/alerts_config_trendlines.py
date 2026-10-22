@@ -107,13 +107,23 @@ STRICT = dict(fit="strict", touch_tol=0.3, wick_tol=0.15)
 #   touch_tol=0.3  a third swing within 0.3 ATR of the line counts as a touch
 #   wick_tol=0.15  a wick may poke through by at most 0.15 ATR before the line is drawn
 
-STRICT_1M = dict(fit="strict", touch_tol=0.4, wick_tol=0.3, max_distance=20)
+STRICT_1M = dict(fit="strict", touch_tol=0.4, wick_tol=0.3, max_distance=20,
+                 prefer_newer=True, hold=1)
 #   1m is looser, because its ATR is tiny (Gold: ~1 point) and shrinks further in quiet hours:
 #   touch_tol=0.4 / wick_tol=0.3  0.3 / 0.15 ATR asked for a hand-drawn Gold line's touches to sit
 #                                 within 0.3 points, so the line of 21 Oct 17:17 never existed
 #   max_distance=20               a line is dropped once price closes this many ATR away; at 8 the
 #                                 same line was dropped at 18:03, in a 6.5-point rally that a 0.8-
 #                                 point ATR made 7.8 ATR -- 45 minutes before the 18:48 break
+#   prefer_newer=True             a new line with as many touches as the live one takes its place
+#                                 if its last touch is more recent (one support and one resistance
+#                                 line are live at a time). 22 Oct: a falling support held the slot
+#                                 while a rising one formed under price; this lets the rising one in
+#   hold=1                        a break needs TWO closes in a row; a close back after the first
+#                                 keeps the line alive. On 1m ~70% of single-close breaks were
+#                                 closed back across within 10 minutes; with hold=1, 42% of breaks
+#                                 are still beyond the line 10 minutes later (31% before). Both
+#                                 Gold lines still alert: 21 Oct at 18:51, 22 Oct at 03:15
 
 ALERTS = [
 
@@ -131,8 +141,8 @@ ALERTS = [
          event="break", closes=1, **STRICT,
          markets="all", tfs=("5m", "15m", "1h", "4h"), priority="urgent"),
 
-    #      1m, PER MARKET per day (19-21 Oct 2026):  Gold 9.6 formed 6.0 broken · USDJPY 10.0 / 6.5
-    #      · BTC 10.0 / 6.9   (with STRICT, as before: 9.6 / 4.6 · 8.6 / 4.5 · 5.8 / 3.4)
+    #      1m, PER MARKET per day (12-22 Oct 2026):  Gold 9.2 formed 5.3 broken · USDJPY 10.9 / 6.3
+    #      · BTC 10.6 / 6.3   (before prefer_newer and hold: 8.9 / 5.6 · 10.3 / 6.7 · 10.1 / 6.3)
     dict(on=True,  name="trendline formed, 1m", kind="trendline", category="Trendlines",
          event="formed", **STRICT_1M,
          markets="all", tfs=("1m",), priority="normal"),

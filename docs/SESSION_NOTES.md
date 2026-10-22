@@ -2610,3 +2610,11 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   line 10 candles later: ~30% for every variant -- the fit does not change what a break is worth.
 - The bigger finding: ~70% of 1m breaks are closed back across within 10 minutes, whatever the
   fit. closes=2 (two closes in a row) gives 13.3 breaks/day and 40% still beyond.
+- CORRECTION, and what was deployed: closes=2 as first measured (13.3 breaks/day, 40% holding)
+  is not what the alert would do. The break rule counts from the FIRST close through, and the
+  fitter retires the line at that close -- so when the next candle closes back, the break is
+  dead and so is the line; both of the user's Gold lines (21 Oct 18:48, 22 Oct 03:10) wobbled
+  back once and were lost. The fitter's break_sustain_bars keeps a line alive through a close
+  back; exposed as the trendline alert setting `hold`. 1m, three markets, with prefer_newer:
+  hold=0 19.3 breaks/day 31% holding; hold=1 17.9/day 42% holding; the user's lines alert at
+  18:51 and 03:15. The 1m alerts now run prefer_newer=True, hold=1.

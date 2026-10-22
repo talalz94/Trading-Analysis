@@ -130,7 +130,9 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
         assert sorted(tfs) == sorted(("1m", "5m", "15m", "1h", "4h"))     # each once
     for a in on:
         loose = a.tfs == ("1m",)
-        assert (a.params["touch_tol"], a.params["wick_tol"], a.params.get("max_distance", 8)) ==             ((0.4, 0.3, 20) if loose else (0.3, 0.15, 8))
+        got = (a.params["touch_tol"], a.params["wick_tol"], a.params.get("max_distance", 8),
+               a.params.get("prefer_newer", False), a.params.get("hold", 0))
+        assert got == ((0.4, 0.3, 20, True, 1) if loose else (0.3, 0.15, 8, False, 0))
     assert cfg.delivery.every_minutes == 5 and cfg.delivery.collapse_repeats
     assert cfg.categories[-1] == "News" and cfg.news.on and cfg.markets
     assert cfg.news.remind_before["high"] == (1440, 720, 360, 120, 60, 30, 15)
@@ -323,15 +325,17 @@ def _gold_1m():
 
 def test_a_1m_line_price_rallied_away_from_still_breaks():
     # 21 Oct 2026, Gold 1m: a rising support through the 14:09, 16:38 and 17:04 lows, formed
-    # 17:17, broke on the 18:48 close -- and 34 points of drop followed. The monitor said nothing,
-    # twice over: at 0.3 / 0.15 ATR (0.3 points on a 1-point ATR) the line never existed, and at
-    # the fitter's 8 ATR it was dropped at 18:03, when a quiet 6.5-point rally counted as 7.8 ATR
+    # 17:17, first closed below at 18:48 -- and 34 points of drop followed. The monitor said
+    # nothing, twice over: at 0.3 / 0.15 ATR (0.3 points on a 1-point ATR) the line never existed,
+    # and at the fitter's 8 ATR it was dropped at 18:03, when a quiet 6.5-point rally counted as
+    # 7.8 ATR. With hold=1 the break needs two closes in a row: 18:48 was followed by a close back
+    # above, which keeps the line, and the two closes below came at 18:50 and 18:51
     import dataclasses
     from quant.alerts.engine import judge
     cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
     one = next(a for a in cfg.alerts if a.name == "trendline broken, 1m")
     bars = _gold_1m()
-    frame = bars[bars[TIME_COL] < at("2026-10-21 18:50")].reset_index(drop=True)   # that look
+    frame = bars[bars[TIME_COL] < at("2026-10-21 18:55")].reset_index(drop=True)
 
     def breaks(alert):
         return [(row[TIME_COL] + pd.Timedelta(minutes=1), h)
@@ -339,11 +343,38 @@ def test_a_1m_line_price_rallied_away_from_still_breaks():
                 if h["what"] == "broke a support trendline"]
 
     got = breaks(one)
-    assert [t for t, _ in got] == [at("2026-10-21 18:48")]
+    assert [t for t, _ in got] == [at("2026-10-21 18:51")]
     assert "line formed 21 Oct 17:17" in got[0][1]["note"]
+    one_close = dataclasses.replace(one, params=dict(one.params, hold=0))
+    assert [t for t, _ in breaks(one_close)] == [at("2026-10-21 18:48")]
     # each change is needed on its own
     assert breaks(dataclasses.replace(one, params=dict(one.params, touch_tol=0.3, wick_tol=0.15))) == []
     assert breaks(dataclasses.replace(one, params=dict(one.params, max_distance=8))) == []
+
+
+GOLD_22 = Path(__file__).parent / "data" / "gold_1m_2026-10-22.csv"
+
+
+def test_a_newer_1m_line_takes_the_slot_and_its_break_must_hold_two_closes():
+    # 22 Oct 2026, Gold 1m: a falling support (20:36 / 01:02 / 01:25) held the one support slot
+    # while a rising one (21 Oct 19:03 / 01:25 / 02:07) formed under price. prefer_newer lets it
+    # in at 02:41; its first close below was 03:10, then one back above, then two below
+    import dataclasses
+    from quant.alerts.engine import judge
+    cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
+    formed = next(a for a in cfg.alerts if a.name == "trendline formed, 1m")
+    broken = next(a for a in cfg.alerts if a.name == "trendline broken, 1m")
+    bars = pd.read_csv(GOLD_22, comment="#")
+    bars[TIME_COL] = pd.to_datetime(bars[TIME_COL], utc=True)
+
+    def found(alert, **change):
+        a = dataclasses.replace(alert, params=dict(alert.params, **change, direction="down"))
+        return [f"{row[TIME_COL] + pd.Timedelta(minutes=1):%H:%M}"
+                for row, h in judge(a, bars, at("2026-10-22 02:00"), "1m")]
+
+    assert found(formed) == ["02:41"] and found(broken) == ["03:15"]
+    assert found(broken, hold=0) == ["03:11"]
+    assert found(formed, prefer_newer=False) == [] and found(broken, prefer_newer=False) == []
 
 
 def test_the_1m_break_redraws_with_the_line_that_broke():
@@ -352,7 +383,7 @@ def test_the_1m_break_redraws_with_the_line_that_broke():
     from quant.alerts.show import build_chart
     cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
     one = next(a for a in cfg.alerts if a.name == "trendline broken, 1m")
-    c = build_chart(cfg, one, "Gold", "1m", at("2026-10-21 18:48"), _gold_1m(),
+    c = build_chart(cfg, one, "Gold", "1m", at("2026-10-21 18:51"), _gold_1m(),
                     what="broke a support trendline")
     assert c.reproduced
     lines = [m for m in c.marks if m.kind == "line" and m.dash == "solid"]
@@ -391,6 +422,7 @@ def plain(kind, **kw):
     (plain("fvg", event="sweep"), "formed | filled | both"),
     (plain("trendline", direction="sideways"), "direction must be"),
     (plain("trendline", max_distance=0), "max_distance must be above 0"),
+    (plain("trendline", hold=-1), "hold must be a whole number"),
     (plain("early_break", line_tfs=("3h",)), "line_tfs must be timeframes"),
     (plain("early_break", line_tfs=("1h",), fit="loose"), "fit must be ransac | strict"),
     (plain("setup", setup="time_entry_long@v1"), "unknown setup"),        # the metronome
