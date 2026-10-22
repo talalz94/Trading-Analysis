@@ -141,6 +141,20 @@ ALERTS = [
          event="break", closes=1, **STRICT_1M,
          markets="all", tfs=("1m",), priority="urgent"),
 
+    # ── EARLY BREAKS ── a 15m / 1h / 4h line closed through by a 5m candle, and a 5m line by a
+    #      1m candle: up to an hour before the line's own candle closes. The same lines as the
+    #      alerts above (same STRICT fit); once per line; the line's own "broken" alert still
+    #      comes when its candle closes -- the confirmation, ranked a step higher.
+    #      22 Oct: USDJPY's 1h support (formed 21 Oct 20:00), first 5m close below at 03:05;
+    #      the 1h alert came at 04:02, 10 pips lower. Early: 1h/4h lines P2, 15m and 5m lines P3
+    dict(on=True,  name="early break, 15m-4h lines", kind="early_break", category="Trendlines",
+         line_tfs=("15m", "1h", "4h"), **STRICT,
+         markets="all", tfs=("5m",), priority="urgent"),
+
+    dict(on=True,  name="early break, 5m lines", kind="early_break", category="Trendlines",
+         line_tfs=("5m",), **STRICT,
+         markets="all", tfs=("1m",), priority="urgent"),
+
     # ── WEDGES & TRIANGLES ── "formed": the shape is in place (its pivots confirmed); the note
     #      says where it would break and the measured target. "breakout": price CLOSED through
     #      it; the note gives the target and the stop. "both" = the two.

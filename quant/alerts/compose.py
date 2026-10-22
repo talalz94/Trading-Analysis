@@ -124,6 +124,11 @@ def tier(e) -> int:
         return 3
     m = TF_MINUTES.get(e["tf"], 0)
     w = e["what"].lower()
+    line_tf = w.split(" ", 1)[0]
+    if line_tf in TF_MINUTES and (" close below" in w or " close above" in w):
+        # an EARLY break (early_break): a coarser line closed through on a finer candle. Ranked
+        # by the LINE's timeframe, one step below that line's own confirmed break
+        return 2 if TF_MINUTES[line_tf] >= 60 else 3
     if "broke" in w or "breakout" in w:
         return 1 if m >= 60 else 2 if m >= 15 else 3
     if "formed" in w:
@@ -137,6 +142,8 @@ def _headline(e) -> str:
     if is_news(e):
         return notice_of(e).get("subject") or e["what"]
     w = (e["what"].replace("broke a ", "broke ").replace(" trendline", " line"))
+    if w.split(" ", 1)[0] in TF_MINUTES:              # "1h support line: 5m close below" names
+        return f"{e['market']} {w}"                   # its own timeframes
     return f"{e['market']} {e['tf']} {w}"
 
 

@@ -54,6 +54,12 @@ class Detector(ABC):
     def warmup_bars(self, params: dict) -> int:
         """Closed bars of history needed before the bar it judges."""
 
+    def warmup_for(self, params: dict, tf: str) -> int:
+        """The same, for an alert on `tf`: what the monitor and `show` ask. Only a kind whose
+        need depends on its own timeframe overrides it (early_break: 500 candles of a 4h line
+        are 24,000 of a 5m alert)."""
+        return self.warmup_bars(params)
+
     @abstractmethod
     def evaluate(self, frame: pd.DataFrame, params: dict, tf: str) -> List[Dict[str, object]]:
         """Every row of `frame` it fires on: dicts with `i` (row), `what` (a short phrase),
@@ -381,6 +387,117 @@ def _sustained(first, level, slope, o, h, l, c, up: bool, closes: int, full: int
                         break
                 break
     return out
+
+
+def _tf_x(opens_ns: np.ndarray, m_ns: int, t_ns: np.ndarray) -> np.ndarray:
+    """Times -> fractional bar positions of a coarser frame whose bars open at `opens_ns`, in the
+    units a trendline is fitted in: x = j at bar j's CLOSE, so the line's value at x is what
+    bar j's close was judged against. Between closes it moves on linearly in time; past the last
+    complete bar it keeps counting bars; across a market's shut (a weekend) it holds."""
+    n = len(opens_ns)
+    j = np.clip(np.searchsorted(opens_ns, t_ns, side="left") - 1, 0, n - 1)
+    frac = (t_ns - opens_ns[j]) / m_ns
+    frac = np.where(j < n - 1, np.minimum(frac, 1.0), frac)
+    return j - 1 + frac
+
+
+class EarlyBreakDetector(Detector):
+    kind, category = "early_break", "Levels & lines"
+    summary = ("a COARSER timeframe's trendline (15m 1h 4h ...) closed through by a candle of THIS "
+               "timeframe -- a 1h line on a 5m close, up to an hour before its own candle closes; "
+               "once per line")
+    params = {"line_tfs": (("1h",), "the coarser timeframes whose lines are watched, e.g. "
+                                    "('15m', '1h', '4h') on a 5m alert"),
+              "direction": ("both", "up = resistance lines (closed above) · down = support lines"),
+              **{k: TrendlineDetector.params[k] for k in ("min_touches", "swing_size", "fit",
+                                                          "touch_tol", "wick_tol",
+                                                          "max_distance")}}
+    example = dict(line_tfs=("15m", "1h", "4h"), fit="strict", touch_tol=0.3)
+    LINE_BARS = 505                  # each line timeframe is fitted on this many of its candles,
+                                     # the window the trendline alert itself judges with
+
+    def _tfs(self, p) -> Tuple[str, ...]:
+        t = p["line_tfs"]
+        return (t,) if isinstance(t, str) else tuple(t)
+
+    def check(self, p):
+        tfs = self._tfs(p)
+        bad = [t for t in tfs if t not in _TF_MIN]
+        if not tfs or bad:
+            raise ValueError(f"line_tfs must be timeframes from {sorted(_TF_MIN, key=_TF_MIN.get)}"
+                             f", got {list(bad or tfs)}")
+        line = TrendlineDetector()
+        line.check(dict(line.settings({}), **{k: p[k] for k in (
+            "min_touches", "fit", "touch_tol", "wick_tol", "max_distance")}))
+
+    def warmup_bars(self, params):
+        return 500
+
+    def warmup_for(self, params, tf):
+        m = _TF_MIN.get(tf, 1)
+        need = [self.LINE_BARS * _TF_MIN[t] // m for t in self._tfs(self.settings(params))
+                if _TF_MIN[t] > m]
+        return max(need, default=500) + 5
+
+    def evaluate(self, frame, params, tf):
+        from quant.indicators import add_trendlines, trendline_table
+        from .engine import tf_bars
+        p = self.settings(params)
+        m = _TF_MIN[tf]
+        if len(frame) < 3:
+            return []
+        t_close = frame[TIME_COL] + pd.Timedelta(minutes=m)
+        t_ns = t_close.astype("int64").to_numpy()
+        c = frame["close"].to_numpy(float)
+        last_close = t_close.iloc[-1]
+        hits = []
+        for lt in self._tfs(p):
+            M = _TF_MIN[lt]
+            if M <= m:
+                continue                             # only a COARSER line can break early
+            F = tf_bars(frame, lt, tf)
+            F = F[F[TIME_COL] + pd.Timedelta(minutes=M) <= last_close]     # complete candles only
+            F = F.iloc[-self.LINE_BARS:].reset_index(drop=True)
+            if len(F) < 20:
+                continue
+            d = add_trendlines(F[["open", "high", "low", "close"]].copy(),
+                               min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]),
+                               fit=p["fit"], line_tol_atr=float(p["touch_tol"]),
+                               wick_tol_atr=float(p["wick_tol"]),
+                               max_distance_atr=float(p["max_distance"]))
+            opens = F[TIME_COL].astype("int64").to_numpy()
+            M_ns = M * 60 * 10**9
+            x = _tf_x(opens, M_ns, t_ns)
+            for r in trendline_table(d).itertuples():
+                up = r.kind > 0
+                if not _want(p, up):
+                    continue
+                seen = opens[int(r.born_i)] + M_ns           # its candle closed: it is known
+                e = int(r.end_i)
+                # live until the close of the candle that ended it -- EXCLUDED when that candle
+                # broke it, because then the line's own break alert is the signal
+                ended = bool(r.broke) or e < len(F) - 1
+                until = opens[e] + M_ns if ended else np.iinfo(np.int64).max
+                live = (t_ns > seen) & (t_ns < until)
+                level = r.slope * x + r.intercept
+                beyond = live & ((c > level) if up else (c < level))
+                if not beyond.any():
+                    continue
+                i = int(np.argmax(beyond))
+                # the line drawn on THIS frame, from its first touch to the close through it
+                t0 = opens[int(min(r.touch_i))]
+                hits.append(dict(
+                    i=i, side="bull" if up else "bear",
+                    what=f"{lt} {'resistance' if up else 'support'} line: {tf} close "
+                         f"{'above' if up else 'below'}",
+                    note=f"line {_px(level[i])} · formed "
+                         f"{pd.Timestamp(int(seen), tz='UTC'):%d %b %H:%M} · "
+                         f"{int(r.touches)} touches",
+                    curve=[(j, float(level[j])) for j in range(i + 1) if t_ns[j] > t0],
+                    touches=[(int(np.searchsorted(t_ns, opens[int(k)] + M_ns, "left")),
+                              float(px)) for k, px in zip(r.touch_i, r.touch_price)]))
+        hits.sort(key=lambda h: h["i"])
+        return hits
 
 
 class SRZoneDetector(Detector):
@@ -834,7 +951,7 @@ class SetupDetector(Detector):
 
 REGISTRY: Dict[str, Detector] = {d.kind: d for d in (
     CandleDetector(), ChartDetector(),
-    TrendlineDetector(), SRZoneDetector(), FvgDetector(),
+    TrendlineDetector(), EarlyBreakDetector(), SRZoneDetector(), FvgDetector(),
     MaCrossDetector(), RsiDetector(), RsiDivergenceDetector(), MacdDetector(),
     StochasticDetector(), SupertrendDetector(), HeikinAshiDetector(), CandleRunDetector(),
     BigCandleDetector(),

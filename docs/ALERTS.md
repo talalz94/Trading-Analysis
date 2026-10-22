@@ -140,6 +140,7 @@ DELIVERY = dict(digest_minutes=15, catchup_max_age_minutes=30)
 | Candle patterns | `candle` | one of 62 candlestick patterns completes |
 | Chart patterns | `chart` | one of 22 chart patterns **forms** and/or **breaks out** (`event=`), with its target and stop |
 | Levels & lines | `trendline` | a fitted trendline **forms**, and/or price **breaks it by a rule** (below) |
+| | `early_break` | a **coarser** timeframe's trendline closed through by a candle of **this** one: a 1h line on a 5m close, up to an hour before the 1h candle closes (below) |
 | | `sr_zone` | a support/resistance zone is **broken by a rule**, or price bounces off it |
 | | `fvg` | a fair value gap forms, or gets filled |
 | Indicators | `ma_cross` | price crosses an EMA/SMA, or a golden/death cross |
@@ -160,6 +161,20 @@ once its swings are in place, and it then waits for a break, whether or not one 
 `event="both"` sends both. A formation note says where the break would be, for example
 `breaks below 84,120 → target 82,000`. A break note says which line broke, for example
 `2 closes below · line formed 10 Oct 04:05 · 3 touches`.
+
+**Early breaks.** A 1h line only counts as broken when a 1h candle closes through it, which can
+be up to an hour after price first went through. `early_break` watches the lines of the
+timeframes in `line_tfs` (fitted exactly as the `trendline` kind fits them, with the same
+settings) and fires on the first candle of the alert's own, finer timeframe that closes through
+one -- once per line. On 22 Oct 2026 USDJPY's 1h support was first closed below by the 03:05
+5m candle; the 1h break alert came at 04:02, 10 pips lower. The line is only used from the close
+of the candle that published it, only complete coarse candles are fitted, and between their
+closes the line moves on in time. When the line's own candle is the one that breaks it, that
+candle's `trendline` alert is the signal and no early one is sent after it. Measured 12-22 Oct
+(per market per day): 1h lines ~0.3 early alerts, every one confirmed by the 1h close; 15m lines
+0.3-0.4, mostly NOT confirmed; 5m lines on 1m closes 1.2-1.7, 36-56% confirmed. The subject
+ranks an early break by its LINE: 1h / 4h lines P2, finer ones P3 -- a step below the confirmed
+break.
 
 **Breaking a level by a rule.** Trendline and S/R-zone breaks take a rule. It is counted from the
 first close through, over consecutive candles, against the level as it stood there: a trendline is
@@ -354,7 +369,7 @@ alerts/state/                  git-ignored: alerts.db (SQLite), bars/*.parquet, 
                                alerts.lock, preview.html
 quant/alerts/config.py         reads and checks the config (fresh each tick)
             feeds.py           closed 5m bars from Binance / Dukascopy, with timeouts
-            detectors.py       the 15 alert kinds (REGISTRY); add more here
+            detectors.py       the 16 alert kinds (REGISTRY); add more here
             catalogue.py       the menu, built from the registries (`list`)
             engine.py          one resumable tick: fetch what is due, judge, queue, send
             store.py           SQLite state + atomic bar files

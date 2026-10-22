@@ -60,7 +60,7 @@ def _tf(tf) -> pd.Timedelta:
 def history_days(cfg: AlertsConfig, base: str = "5m") -> int:
     """Calendar days of `base` bars to keep: the longest warm-up of the timeframes built from them,
     x7/5 for weekends, plus slack."""
-    need = max(((REGISTRY[a.kind].warmup_bars(a.params) + 5) * TF_MINUTES[tf]
+    need = max(((REGISTRY[a.kind].warmup_for(a.params, tf) + 5) * TF_MINUTES[tf]
                 for a in cfg.alerts for tf in a.tfs if base_of(tf) == base), default=0)
     return math.ceil(need / 1440 * 7 / 5) + 3
 
@@ -99,7 +99,7 @@ def judge(alert, frame: pd.DataFrame, after: Optional[pd.Timestamp], tf: str):
     passed in, so the cost does not grow with the stored history."""
     det = REGISTRY[alert.kind]
     first = 0 if after is None else int((frame[TIME_COL] > after).to_numpy().argmax())
-    lo = max(0, first - det.warmup_bars(alert.params))
+    lo = max(0, first - det.warmup_for(alert.params, tf))
     win = frame.iloc[lo:].reset_index(drop=True)
     win["t"] = win[TIME_COL]                         # the research code's time column (UTC)
     hits = []
