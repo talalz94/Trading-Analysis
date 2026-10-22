@@ -339,12 +339,21 @@ class _Bars:
     close: np.ndarray
     wick_tol: float           # how far a WICK may poke through, in price
     upto: int
+    max_closes: int = 0       # bestfit: how many CLOSES may sit beyond the line (strict: none)
+    refit: bool = False       # bestfit: the line is the least-squares fit through its touches
 
     def clear(self, slope: float, intercept: float, x0: int, side: int) -> bool:
-        """No close beyond the line and no wick beyond it by more than `wick_tol`."""
+        """No close beyond the line (bestfit: at most `max_closes`) and no wick beyond it by more
+        than `wick_tol`."""
         sl = slice(int(x0), int(self.upto) + 1)
         y = slope * np.arange(sl.start, sl.stop, dtype=float) + intercept
         eps = 1e-9 * float(np.abs(y).max(initial=1.0))       # a touch sits ON the line, not past it
+        if self.max_closes > 0:
+            if side < 0:
+                return bool(int((self.close[sl] < y - eps).sum()) <= self.max_closes
+                            and (self.low[sl] >= y - self.wick_tol - eps).all())
+            return bool(int((self.close[sl] > y + eps).sum()) <= self.max_closes
+                        and (self.high[sl] <= y + self.wick_tol + eps).all())
         if side < 0:
             return bool((self.close[sl] >= y - eps).all()
                         and (self.low[sl] >= y - self.wick_tol - eps).all())
@@ -440,6 +449,15 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int, *,
         mean_dev = np.where(inl, np.abs(resid), 0.0).sum(axis=1) / np.maximum(counts, 1)
         for k in cand[np.lexsort((mean_dev[cand], -spans[cand], -counts[cand]))]:
             sel = inl[k]
+            if bars.refit:
+                # BESTFIT: the line an eye draws -- least squares through the touches, every touch
+                # still within `tol` of it, then the same candle test (with `max_closes` allowed)
+                s2, b2 = np.polyfit(x[sel], y[sel], 1)
+                dev = np.abs(y[sel] - (s2 * x[sel] + b2))
+                if dev.max() <= tol and bars.clear(s2, b2, int(x[sel].min()), side):
+                    return _Fit(float(s2), float(b2), int(sel.sum()), float(dev.max()),
+                                tuple(p for p, is_touch in zip(pivots, sel) if is_touch))
+                continue
             if bars.clear(slope[k], intercept[k], int(x[sel].min()), side):
                 return _Fit(float(slope[k]), float(intercept[k]), int(sel.sum()),
                             float(np.abs(resid[k, sel]).max()),
