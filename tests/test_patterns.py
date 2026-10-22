@@ -8,6 +8,7 @@ routinely fail this, usually by flagging a shape at its extreme rather than at i
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -741,14 +742,93 @@ def test_a_strict_trendline_is_clear_of_every_candle_it_spans(rnd, wick_tol):
         assert sum(d <= eps for d in dev) >= 2 and r.touches >= 3
 
 
-def test_strict_trendlines_are_causal(rnd):
+@pytest.mark.parametrize("kw", [dict(fit="strict", line_tol_atr=0.3),
+                                dict(fit="bestfit", line_tol_atr=0.4, wick_tol_atr=0.45),
+                                dict(fit="strict", line_tol_atr=0.3, prefer_newer=True)])
+def test_strict_trendlines_are_causal(rnd, kw):
     from quant.indicators import add_trendlines
     k = 2200
-    kw = dict(fit="strict", line_tol_atr=0.3)
     full = add_trendlines(rnd, **kw)
     part = add_trendlines(rnd.iloc[:k].copy(), **kw)
     for col in ("tl_sup", "tl_res", "tl_break_dn", "tl_break_up"):
         np.testing.assert_array_equal(full[col].to_numpy()[:k], part[col].to_numpy())
+
+
+def test_bestfit_is_the_least_squares_line_with_one_close_through_allowed():
+    # three lows no line passes exactly through: (0, 100), (10, 101.3), (20, 102). The best fit,
+    # y = 100.1 + 0.1 x, misses them by 0.1 / 0.2 / 0.1 -- and one close sits just under it at x = 5
+    from quant.indicators.chart_patterns import _Bars, _Pivot, _best_line
+    piv = [_Pivot(confirm_i=i + 3, i=i, price=pr, kind=-1)
+           for i, pr in ((0, 100.0), (10, 101.3), (20, 102.0))]
+    x = np.arange(25, dtype=float)
+    line = 100.1 + 0.1 * x
+    low, close = line + 1.0, line + 2.0
+    for p in piv:
+        low[p.i] = p.price
+    close[5], low[5] = line[5] - 0.05, line[5] - 0.15         # one close through, a short wick
+
+    def fit(max_closes, low=low):
+        return _best_line(piv, 0.5, 3, -1, bars=_Bars(low, close + 3, close, 0.3, 23,
+                                                      max_closes=max_closes, refit=True))
+
+    got = fit(1)
+    assert got is not None and got.touches == 3
+    assert got.slope == pytest.approx(0.1) and got.intercept == pytest.approx(100.1)
+    assert got.max_dev == pytest.approx(0.2)
+    assert fit(0) is None                                     # strict about closes: rejected
+    two = close.copy()
+    two[6] = line[6] - 0.05                                   # a second close through
+    assert _best_line(piv, 0.5, 3, -1, bars=_Bars(low, two + 3, two, 0.3, 23, max_closes=1,
+                                                  refit=True)) is None
+    deep = low.copy()
+    deep[5] = line[5] - 0.6
+    assert fit(1, deep) is None                               # the wick rule still holds
+
+
+@pytest.mark.parametrize("fit", ["strict", "bestfit"])
+def test_a_tie_goes_only_to_a_line_with_a_more_recent_touch(fit):
+    # prefer_newer must not swap between equally good lines: a live line gives way on a tie only to
+    # one whose last touch is LATER than all of its own. On the three real fixtures -- a random
+    # walk never produces a tie
+    from quant.indicators import add_trendlines
+    here = Path(__file__).parent / "data"
+    swaps = 0
+    for name in ("gold_1m_2026-10-21.csv", "gold_1m_2026-10-22.csv", "usdjpy_5m_2026-10-22.csv"):
+        w = pd.read_csv(here / name, comment="#")[["open", "high", "low", "close"]]
+        d = add_trendlines(w, min_touches=3, atr_mult=3.5, fit=fit, line_tol_atr=0.4,
+                           wick_tol_atr=0.45, max_distance_atr=20, prefer_newer=True)
+        for kind in (-1, +1):
+            side = sorted((ln for ln in d.attrs["tl_lines"] if ln.kind == kind),
+                          key=lambda ln: ln.born_i)
+            for a, b in zip(side, side[1:]):
+                if not a.broke and b.born_i == a.end_i + 1 and b.touches == a.touches:
+                    swaps += 1
+                    assert max(b.touch_i) > max(a.touch_i), (name, a.touch_i, b.touch_i)
+    assert swaps > 0, "no tie was ever decided, so this test would prove nothing"
+
+
+GOLD_22 = Path(__file__).parent / "data" / "gold_1m_2026-10-22.csv"
+
+
+@pytest.mark.parametrize("fit, wick, born", [("strict", 0.3, "02:40"), ("bestfit", 0.45, "02:16")])
+def test_a_newer_line_with_as_many_touches_takes_the_slot_only_when_asked(fit, wick, born):
+    # Gold 1m, 22 Oct 2026: a falling support (20:36 / 01:02 / 01:25, 3 touches) held the one
+    # support slot while a rising one (21 Oct 19:03 / 01:25 / 02:07, also 3) formed under price;
+    # price closed below the rising one at 03:10. The default keeps the incumbent on a tie
+    from quant.indicators import add_trendlines, trendline_table
+    w = pd.read_csv(GOLD_22, comment="#")
+    t = pd.to_datetime(w["open_time"])
+    kw = dict(min_touches=3, atr_mult=3.5, line_tol_atr=0.4, max_distance_atr=20, fit=fit,
+              wick_tol_atr=wick)
+
+    def rising_supports(**more):
+        L = trendline_table(add_trendlines(w[["open", "high", "low", "close"]].copy(), **kw, **more))
+        L = L[(L["kind"] < 0) & (L["slope"] > 0)]
+        return [(f"{t.iat[int(r.born_i)]:%H:%M}", f"{t.iat[int(r.end_i)]:%H:%M}", bool(r.broke))
+                for r in L.itertuples() if t.iat[int(r.born_i)] >= pd.Timestamp("2026-10-22 02:00")]
+
+    assert rising_supports() == []
+    assert rising_supports(prefer_newer=True) == [(born, "03:10", True)]
 
 
 def test_the_default_fit_is_unchanged_and_a_bad_fit_is_refused(rnd):
@@ -758,6 +838,7 @@ def test_the_default_fit_is_unchanged_and_a_bad_fit_is_refused(rnd):
     pd.testing.assert_frame_equal(a, b)
     with pytest.raises(ValueError, match="fit"):
         add_trendlines(rnd, fit="tight")
+    pd.testing.assert_frame_equal(a, add_trendlines(rnd, prefer_newer=False, closes_through=3))
 
 
 def test_pattern_figure_can_draw_trendlines(rnd):

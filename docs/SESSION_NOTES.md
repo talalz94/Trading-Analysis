@@ -2593,3 +2593,20 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   one close through) would have drawn it at 02:57 and broken it on the 03:05 close. Not built.
   Separately, the fitter keeps ONE live support line per timeframe, and a falling support of
   20:36 / 01:02 / 01:25 held that slot until 03:19.
+
+### Best-fit lines and "a newer line wins a tie": researched (2026-10-22)
+
+- Two opt-in options in add_trendlines, both off (every existing result unchanged, tested):
+  fit="bestfit" (least squares through the touches, each within line_tol_atr, at most
+  `closes_through` closes beyond, wicks within wick_tol_atr) and prefer_newer=True (a new fit with
+  as many touches as the live line takes the ONE slot if its last touch is more recent).
+- Gold 1m 22 Oct, in the monitor's own looks: strict and bestfit alone draw nothing (the falling
+  line holds the slot). With prefer_newer, both draw a rising support through 21 Oct 19:03, 01:25,
+  02:07 -- just under the user's line (01:25 / 02:07 / 02:51), which loses on SPAN at equal
+  touches -- formed 02:40 (strict) / 02:16 (bestfit), broken on the 03:10 close: an alert at 03:11,
+  six minutes after the user's line broke (03:05). All variants still catch 21 Oct's 18:48 break.
+- 1m, Gold + USDJPY + BTC, 12-22 Oct, per day: strict 29.4 lines / 18.6 breaks; strict+newer
+  31.2 / 19.3; bestfit 31.0 / 19.8; bestfit+newer 33.7 / 20.5. Share of breaks still beyond the
+  line 10 candles later: ~30% for every variant -- the fit does not change what a break is worth.
+- The bigger finding: ~70% of 1m breaks are closed back across within 10 minutes, whatever the
+  fit. closes=2 (two closes in a row) gives 13.3 breaks/day and 40% still beyond.

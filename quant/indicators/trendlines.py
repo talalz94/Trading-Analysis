@@ -75,6 +75,7 @@ def add_trendlines(df: pd.DataFrame, *,
                    max_age_bars: int = 500, break_buffer_atr: float = 0.0,
                    max_distance_atr: float = 8.0, break_sustain_bars: int = 0,
                    fit: str = "ransac", wick_tol_atr: float = 0.15,
+                   closes_through: int = 1, prefer_newer: bool = False,
                    prefix: str = "tl") -> pd.DataFrame:
     """Fit the live support and resistance trendlines bar by bar and flag their breaks.
 
@@ -139,10 +140,23 @@ def add_trendlines(df: pd.DataFrame, *,
         `line_tol_atr` so a "touch" is one you can see. Off by default because every recorded
         trendline result was measured on the default.
     wick_tol_atr
-        Strict only: how far a wick may poke through the line between its touches, in ATR.
+        Strict / bestfit: how far a wick may poke through the line between its touches, in ATR.
+        "bestfit" is the line an EYE draws through three lows that are not quite collinear: the
+        least-squares line through the touches, each within `line_tol_atr` of it, and the strict
+        candle test with `closes_through` closes allowed beyond it (strict allows none). Built for
+        Gold 1m, 22 Oct 2026: lows 01:25 / 02:07 / 02:51 no strict line could pass through, the
+        best fit missing each by 0.2-0.4 ATR with one close below. Off by default.
+    closes_through
+        Bestfit only: how many closes may sit beyond the line between its first touch and the bar
+        it is published on.
+    prefer_newer
+        Which line holds the slot (ONE live support, ONE live resistance) when a new fit has as
+        many touches as the live one. False (the default, unchanged): the live one stays. True: the
+        new one wins if its last touch is more recent -- a falling support of 20:36 / 01:02 / 01:25
+        held Gold 1m's slot on 22 Oct until 03:19 while a rising one formed under price at 02:57.
     """
-    if fit not in ("ransac", "strict"):
-        raise ValueError(f"fit must be 'ransac' or 'strict', got {fit!r}")
+    if fit not in ("ransac", "strict", "bestfit"):
+        raise ValueError(f"fit must be 'ransac', 'strict' or 'bestfit', got {fit!r}")
     out = df.reset_index(drop=True).copy()
     if f"zz_label" not in out.columns:
         out = add_zigzag_structure(out, atr_mult=atr_mult, atr_period=atr_period)
@@ -150,7 +164,7 @@ def add_trendlines(df: pd.DataFrame, *,
     atr_s = _atr(out, atr_period).to_numpy(float)
     close = out["close"].to_numpy(float)
     n = len(out)
-    strict = fit == "strict"
+    strict = fit in ("strict", "bestfit")
     if strict:
         low_a, high_a = out["low"].to_numpy(float), out["high"].to_numpy(float)
 
@@ -170,7 +184,9 @@ def add_trendlines(df: pd.DataFrame, *,
             a = atr_s[i] if np.isfinite(atr_s[i]) else 0.0
             if a > 0:
                 window = pivots[max(0, pi + 1 - lookback_pivots):pi + 1]
-                bars = _Bars(low_a, high_a, close, wick_tol_atr * a, i) if strict else None
+                bars = (_Bars(low_a, high_a, close, wick_tol_atr * a, i,
+                              max_closes=int(closes_through), refit=True) if fit == "bestfit" else
+                        _Bars(low_a, high_a, close, wick_tol_atr * a, i) if strict else None)
                 for kind in (+1, -1):
                     fit = _fit_side(window, kind, tol=line_tol_atr * a,
                                     min_touches=min_touches, min_span_bars=min_span_bars,
@@ -195,7 +211,10 @@ def add_trendlines(df: pd.DataFrame, *,
                     # keep the incumbent unless the new fit is better supported; churning between
                     # equally-good lines every pivot would make the "current" line meaningless
                     if cur is not None and not cur.broke and fit.touches <= cur.touches:
-                        continue
+                        newer = (prefer_newer and fit.touches == cur.touches
+                                 and fit.pivots[-1].i > max(cur.touch_i))
+                        if not newer:
+                            continue
                     # A line that picks up another touch is the SAME line, refined — not a new one.
                     # Replacing it outright reset `born_i` and emitted a fresh record, which is why
                     # 16% of lines lived under 10 bars and a fifth of consecutive pairs differed in
