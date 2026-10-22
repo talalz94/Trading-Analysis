@@ -1121,7 +1121,7 @@ alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy (the user's spec, 2
                                   #   The monitor reads only alerts_config.py; `--config` previews it
 tests/data/                       # committed fixtures: gold_1m_2026-10-21.csv (the 1m line above),
                                   #   usdjpy_5m_2026-10-22.csv (the 1h support of the early break)
-examples/gold_ema_demo.py · tests/ (10 files) · docs/ · data/ (cache, git-ignored)
+examples/gold_ema_demo.py · tests/ (34 files; real-candle fixtures in tests/data/) · docs/ · data/ (cache, git-ignored)
 ```
 
 ### Scenario framework (`quant/scenarios`) — versioned, composable setups
