@@ -2551,3 +2551,21 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   older history. refresh_bars now backfills once (meta history_from:<feed>).
 - So the pattern rates quoted earlier (0.7/day strict at touch 0.5) were whole-history counts the
   monitor could not reach; with 1,200 it does.
+
+### Testing free headline sources before using them (2026-10-22)
+
+- The question: can a free source tell the alerts about UNSCHEDULED news fast enough to rank them?
+  On 21 Oct gold started falling at 18:44 UTC; free sources had the Gulf "ordered departure" story
+  at: FinancialJuice RSS 18:47:50, Forex Factory via Google News 18:48:38, a Reuters copy 18:57,
+  investingLive 19:13. Google News also had an official "Security Alert: U.S. Mission to Saudi
+  Arabia" at 17:52 -- an hour early. Paid wires had it first; free sources explain, not front-run.
+- Ruled out: FinancialJuice PRO ($69/quarter) is personal-use with no API, and its free feed is
+  only >= 15 s behind; scraping its logged-in site (or Forex Factory past Cloudflare) breaks terms,
+  needs a 300-500 MB headless browser on a 1 GB VM, and buys seconds of a minutes-long gap. X is
+  pay-per-use (~$0.005 a post read). Telegram cannot be reached from the dev PC at all.
+- So experiments/headline_probe.py records 12 sources for 7 days on the server, and
+  headline_report.py judges speed / coverage of sharp moves / noise / reliability. The sharp-move
+  rule finds ~1 move per market per day (Oct 15-21: Gold 8, USDJPY 3, BTC 9), including the 21 Oct
+  drop (from the 18:47 close) and USDJPY at 12:34 on 15 Oct after the US PPI / retail sales.
+- A draft keyword list flagged 26 of 100 FinancialJuice headlines in 5.8 h on a geopolitical day
+  (21 "security") -- the layer will need a short P1 list and context-only matches, not 4 emails an hour.
