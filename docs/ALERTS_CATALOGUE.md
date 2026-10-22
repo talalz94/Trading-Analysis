@@ -82,7 +82,7 @@ Use the names in patterns=(...), or patterns="all" / "bullish" / "bearish".
 
 `symmetrical_triangle`, `channel_up`, `channel_down`, `channel_flat`
 
-## 5. Alert kinds (15)
+## 5. Alert kinds (16)
 
 kind= picks what to look for. Each kind takes only its own settings, and any other setting is refused by name. direction= is always both | up | down.
 
@@ -136,6 +136,23 @@ dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom',
 
 ```python
 dict(on=True, name="...", kind="trendline", event='both', closes=2, markets="all", tfs="1h")
+```
+
+**`early_break`**: a COARSER timeframe's trendline (15m 1h 4h ...) closed through by a candle of THIS timeframe -- a 1h line on a 5m close, up to an hour before its own candle closes; once per line
+
+| setting | default | meaning |
+|---|---|---|
+| `line_tfs` | `('1h',)` | the coarser timeframes whose lines are watched, e.g. ('15m', '1h', '4h') on a 5m alert |
+| `direction` | `'both'` | up = resistance lines (closed above) · down = support lines |
+| `min_touches` | `3` | pivots the line must touch |
+| `swing_size` | `3.5` | zigzag pivot size in ATRs: bigger = longer, fewer lines |
+| `fit` | `'ransac'` | ransac = the default fit \| strict = exactly through two swing extremes, and no candle closes through it before it is drawn |
+| `touch_tol` | `0.6` | how far off the line a pivot may sit and still count as a touch, in ATR (0.3 with strict) |
+| `wick_tol` | `0.15` | strict only: how far a wick may poke through the line, in ATR |
+| `max_distance` | `8.0` | a line is dropped once price closes this many ATR away from it; 1m wants 20, as its ATR shrinks in quiet hours |
+
+```python
+dict(on=True, name="...", kind="early_break", line_tfs=('15m', '1h', '4h'), fit='strict', touch_tol=0.3, markets="all", tfs="1h")
 ```
 
 **`sr_zone`**: a support / resistance zone (clustered swing highs and lows) is BROKEN by a rule (N closes / whole candles / candles of the break's colour), or price BOUNCES off it

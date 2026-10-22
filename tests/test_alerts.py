@@ -118,7 +118,12 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
     assert all(a.params.get("fit") == "strict" for a in lines)
     # what the user asked for: no candle alerts, lines formed AND broken on 1m-4h, a 5-minute
     # clock, news last -- and 1m a little looser than the rest, for the reason the Gold test gives
-    assert {a.kind for a in cfg.alerts} == {"trendline", "chart"}
+    assert {a.kind for a in cfg.alerts} == {"trendline", "early_break", "chart"}
+    # early breaks: 15m-4h lines on 5m closes, 5m lines on 1m closes, the same strict lines
+    early = {a.tfs: a.params for a in cfg.alerts if a.kind == "early_break"}
+    assert early[("5m",)]["line_tfs"] == ("15m", "1h", "4h") and early[("1m",)]["line_tfs"] == ("5m",)
+    assert all((p["fit"], p["touch_tol"], p["wick_tol"]) == ("strict", 0.3, 0.15)
+               for p in early.values())
     on = [a for a in cfg.alerts if a.kind == "trendline"]
     for event in ("formed", "break"):
         tfs = [tf for a in on if a.params["event"] == event for tf in a.tfs]
@@ -151,6 +156,136 @@ def test_a_longer_warm_up_fetches_the_older_history_once(tmp_path, monkeypatch):
     r.tick("2026-06-07 01:05")                               # the next 1h close
     assert {m for m, _, _ in r.feed.calls} == {"A", "B"}
     assert all(s > at("2026-06-06 23:00") for _, s, _ in r.feed.calls)   # forward only
+
+
+USDJPY_5M = Path(__file__).parent / "data" / "usdjpy_5m_2026-10-22.csv"
+EARLY = dict(line_tfs=("15m", "1h"), fit="strict", touch_tol=0.3, wick_tol=0.15)
+
+
+def _usdjpy():
+    b = pd.read_csv(USDJPY_5M, comment="#")
+    b[TIME_COL] = pd.to_datetime(b[TIME_COL], utc=True)
+    return b
+
+
+def test_an_early_break_fires_on_the_5m_close_an_hour_before_the_1h_alert():
+    # 22 Oct 2026: USDJPY's 1h support (formed 21 Oct 20:00, 4 touches) was first closed below by
+    # the 03:05 5m candle; the 1h candle closed at 04:00 and its alert went at 04:02, 10 pips lower
+    from quant.alerts.config import Alert
+    from quant.alerts.engine import judge
+    f = _usdjpy()
+    a = Alert(name="early", category="Trendlines", kind="early_break", markets=("A",),
+              tfs=("5m",), params=EARLY)
+    hits = [(row[TIME_COL] + pd.Timedelta(minutes=5), h)
+            for row, h in judge(a, f, at("2026-10-22 00:00"), "5m")]
+    one_h = [(t, h) for t, h in hits if h["what"] == "1h support line: 5m close below"]
+    assert [t for t, _ in one_h] == [at("2026-10-22 03:05")]
+    assert "formed 21 Oct 20:00 · 4 touches" in one_h[0][1]["note"]
+    # the same line's own break waits for the 1h candle that closes at 04:00
+    h1 = tf_bars(f, "1h").iloc[-505:].reset_index(drop=True)
+    h1["t"] = h1[TIME_COL]
+    rule = dict(event="break", closes=1, direction="down", **{k: v for k, v in EARLY.items()
+                                                              if k != "line_tfs"})
+    broke = [h1[TIME_COL].iat[h["i"]] for h in REGISTRY["trendline"].evaluate(h1, rule, "1h")
+             if "formed 21 Oct 20:00" in h["note"]]
+    assert broke == [at("2026-10-22 03:00")]         # the 03:00-04:00 candle
+
+
+def test_an_early_break_is_known_on_its_own_candle_and_never_taken_back():
+    # every 5m candle of the last day as the newest the monitor has: nothing seen then is gone
+    # once later candles arrive, and every alert is already there on its own candle
+    det, f = REGISTRY["early_break"], _usdjpy()
+
+    def key(g, h):
+        return g[TIME_COL].iat[h["i"]], h["what"], h["note"]
+
+    full = {key(f, h) for h in det.evaluate(f, EARLY, "5m")}
+    day = f[TIME_COL].iat[-1] - pd.Timedelta(days=1)
+    assert len([x for x in full if x[0] > day]) == 3     # 21 Oct 11:20 (a 1h support of 19 Oct)
+                                                         # and the two at 03:05
+    for k in range(len(f) - 288, len(f) + 1, 4):
+        g = f.iloc[:k].reset_index(drop=True)
+        assert {key(g, h) for h in det.evaluate(g, EARLY, "5m")} <= full
+    for t, what, note in [x for x in full if x[0] > day]:
+        i = int(np.flatnonzero((f[TIME_COL] == t).to_numpy())[0])
+        g = f.iloc[:i + 1].reset_index(drop=True)
+        assert (t, what, note) in {key(g, h) for h in det.evaluate(g, EARLY, "5m")}
+
+
+@pytest.mark.parametrize("broke_at, first_fire", [
+    (None, "2026-06-02 00:30"),     # a live line: the first 5m close below it after it is KNOWN
+    (23, None),                     # broken by its own 23:00-24:00 candle: from 24:00 that
+])                                  # candle's alert is the signal, no early one after it
+def test_an_early_break_places_the_coarser_line_exactly_in_time(monkeypatch, broke_at, first_fire):
+    # a 1h line of known geometry, y = 100 + 0.5 x (x = j at 1h candle j's CLOSE), published by
+    # the candle that closes at 23:00, and 5m closes placed to catch each way of getting it wrong
+    import quant.indicators as qi
+    from quant.alerts.detectors import REGISTRY
+    t = pd.date_range("2026-06-01 00:00", "2026-06-02 06:05", freq="5min", tz="UTC")
+    close_t = t + pd.Timedelta(minutes=5)
+    y = 100 + 0.5 * ((close_t - t[0]) / pd.Timedelta(hours=1) - 1)      # the line at each close
+    c = np.full(len(t), 500.0)
+    c[close_t == at("2026-06-01 22:30")] = y[close_t == at("2026-06-01 22:30")] - 1   # not known yet
+    c[close_t == at("2026-06-02 00:00")] = y[close_t == at("2026-06-02 00:00")] + 0.25 # above it;
+    c[close_t == at("2026-06-02 00:30")] = y[close_t == at("2026-06-02 00:30")] - 0.1  # one candle
+    f = pd.DataFrame({TIME_COL: t, "open": c, "high": c + 0.05, "low": c - 0.05, "close": c,
+                      "volume": 1.0})                                   # off would be below it
+    fitted = []
+    line = dict(kind=-1, slope=0.5, intercept=100.0, touches=3, touch_i=[2, 10, 21],
+                touch_price=[101.0, 105.0, 110.5], born_i=22,
+                end_i=broke_at if broke_at is not None else 29, broke=broke_at is not None)
+    monkeypatch.setattr(qi, "add_trendlines", lambda df, **kw: fitted.append(len(df)) or df)
+    monkeypatch.setattr(qi, "trendline_table", lambda d: pd.DataFrame([line]))
+    hits = REGISTRY["early_break"].evaluate(f, dict(line_tfs=("1h",)), "5m")
+    assert fitted == [30]                       # 00:00 .. 05:00 next day; not the unfinished 06:00
+    fired = [close_t[h["i"]] for h in hits]
+    assert fired == ([at(first_fire)] if first_fire else [])
+
+
+def test_the_coarse_position_of_a_time():
+    from quant.alerts.detectors import _tf_x
+    opens = pd.to_datetime(["2026-06-05 20:00", "2026-06-05 21:00",       # Friday's last two,
+                            "2026-06-07 22:00"], utc=True).astype("int64").to_numpy()   # Sunday's
+    hour = 3600 * 10**9
+    t = pd.to_datetime(["2026-06-05 21:00", "2026-06-05 21:30", "2026-06-05 22:00",
+                        "2026-06-06 12:00", "2026-06-07 22:30", "2026-06-07 23:00",
+                        "2026-06-08 00:30"], utc=True).astype("int64").to_numpy()
+    assert np.allclose(_tf_x(opens, hour, t), [0, 0.5, 1, 1, 1.5, 2, 3.5])
+    # a close is x = its candle; mid-candle is halfway; the weekend holds; past the last it counts
+
+
+def test_an_early_break_ranks_by_its_line_and_names_both_timeframes():
+    from quant.alerts.compose import _headline, tier
+    e = dict(alert="early", market="USDJPY", tf="5m", what="1h support line: 5m close below",
+             close_time="2026-10-22T03:05:00+00:00", late=0)
+    assert tier(e) == 2 and _headline(e) == "USDJPY 1h support line: 5m close below"
+    assert tier(dict(e, what="15m support line: 5m close below")) == 3
+    assert tier(dict(e, tf="1m", what="5m resistance line: 1m close above")) == 3
+    assert tier(dict(e, tf="1h", what="broke a support trendline")) == 1   # the confirmation
+
+
+def test_an_early_break_needs_the_history_of_its_coarsest_line(tmp_path):
+    from quant.alerts.engine import history_days
+    early = dict(name="e", kind="early_break", markets="all", priority="normal")
+    cfg = config(tmp_path, [dict(early, tfs=("5m",), line_tfs=("4h",)),
+                            dict(early, name="e1", tfs=("1m",), line_tfs=("5m",))])
+    assert history_days(cfg, "5m") >= 505 * 48 * 5 / 1440 * 7 / 5     # 505 4h candles in 5m
+    assert history_days(cfg, "1m") == 6                                 # 505 5m candles in 1m
+
+
+def test_the_early_break_picture_draws_the_coarser_line_from_its_first_touch():
+    import types as _t
+    from quant.alerts.config import Alert
+    from quant.alerts.show import build_chart
+    a = Alert(name="early", category="Trendlines", kind="early_break", markets=("A",),
+              tfs=("5m",), params=dict(EARLY, line_tfs=("1h",)))
+    cfg = _t.SimpleNamespace(delivery=_t.SimpleNamespace(every_minutes=5))
+    c = build_chart(cfg, a, "A", "5m", at("2026-10-22 03:05"), _usdjpy(),
+                    what="1h support line: 5m close below")
+    assert c.reproduced
+    line = [m for m in c.marks if m.kind == "line"]
+    assert len(line) == 1 and line[0].label == "1h support line" and line[0].xs[-1] == c.k
+    assert c.frame[TIME_COL].iat[c.first] == at("2026-10-02 12:00")   # its first touch
 
 
 BTC_5M = Path(__file__).resolve().parents[1] / "data" / "binance_spot_BTCUSDT_5m.parquet"
@@ -256,6 +391,8 @@ def plain(kind, **kw):
     (plain("fvg", event="sweep"), "formed | filled | both"),
     (plain("trendline", direction="sideways"), "direction must be"),
     (plain("trendline", max_distance=0), "max_distance must be above 0"),
+    (plain("early_break", line_tfs=("3h",)), "line_tfs must be timeframes"),
+    (plain("early_break", line_tfs=("1h",), fit="loose"), "fit must be ransac | strict"),
     (plain("setup", setup="time_entry_long@v1"), "unknown setup"),        # the metronome
     (plain("setup", setup="bos_long@v1", options=dict(zz_mult=2)), r"no option \['zz_mult'\]"),
     (dict(plain("rsi"), on=False, perod=14), "perod"),                  # checked while OFF too
@@ -617,7 +754,10 @@ def synthetic(n=1500, seed=7):
 
 def _kind_cases():
     from quant.alerts.detectors import setup_keys
-    cases = [(k, dict(d.example)) for k, d in REGISTRY.items() if k not in ("spike", "setup")]
+    # early_break needs a coarser timeframe's lines breaking on finer candles, which this 1h
+    # random walk never produces: it has its own test of the same property on real USDJPY 5m
+    cases = [(k, dict(d.example)) for k, d in REGISTRY.items()
+             if k not in ("spike", "setup", "early_break")]
     cases += [("chart", dict(patterns="all", event="both")),
               ("trendline", dict(event="both", closes=2, full=1, colour=2)),
               ("trendline", dict(event="break", closes=1, confirm=3)),

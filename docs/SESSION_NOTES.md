@@ -2569,3 +2569,27 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   drop (from the 18:47 close) and USDJPY at 12:34 on 15 Oct after the US PPI / retail sales.
 - A draft keyword list flagged 26 of 100 FinancialJuice headlines in 5.8 h on a geopolitical day
   (21 "security") -- the layer will need a short P1 list and context-only matches, not 4 emails an hour.
+
+### Early breaks, and the Gold line drawn through three lows (2026-10-22)
+
+- USDJPY 22 Oct: the 1h support (formed 21 Oct 20:00, 4 touches) was first closed below by the
+  03:05 5m candle (157.805 vs 157.877); the 1h candle closed at 04:00 (157.700) and the 1h break
+  alert went at 04:02 -- 57 minutes later, 10 pips lower (low 157.647 at 03:40). The 1h-close
+  rule is deliberate (a wick that comes back is not a break), so the fix is a second alert, not a
+  looser first one: `early_break`, a coarser line closed through on a finer candle, once per line.
+- Measured 12-22 Oct, per market per day: 1h lines on 5m closes ~0.3, 100% then confirmed by the
+  1h close (few events); 15m lines 0.3-0.4, 0-33% confirmed; 4h none; 5m lines on 1m closes
+  1.2-1.7, 36-56% confirmed. About 6 more alerts a day across Gold, USDJPY, BTC.
+- The first tests passed with three real bugs put back (a line fitted on an unfinished candle, a
+  level one candle off, a line used an hour before it was known): USDJPY's 1h line rises 0.003 an
+  hour, so none of them moves a real alert. A line of KNOWN geometry with 5m closes placed around
+  it catches all three; a slow real line cannot.
+- Gold 22 Oct, the user's rising 1m support through the lows of 01:25 (4107.20), 02:07 (4108.30)
+  and 02:51 (4111.52, which DID bounce to 4118 -- a confirmed swing): no straight line passes
+  through all three within the strict rule. Through the outer two, the middle low is 1.01 below
+  (0.59 ATR) with 4 closes under it; through either other pair the third misses by ~2 points. The
+  BEST-FIT line misses each by 0.2-0.4 ATR -- the line an eye draws -- with one close below it and
+  one wick 0.42 ATR through. A "best-fit" mode (touches within 0.4 ATR of a fitted line, at most
+  one close through) would have drawn it at 02:57 and broken it on the 03:05 close. Not built.
+  Separately, the fitter keeps ONE live support line per timeframe, and a falling support of
+  20:36 / 01:02 / 01:25 held that slot until 03:19.

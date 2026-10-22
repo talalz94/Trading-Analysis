@@ -127,7 +127,7 @@ def build_chart(cfg, alert, market: str, tf: str, close, bars: pd.DataFrame, *,
     # look, ending on the alert's own. On a 15-minute clock a 1m or 5m candle is judged with the
     # rest of its quarter hour, so that look began at the quarter hour, not at this candle --
     # and a line fitted from another start can differ.
-    warm = det.warmup_bars(alert.params)
+    warm = det.warmup_for(alert.params, tf)
     every = cfg.delivery.every_minutes
     first_new = bar.floor(f"{every}min") if every and TF_MINUTES[tf] < every else bar
     j = int((frame[TIME_COL] < first_new).sum())
@@ -144,6 +144,7 @@ def build_chart(cfg, alert, market: str, tf: str, close, bars: pd.DataFrame, *,
     last = len(frame) - 1
     marks, first = (_trendline_marks(alert, win, lo, last, hits) if alert.kind == "trendline" else
                     _shape_marks(alert, win, lo, last, hits) if alert.kind == "chart" else
+                    _early_marks(lo, hits, k) if alert.kind == "early_break" else
                     ([], k))
     c.marks, c.first = marks, first
     return c
@@ -162,7 +163,7 @@ def alert_chart(ref: str, *, config=None, after: int = 60, before: int = 150, fe
     bar = close - step
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     end = min(now, close + after * step)
-    warm = det.warmup_bars(alert.params)
+    warm = det.warmup_for(alert.params, tf)
     start = (bar - (warm + before) * step * 7 / 5 - pd.Timedelta(days=3)).floor("D")
     base = base_of(tf)
     got = _cached(mk, base, start, end) if feed is None else None
@@ -253,6 +254,28 @@ def _trendline_marks(alert, win, lo, last, hits):
                                 [r.slope * i + r.intercept for i in ext], col, 1.5, "dot"))
             out.append(Mark("points", [lo + int(i) for i in r.touch_i], list(r.touch_price),
                             col, 9, label="touches"))
+    return out, first
+
+
+def _early_marks(lo, hits, k):
+    """The coarser line an early break crossed, drawn on these finer candles from its first
+    touch to the close through it, with its touches. -> (marks, first index)."""
+    out, first = [], k
+    for h in hits:
+        curve = h.get("curve") or []
+        if not curve:
+            continue
+        up = h.get("side") == "bull"
+        col = DN if up else UP
+        xs = [lo + j for j, _ in curve]
+        first = min(first, xs[0])
+        out.append(Mark("line", xs, [y for _, y in curve], col, 3,
+                        label=h["what"].split(":")[0]))
+        pts = [(lo + j, y) for j, y in h.get("touches") or [] if lo + j <= k]
+        if pts:
+            out.append(Mark("points", [x for x, _ in pts], [y for _, y in pts], col, 9,
+                            label="touches"))
+            first = min(first, min(x for x, _ in pts))
     return out, first
 
 
