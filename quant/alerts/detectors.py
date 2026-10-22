@@ -286,7 +286,11 @@ class TrendlineDetector(Detector):
                                  "touch, in ATR (0.3 with strict)"),
               "wick_tol": (0.15, "strict only: how far a wick may poke through the line, in ATR"),
               "max_distance": (8.0, "a line is dropped once price closes this many ATR away from "
-                                    "it; 1m wants 20, as its ATR shrinks in quiet hours")}
+                                    "it; 1m wants 20, as its ATR shrinks in quiet hours"),
+              "prefer_newer": (False, "a new line with as many touches as the live one takes its "
+                                      "place if its last touch is more recent"),
+              "hold": (0, "a break must hold this many MORE closes in a row before it counts; a "
+                          "close back meanwhile keeps the line alive (0 = the first close through)")}
     example = dict(event="both", closes=2)
 
     def check(self, p):
@@ -301,6 +305,8 @@ class TrendlineDetector(Detector):
             raise ValueError("touch_tol must be above 0 and wick_tol 0 or more")
         if float(p["max_distance"]) <= 0:
             raise ValueError("max_distance must be above 0 (ATRs)")
+        if int(p["hold"]) < 0 or int(p["hold"]) != p["hold"]:
+            raise ValueError("hold must be a whole number of closes, 0 or more")
 
     def warmup_bars(self, params):
         return 500         # a line may live 500 bars
@@ -312,7 +318,9 @@ class TrendlineDetector(Detector):
                            min_touches=int(p["min_touches"]), atr_mult=float(p["swing_size"]),
                            fit=p["fit"], line_tol_atr=float(p["touch_tol"]),
                            wick_tol_atr=float(p["wick_tol"]),
-                           max_distance_atr=float(p["max_distance"]))
+                           max_distance_atr=float(p["max_distance"]),
+                           prefer_newer=bool(p["prefer_newer"]),
+                           break_sustain_bars=int(p["hold"]))
         lines = trendline_table(d)
         when = frame[TIME_COL] + pd.Timedelta(minutes=_TF_MIN.get(tf, 0))   # each bar's close
         hits = []

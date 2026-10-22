@@ -133,6 +133,8 @@ dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom',
 | `touch_tol` | `0.6` | how far off the line a pivot may sit and still count as a touch, in ATR (0.3 with strict) |
 | `wick_tol` | `0.15` | strict only: how far a wick may poke through the line, in ATR |
 | `max_distance` | `8.0` | a line is dropped once price closes this many ATR away from it; 1m wants 20, as its ATR shrinks in quiet hours |
+| `prefer_newer` | `False` | a new line with as many touches as the live one takes its place if its last touch is more recent |
+| `hold` | `0` | a break must hold this many MORE closes in a row before it counts; a close back meanwhile keeps the line alive (0 = the first close through) |
 
 ```python
 dict(on=True, name="...", kind="trendline", event='both', closes=2, markets="all", tfs="1h")
