@@ -2618,3 +2618,8 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   back; exposed as the trendline alert setting `hold`. 1m, three markets, with prefer_newer:
   hold=0 19.3 breaks/day 31% holding; hold=1 17.9/day 42% holding; the user's lines alert at
   18:51 and 03:15. The 1m alerts now run prefer_newer=True, hold=1.
+- Deployed fcacfb2 on the server (22 Oct 13:2x UTC). The 1m bar files stayed at 4 days (from
+  18 Oct) though history_days(1m) went 4 -> 6: the one-time backfill fires only when the store is
+  MORE than 3 days short (the weekend slack), and this was 2. Not a fault -- history_days already
+  carries x7/5 + 3 days of margin over the 2,530 1m candles the 5m-line early breaks need (~5,000
+  held) -- and the store grows to 6 days by itself, since it is now trimmed at 6.
