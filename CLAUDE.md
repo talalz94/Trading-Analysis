@@ -886,7 +886,7 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 │                        #   state; conditional GETs; backoff to 15 min; stops 7 days after its FIRST
 │                        #   start. Parsers take BYTES (the Fed's feed has a BOM and no charset). A
 │                        #   date with no time (travel.state.gov) is None, not midnight.
-│                        #   Server: scripts/install_headline_probe.sh (MemoryMax 150M, CPUQuota 10%)
+│                        #   Server: scripts/install_headline_probe.sh (MemoryMax 250M -- it peaks ~130 MB -- CPUQuota 10%)
 ├── headline_report.py   # what the probe recorded, per source: SPEED (lag behind the first source on
 │                        #   every story 2+ sources carried -- stories = >= 3 shared words AND >= half
 │                        #   the shorter title, within 45 min), COVERAGE (sharp 1m moves -- 5-min

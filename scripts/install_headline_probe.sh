@@ -7,7 +7,7 @@
 #
 # It runs beside quant-alerts and touches none of its files: its own database under
 # experiments/results/headline_probe/, the same .venv (nothing new to install), and systemd caps
-# of 150 MB and 10% of a CPU so it can never crowd the monitor on a 1 GB e2-micro. It stops by
+# of 250 MB and 10% of a CPU so it can never crowd the monitor on a 1 GB e2-micro. It stops by
 # itself 7 days after its FIRST start; a reboot or restart inside that resumes, never extends.
 set -euo pipefail
 
@@ -52,7 +52,7 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=$REPO/.venv/bin/python experiments/headline_probe.py --days 7
 Restart=on-failure
 RestartSec=60
-MemoryMax=150M
+MemoryMax=250M
 CPUQuota=10%
 Nice=10
 
