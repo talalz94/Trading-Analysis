@@ -14,12 +14,20 @@
 #   dies     when a later candle trades back to the gap's near edge (touch), its midpoint (ce,
 #            the default) or its far edge (full); or, never filled, after `Max age` candles
 #
-# NO REPAINTING. A gap is created, and judged filled, only on a CLOSED candle: every historical
-# candle, and the final update of the live one. While the live candle forms, the open boxes are
-# only stretched to it -- nothing appears or disappears until it closes.
+# NO REPAINTING. Gaps are created, judged and drawn only on a CLOSED candle: every historical
+# candle, and the final update of the live one. Nothing changes while the live candle forms.
+#
+# EXNESS ALLOWS 100 DRAWING CHANGES PER CANDLE UPDATE ("exceeded the limit 100 of drawing changes
+# per bar update"), so:
+#   - an open box reaches `Reach ahead` candles past its last update and is redrawn only when the
+#     live candle is about to overtake it -- not every box on every tick, which broke the limit
+#     on a chart with more than 100 open gaps;
+#   - at most 90 changes are made per update. Beyond that -- one huge candle filling dozens of
+#     gaps -- the rest are drawn on the next candles. Only the DRAWING waits: which gaps exist
+#     and which are filled is always decided on the candle itself.
 #
 # Defaults = notebooks/nb23_config.py: FVG_MITIGATION "ce", FVG_MIN_SIZE_ATR 0.5,
-# FVG_MIN_DISP_ATR 0, FVG_MAX_AGE_BARS 1000, FVG_ATR_PERIOD 14, FVG_EXTEND (open boxes run to now).
+# FVG_MIN_DISP_ATR 0, FVG_MAX_AGE_BARS 1000, FVG_ATR_PERIOD 14.
 from math import isnan
 from indie import indicator, param, color, line_style, MainContext
 from indie.algorithms import Atr
@@ -37,13 +45,14 @@ from indie.drawings import Rectangle, AbsolutePosition
 @param.bool('show_bull', default=True, title='Bullish gaps')
 @param.bool('show_bear', default=True, title='Bearish gaps')
 @param.bool('keep_dead', default=False, title='Keep filled / expired gaps on the chart')
+@param.int('reach', default=20, min=3, max=500, title='Open boxes reach ahead (candles)')
 @param.int('max_live', default=200, min=1, max=1000, title='Max open gaps drawn')
 @param.int('max_dead', default=300, min=1, max=2000, title='Max filled gaps kept')
 @param.color('bull_color', default=color.GREEN, title='Bullish colour')
 @param.color('bear_color', default=color.RED, title='Bearish colour')
 class Main(MainContext):
     def __init__(self, mitigation, min_size_atr, min_disp_atr, max_age, atr_len, show_bull,
-                 show_bear, keep_dead, max_live, max_dead, bull_color, bear_color):
+                 show_bear, keep_dead, reach, max_live, max_dead, bull_color, bear_color):
         self._mode = mitigation
         self._min_size = min_size_atr
         self._min_disp = min_disp_atr
@@ -52,6 +61,7 @@ class Main(MainContext):
         self._show_bull = show_bull
         self._show_bear = show_bear
         self._keep_dead = keep_dead
+        self._reach = float(reach)
         self._max_live = max_live
         self._max_dead = max_dead
         self._bull = bull_color
@@ -66,17 +76,56 @@ class Main(MainContext):
         self._born: list[int] = []           # bar_index of the 3rd candle
         self._box: list[Rectangle] = []
         self._dead: list[Rectangle] = []     # filled / expired boxes still shown (keep_dead)
+        # drawing changes owed to the chart, oldest first: draw (False) or erase (True)
+        self._q_box: list[Rectangle] = []
+        self._q_erase: list[bool] = []
+        self._left = 0                       # changes still allowed in this update
 
     def calc(self):
-        atr = Atr.new(self._atr_len)          # every candle, so the ATR stays continuous
+        atr = Atr.new(self._atr_len)          # every update, so the ATR stays continuous
+        if not self.is_closed_bar:
+            return                           # the live candle: nothing changes until it closes
         close_t = self.time[0] + self._bar_secs
-        if self.is_closed_bar:
-            self._retire(close_t)            # judge the open gaps on THIS candle first...
-            self._detect(atr[0], close_t)    # ...then a gap this candle completes (not judged
+        self._left = 90                      # Exness allows 100 per update
+        self._flush()                        # what earlier candles could not draw
+        self._retire(close_t)                # judge the open gaps on THIS candle first...
+        self._detect(atr[0], close_t)        # ...then a gap this candle completes (not judged
                                              # on its own candle, as in the research code)
-        if self.is_last_bar:                 # the open gaps run to the live candle
-            for i in range(len(self._box)):
-                self._box[i].point_b.time = close_t
+        self._renew(close_t)
+
+    def _change(self, box: Rectangle, erase: bool) -> None:
+        """Draw or erase now if this update has room and nothing is waiting, else queue it --
+        in order, so a box drawn and then erased is never erased first."""
+        if self._left > 0 and len(self._q_box) == 0:
+            self._left -= 1
+            if erase:
+                self.chart.erase(box)
+            else:
+                self.chart.draw(box)
+        else:
+            self._q_box.append(box)
+            self._q_erase.append(erase)
+
+    def _flush(self) -> None:
+        while self._left > 0 and len(self._q_box) > 0:
+            box = self._q_box.pop(0)
+            erase = self._q_erase.pop(0)
+            self._left -= 1
+            if erase:
+                self.chart.erase(box)
+            else:
+                self.chart.draw(box)
+
+    def _renew(self, close_t: float) -> None:
+        """Push forward the boxes the live candle is about to reach. Each is redrawn about once
+        every `reach` candles, so the work spreads over candles instead of landing on one."""
+        due = close_t + 2.0 * self._bar_secs
+        for i in range(len(self._box)):
+            if self._left <= 0:
+                return                       # the rest next candle; they still reach it
+            if self._box[i].point_b.time < due:
+                self._box[i].point_b.time = close_t + self._reach * self._bar_secs
+                self._left -= 1
                 self.chart.draw(self._box[i])
 
     def _level(self, i: int) -> float:
@@ -110,12 +159,12 @@ class Main(MainContext):
             box.point_b.time = close_t       # the box stops on the candle that killed it
             box.bg_color = c(0.06)
             box.line_color = c(0.25)
-            self.chart.draw(box)
+            self._change(box, False)
             self._dead.append(box)
             if len(self._dead) > self._max_dead:
-                self.chart.erase(self._dead.pop(0))
+                self._change(self._dead.pop(0), True)
         else:
-            self.chart.erase(box)
+            self._change(box, True)
         self._kind.pop(i)
         self._top.pop(i)
         self._bot.pop(i)
@@ -146,18 +195,19 @@ class Main(MainContext):
             return
         c = self._bull if kind > 0 else self._bear
         mid_line = c(0.6) if self._mode == 'ce' else color.TRANSPARENT
-        box = Rectangle(AbsolutePosition(close_t, top), AbsolutePosition(close_t, bot),
+        box = Rectangle(AbsolutePosition(close_t, top),
+                        AbsolutePosition(close_t + self._reach * self._bar_secs, bot),
                         line_style=line_style.SOLID, line_width=1, line_color=c(0.5),
                         bg_color=c(0.15), middle_line_style=line_style.DOTTED,
                         middle_line_width=1, middle_line_color=mid_line)
-        self.chart.draw(box)
+        self._change(box, False)
         self._kind.append(kind)
         self._top.append(top)
         self._bot.append(bot)
         self._born.append(self.bar_index)
         self._box.append(box)
         if len(self._box) > self._max_live:  # too many open: the OLDEST goes
-            self.chart.erase(self._box[0])
+            self._change(self._box[0], True)
             self._kind.pop(0)
             self._top.pop(0)
             self._bot.pop(0)
