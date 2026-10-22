@@ -52,14 +52,22 @@ class Series:
 
 
 class Chart:
+    """Counts drawing changes per update: Exness refuses more than 100 ("exceeded the limit 100
+    of drawing changes per bar update")."""
     def __init__(self):
         self.on = {}                     # id -> drawing currently on the chart
+        self.changes = 0                 # in the current update
+        self.peak = 0
 
     def draw(self, obj):
         self.on[id(obj)] = obj
+        self.changes += 1
+        self.peak = max(self.peak, self.changes)
 
     def erase(self, obj):
         self.on.pop(id(obj), None)
+        self.changes += 1
+        self.peak = max(self.peak, self.changes)
 
 
 class Context:
@@ -126,6 +134,7 @@ def run(monkeypatch, bars, bar_secs=60, realtime_last=0, **settings):
     Atr.ctx = ctx
     ctx.bar_index = 0
     Main.__init__(ctx, **kw)
+    ctx.min_ahead = float("inf")          # the closest any open box's edge came to the live candle
     n = len(bars)
     for k in range(n):
         ctx.bar_index, ctx.is_last_bar = k, k >= n - 1 - realtime_last
@@ -136,11 +145,16 @@ def run(monkeypatch, bars, bar_secs=60, realtime_last=0, **settings):
                 ctx.data["low"][k] = o + frac * (full["low"][k] - o)
                 ctx.data["close"][k] = o + frac * (full["close"][k] - o)
                 ctx.is_closed_bar = False
+                ctx.chart.changes = 0
                 ctx.calc()
             for c in ("high", "low", "close"):
                 ctx.data[c][k] = full[c][k]
         ctx.is_closed_bar = True
+        ctx.chart.changes = 0
         ctx.calc()
+        if ctx._box:                      # after each closed candle: how far ahead of it
+            ahead = min(b.point_b.time for b in ctx._box) - (full["time"][k] + bar_secs)
+            ctx.min_ahead = min(ctx.min_ahead, ahead)
     return ctx, full["time"]
 
 
@@ -206,12 +220,48 @@ def test_a_live_candle_changes_nothing_until_it_closes(monkeypatch, gold):
     assert gaps_of(live, t) == gaps_of(hist, t)
 
 
-def test_open_gaps_run_to_the_live_candle_and_dead_ones_leave_the_chart(monkeypatch, gold):
+def test_open_gaps_reach_past_the_live_candle_and_dead_ones_leave_the_chart(monkeypatch, gold):
     ctx, times = run(monkeypatch, gold, mitigation="touch", min_size_atr=0.0)
-    last_close = times[-1] + 60
-    assert ctx._box and all(b.point_b.time == last_close for b in ctx._box)
-    on = set(ctx.chart.on)
-    assert on == {id(b) for b in ctx._box}             # keep_dead off: only the open gaps drawn
+    last_close, bar = times[-1] + 60, 60
+    assert ctx._box and not ctx._q_box                 # nothing owed on an ordinary chart
+    assert ctx.min_ahead >= 2 * bar                    # after EVERY candle, past the next one
+    for b in ctx._box:                                  # ahead of the live candle, at most `reach`
+        assert last_close + 2 * bar <= b.point_b.time <= last_close + 20 * bar
+    assert set(ctx.chart.on) == {id(b) for b in ctx._box}   # keep_dead off: only open gaps
+
+
+def _staircase(steps=300):
+    """`steps` candles each a dollar above the last -- a gap on every one -- then a crash candle
+    through all of them, then a quiet tail."""
+    t = pd.date_range("2026-10-21 00:00", periods=steps + 41, freq="1min", tz="UTC")
+    p = np.r_[100 + np.arange(steps, dtype=float), [50.0] * 41]
+    b = pd.DataFrame({"open_time": t, "open": p - 0.1, "high": p + 0.2, "low": p - 0.2,
+                      "close": p + 0.1, "volume": 1.0})
+    b.loc[steps, ["open", "high", "low", "close"]] = [p[steps - 1], p[steps - 1] + 0.2, 49.8, 50.1]
+    return b
+
+
+@pytest.mark.parametrize("keep_dead", [False, True])
+def test_one_candle_filling_hundreds_of_gaps_never_breaks_exness_limit(monkeypatch, keep_dead):
+    # what broke on Exness: more than 100 drawing changes in one update
+    bars = _staircase()
+    ctx, times = run(monkeypatch, bars, keep_dead=keep_dead, max_dead=100000, max_live=100000)
+    assert ctx.chart.peak <= 90
+    assert ctx._kind == [-1]       # the crash filled every bullish gap AT ONCE; what is left is
+                                   # the bearish gap the crash itself opened (research has it too)
+    assert not ctx._q_box                              # ...and the drawing caught up later
+    if keep_dead:
+        assert len(ctx._dead) > 250
+        assert gaps_of(ctx, times) == research(bars)   # every box stops on the crash candle
+    else:
+        assert set(ctx.chart.on) == {id(b) for b in ctx._box}
+
+
+def test_hundreds_of_open_gaps_stay_ahead_of_the_live_candle(monkeypatch):
+    bars = _staircase().iloc[:300]                     # no crash: ~300 gaps stay open
+    ctx, times = run(monkeypatch, bars, max_live=1000)
+    assert len(ctx._box) > 250 and ctx.chart.peak <= 90
+    assert ctx.min_ahead >= 2 * 60                     # 300 boxes, and none ever fell behind
 
 
 def test_too_many_open_gaps_drop_the_oldest(monkeypatch, gold):
