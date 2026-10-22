@@ -29,6 +29,9 @@ python -m experiments.regime_study      # what differs when nb21's strategy wins
 python -m experiments.instrument_scan   # nb21's strategy on gold/oil/FX vs a metronome (~8 min) -- USDJPY only, unreplicated
 python -m experiments.nq_open_reversion # JJ Simon's NY-open reversion on Nasdaq 100 1m (~15 min download) -- no bias, -0.08R
 python -m experiments.nq_news_reversion # his A+ news-day reversion to the 8:29 price (needs quant.news) -- -0.09R, negative before costs
+python experiments/headline_probe.py --once   # every free headline source once (the 7-day test runs on the
+                                              #   server: scripts/install_headline_probe.sh)
+PYTHONPATH=. python experiments/headline_report.py   # what the probe recorded: speed, coverage, noise
 # any strategy file and its COMPARE arms, quarter by quarter: notebooks/evaluate.ipynb, or
 #   from experiments.evaluate import evaluate; evaluate(evaluate_config()).arms()
 ```

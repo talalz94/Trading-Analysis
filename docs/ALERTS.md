@@ -227,9 +227,11 @@ through two real swing extremes with no candle closing through it before it is d
 fit checks the swings alone, so a wick can cross a line by two ATR (docs/CHART_GUIDE.md,
 "Trendlines"). Strict roughly halves the lines and the alerts: on Gold + USDJPY + BTC, Mar–Aug
 2026, "formed" on 1h/4h went from ~0.5 to ~0.3 a day. **`alerts/alerts_config_trendlines.py`** is
-a ready-made config built on it: strict trendlines forming and breaking on 1m-4h, wedges and
-triangles forming on 15m-4h, high-impact news reminders from a day ahead down to 15 minutes, and
-one email per quarter hour, with the steps to preview it and switch to it at the top of the file.
+a ready-made config built on it: strict trendlines forming and breaking on 1m-4h (1m a little
+looser, with `prefer_newer` and `hold=1`), early breaks of 15m-4h lines on 5m closes and of 5m
+lines on 1m closes, wedges and triangles forming and breaking out on 15m-4h, high-impact news
+reminders from a day ahead down to 15 minutes, and at most one email every 5 minutes with tiered
+subjects and pictures, with the steps to preview it and switch to it at the top of the file.
 
 **Rules that keep it honest:**
 - **A setting a kind does not have is refused by name.** `perod=14` on an RSI alert is an error,
@@ -305,7 +307,7 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
 - **Every row carries a ref**, like `btc.1m.202610191349.trendline-broken` (market, timeframe, the
   candle's close in UTC, the alert's name). On your PC, `python -m quant.alerts show <ref>` fetches
   that market's candles again, re-runs the alert on them exactly as the monitor judged them (on a
-  15-minute clock, from the start of that quarter hour), says whether it fires there again, and
+  clock, from the start of that boundary's window), says whether it fires there again, and
   opens a chart in `reports/alerts/<ref>.html`: the candles around it, THE line or shape that fired
   (with its touches or pivots, the level it would break and the measured target), the candle it
   fired on, and what came after (`--after 60` candles). The alert is found by name in

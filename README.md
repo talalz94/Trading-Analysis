@@ -18,7 +18,7 @@ data layer designed to grow to other providers and asset classes (crypto, FX, eq
 - [Indicators](#indicator-system) · [Strategies](#strategy-framework)
 - [Stop loss](#stop-loss-configuration) · [Take profit](#take-profit-configuration)
 - [Backtesting model](#backtesting-model) · [Optimization](#optimization) · [Visualization](#visualization)
-- [Email alerts](#email-alerts) · [Economic calendar](#economic-calendar) · [Troubleshooting](#troubleshooting)
+- [Exness FVG indicator](#fair-value-gaps-on-the-exness-web-terminal) · [Email alerts](#email-alerts) · [Economic calendar](#economic-calendar) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -68,7 +68,8 @@ quant/
 ├── alerts/            # email alerts when a pattern forms (python -m quant.alerts; docs/ALERTS.md)
 └── cli.py             # `quant fetch | backtest | report`
 alerts/alerts_config.py  # what the alerts monitor watches (state in alerts/state/, git-ignored)
-examples/  notebooks/  tests/  docs/  data/ (parquet cache, git-ignored)
+exness/fair_value_gaps.py  # the research FVG as an Indie indicator for the Exness web terminal
+experiments/  examples/  notebooks/  tests/ (+ tests/data fixtures)  docs/  data/ (parquet cache, git-ignored)
 ```
 
 **Key components:** `quant.data.get_ohlcv` (data), `quant.strategies.*` (strategies),
@@ -558,6 +559,13 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 
 ---
 
+## Fair value gaps on the Exness web terminal
+
+[`exness/fair_value_gaps.py`](exness/fair_value_gaps.py) is the research FVG ported to Indie, the
+language of the Exness terminal's indicator editor: paste it in, Save, Add to chart. Same gaps as
+`quant.indicators.add_fvgs` (a test runs it on real candles against the research code), drawn
+only on closed candles, within Exness's limits (100 drawing changes per update, state in `Var`).
+
 ## Email alerts
 
 `quant.alerts` watches markets on this PC and emails you when a pattern forms on a **closed**
@@ -583,13 +591,18 @@ It is built to be left running:
 - failed feeds and failed sends retry with backoff;
 - a scheduled task restarts it if it dies.
 
-There are 15 alert kinds, each with an on/off switch in the config:
+There are 16 alert kinds, each with an on/off switch in the config:
 - **Patterns:** 62 candlestick patterns and 22 chart-pattern breakouts.
-- **Levels and lines:** trendline breaks, support/resistance zone breaks and bounces, and fair
-  value gaps.
+- **Levels and lines:** trendlines forming and breaking, early breaks (a 1h line closed through
+  on a 5m candle), support/resistance zone breaks and bounces, and fair value gaps.
 - **Indicators:** MA and golden crosses, RSI and RSI divergence, MACD, stochastic, Supertrend,
   Heikin-Ashi, candle runs and big candles.
 - **Setups:** 28 research entry setups.
+
+`alerts/alerts_config_trendlines.py` is the ready-made config the author runs on a Google Cloud
+server: trendlines on 1m-4h and their early breaks, wedges and triangles, high-impact news
+reminders, at most one email every 5 minutes with a P1 / P2 / P3 subject and pictures of the top
+signals. Every email row has a ref; `python -m quant.alerts show <ref>` redraws it on your PC.
 
 Markets can be any Binance pair or any of Dukascopy's 1,380 instruments: FX, metals, oil,
 indices, crypto CFDs, bonds and stocks. The full menu is

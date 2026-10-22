@@ -75,9 +75,20 @@ touches the most of them, at least `min_touches`, within `line_tol_atr` ATR. The
   notebook 21's results by nothing measurable (−0.02R a trade, t −1.0): a cleaner chart, not an
   edge.
 
+* **`fit="bestfit"`** (opt-in, researched, not used anywhere yet) is the line an eye draws through
+  swings that are not quite collinear: the least-squares line through the touches, each within
+  `line_tol_atr`, with the strict candle test but `closes_through` closes (1) allowed beyond it.
+
+Two more settings decide WHICH line you see and when it BREAKS. Only one support and one resistance
+line are live at a time, and by default a new line needs MORE touches to replace the live one;
+`prefer_newer=True` lets one with as many touches in when its last touch is more recent.
+`break_sustain_bars=N` keeps a line alive through a close beyond it until N more closes in a row
+confirm the break; a close back restarts the count (0: the first close retires the line).
+
 Notebook 23 and the market view use `fit="strict"`; notebook 21 and the strategy file keep the
-default. The trendline alerts take the same choice as `fit=`, `touch_tol=` and `wick_tol=`
-(`alerts/alerts_config_trendlines.py` uses strict).
+default. The trendline alerts take the same choices as `fit=`, `touch_tol=`, `wick_tol=`,
+`prefer_newer=` and `hold=` (= `break_sustain_bars`); `alerts/alerts_config_trendlines.py` uses
+strict everywhere, and `prefer_newer` with `hold=1` on 1m (docs/ALERTS.md).
 
 ## Previous period highs and lows
 

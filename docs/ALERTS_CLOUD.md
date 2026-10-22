@@ -216,16 +216,54 @@ Open the terminal with the **SSH** button (step 4), then:
 |---|---|
 | change alerts | `nano ~/quant/alerts/alerts_config.py` and save. It is used within a minute, with no restart. Run `check` first. |
 | see what it is doing | `cd ~/quant && .venv/bin/python -m quant.alerts status` |
-| update to newer code | `cd ~/quant && git stash && git pull && git stash pop && bash scripts/install_alerts_linux.sh` (stash keeps your config edits) |
+| update to newer code | see **Updating, with a way back** below |
 | stop / start | `sudo systemctl stop quant-alerts` / `sudo systemctl start quant-alerts` |
 | startup errors | `journalctl -u quant-alerts -n 50 --no-pager` |
 | remove it | `bash scripts/install_alerts_linux.sh --uninstall` |
 
-### Switch to the trendline alerts (one email per quarter hour)
+### Updating, with a way back
 
-`alerts/alerts_config_trendlines.py` watches trendlines on 1m-4h, wedges and triangles, and news
-reminders from a day ahead, and sends at most one email per quarter hour. It needs the code of 20
-Oct 2026 or later, so update first, then copy it over your config (the old one is kept):
+Record what runs now, update, and keep the command that restores it:
+
+```bash
+cd ~/quant && git rev-parse --short HEAD > ~/code_before.txt && cp alerts/alerts_config.py ~/alerts_config_before.py
+git pull && bash scripts/install_alerts_linux.sh
+cp alerts/alerts_config_trendlines.py alerts/alerts_config.py      # only if you run that config
+.venv/bin/python -c "from quant.alerts.config import load_config; load_config(); print('config OK')"
+.venv/bin/python -m quant.alerts status | head -6
+```
+
+`git pull` works with your edited `alerts/alerts_config.py` as long as the update does not change
+that file itself (it changes `alerts_config_trendlines.py`, which you copy over it). To go back:
+
+```bash
+cd ~/quant && git checkout $(cat ~/code_before.txt) && cp ~/alerts_config_before.py alerts/alerts_config.py && bash scripts/install_alerts_linux.sh
+```
+
+and later `git checkout research/scenario-framework-2026-07-30` to return to the latest.
+
+### The headline probe (a 7-day test of news sources)
+
+`experiments/headline_probe.py` records 12 free headline sources (FinancialJuice RSS and Telegram,
+@WalterBloomberg, investingLive, Google News searches, the Fed, State Department, White House) for
+7 days, as its own service beside the alerts: its own database, capped at 250 MB and 10% CPU.
+
+```bash
+bash scripts/install_headline_probe.sh                          # tests each source, then starts it
+.venv/bin/python experiments/headline_probe.py --status         # what it has recorded
+PYTHONPATH=. .venv/bin/python experiments/headline_report.py    # speed / coverage / noise / reliability
+bash scripts/install_headline_probe.sh --uninstall              # stop and remove it
+```
+
+The State Department's press releases refuse Google Cloud's addresses (403); the probe retries them
+every 15 minutes and the report lists them as blocked.
+
+### Switch to the trendline alerts (one email every 5 minutes at most)
+
+`alerts/alerts_config_trendlines.py` watches trendlines on 1m-4h (and their early breaks), wedges
+and triangles, and news reminders from a day ahead, and sends at most one email every 5 minutes,
+with tiered subjects and pictures. It needs the code of 22 Oct 2026 or later, so update first,
+then copy it over your config (the old one is kept):
 
 ```bash
 cd ~/quant && git stash && git pull && git stash pop && bash scripts/install_alerts_linux.sh

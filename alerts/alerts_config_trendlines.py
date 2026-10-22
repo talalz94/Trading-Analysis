@@ -5,6 +5,8 @@ What it watches, on Gold, USDJPY and BTC:
   TRENDLINES  a line FORMS or price BREAKS it, on 1m 5m 15m 1h 4h, fitted STRICT: each line runs
               exactly through two real swing highs or lows and no candle closes through it before
               it is drawn (docs/CHART_GUIDE.md, "Trendlines"); 1m a little looser (§2, STRICT_1M)
+  EARLY       a 15m / 1h / 4h line closed through by a 5m candle, a 5m line by a 1m candle -- up
+              to an hour before the line's own candle confirms it (§2, "EARLY BREAKS")
   PATTERNS    rising / falling wedge, ascending / descending / symmetrical triangle FORMED and
               BROKEN OUT of, on 15m 1h 4h (1m and 5m are written below, switched off: ~40 a day)
   NEWS        high and critical releases: reminders 1 day, 12 h, 6 h, 2 h, 1 h, 30 and 15 min
@@ -97,7 +99,7 @@ CATEGORIES = ("Chart patterns", "Trendlines", "News")
 #   on        True = watching · False = kept here, switched off
 #   name      any name, unique (renaming an alert starts it afresh)
 #   markets   "all", a group, or names from §1     tfs   "1m" "5m" "15m" "30m" "1h" "2h" "4h"
-#   priority  "urgent" / "normal": marks the row; on the 15-minute clock both wait for it
+#   priority  "urgent" / "normal": marks the row; on the 5-minute clock both wait for it
 #
 #   ~N/day = how often it fired, as set: 5m-4h on Gold + USDJPY + BTC, Mar-Aug 2026; 1m on BTC
 #   alone, Jun-Aug 2026 (the only 1m history kept) -- the three markets together are ~2-3x that.
