@@ -22,12 +22,17 @@ does the same right thing:
    there, so five 1m candles through a line in one quarter hour arrive in ONE email.
 7. A 1m alert reads 1m bars, fetched and stored apart from the 5m ones (`base_of`); every other
    timeframe is still resampled from 5m.
+8. An alert with priority="instant" ignores the clock: its feed is fetched at every bar close of
+   its timeframe, judged `instant_settle_seconds` after the close (as soon as the feed has the bar,
+   instead of 90 s), and the event is emailed on that tick. Every alert on the same FEED is judged
+   then too -- one fetch serves them all -- but the others still wait for their boundary.
 """
 from __future__ import annotations
 
 import json
 import math
 import socket
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -51,6 +56,7 @@ class TickReport:
     queued: int = 0
     sent: int = 0
     after: List[Callable] = field(default_factory=list)   # news work to run once candles are out
+    seconds: float = 0.0                                  # how long the tick took, in the log
 
 
 def _tf(tf) -> pd.Timedelta:
@@ -80,17 +86,28 @@ def tf_bars(bars: pd.DataFrame, tf: str, base: str = "5m") -> pd.DataFrame:
     return out.reset_index()
 
 
-def final_bars(bars: pd.DataFrame, tf: str, now: pd.Timestamp, d, base: str = "5m") -> pd.DataFrame:
+def final_bars(bars: pd.DataFrame, tf: str, now: pd.Timestamp, d, base: str = "5m",
+               settle: Optional[pd.Timedelta] = None) -> pd.DataFrame:
     """The `tf` bars that will not change any more (see the module docstring, step 2). Called
-    only on bars the feed has just returned, so `now` is also when the feed last answered."""
+    only on bars the feed has just returned, so `now` is also when the feed last answered.
+    `settle` replaces d.settle_seconds (an instant feed: _settle)."""
     f = tf_bars(bars, tf, base)
     if f.empty:
         return f
     end = f[TIME_COL] + _tf(tf)
     covered = (bars[TIME_COL].iloc[-1] + BASE_BAR[base] >= end) | (
         now >= end + pd.Timedelta(minutes=d.close_grace_minutes))
-    ok = (now >= end + pd.Timedelta(seconds=d.settle_seconds)) & covered
+    wait = pd.Timedelta(seconds=d.settle_seconds) if settle is None else settle
+    ok = (now >= end + wait) & covered
     return f[ok.to_numpy()].reset_index(drop=True)
+
+
+def _settle(cfg, m: str, base: str) -> pd.Timedelta:
+    """How long after its close a bar of this feed is judged: instant_settle_seconds when an
+    instant alert reads it, settle_seconds otherwise."""
+    d = cfg.delivery
+    return pd.Timedelta(seconds=d.instant_settle_seconds if cfg.instant(m, base)
+                        else d.settle_seconds)
 
 
 def judge(alert, frame: pd.DataFrame, after: Optional[pd.Timestamp], tf: str):
@@ -119,8 +136,8 @@ def _feed_key(m: str, base: str) -> str:
 def _due(cfg, state, now) -> List[Tuple[str, str]]:
     """(market, base) feeds with a bar due: some pair's next bar has closed, or the pair is new --
     unless that feed is backing off (it failed, or had nothing new: a weekend). With
-    `every_minutes`, a bar finer than the boundary waits for the boundary it closes before."""
-    settle = pd.Timedelta(seconds=cfg.delivery.settle_seconds)
+    `every_minutes`, a bar finer than the boundary waits for the boundary it closes before --
+    except an instant alert's."""
     cad = cfg.delivery.every_minutes
     due = []
     for (m, tf), alerts in cfg.pairs().items():
@@ -130,13 +147,14 @@ def _due(cfg, state, now) -> List[Tuple[str, str]]:
         wait = ts(state.get(f"wait_until:{_feed_key(m, base)}"))
         if wait is not None and now < wait:
             continue
+        settle = _settle(cfg, m, base)
         for a in alerts:
             c = state.cursor(a.name, m, tf)
             if c is None:
                 due.append((m, base))
                 break
             closes = c + 2 * _tf(tf)
-            if cad:
+            if cad and a.priority != "instant":
                 closes = closes.ceil(f"{cad}min")
             if now >= closes + settle:
                 due.append((m, base))
@@ -218,7 +236,7 @@ def detect(cfg, state, fed, now, report, news_note=None):
         base = base_of(tf)
         if (m, base) not in fed:
             continue
-        frame = final_bars(state.bars(m, base), tf, now, d, base)
+        frame = final_bars(state.bars(m, base), tf, now, d, base, _settle(cfg, m, base))
         if frame.empty:
             continue
         last = frame[TIME_COL].iloc[-1]
@@ -259,29 +277,36 @@ def detect(cfg, state, fed, now, report, news_note=None):
                 state.set_cursor(a.name, m, tf, last)
 
 
-def _email_due(cfg, state, now, pending) -> bool:
+def _email_due(cfg, state, now, pending, instant_only: bool = False) -> bool:
     """Is an email due now? Without `every_minutes`: an urgent event, or the digest is up. With it:
     the first look after a boundary's bars are final, once per boundary -- whether or not anything
-    is waiting, so an event found later in the quarter hour waits for the next boundary."""
+    is waiting, so an event found later in the quarter hour waits for the next boundary. Either
+    way an instant event (not found late) is due at once; `instant_only` asks only that, and leaves
+    the boundary unspent."""
     d = cfg.delivery
+    instant = any(e["priority"] == "instant" and not e["late"] for e in pending)
+    if instant_only:
+        return instant
     if d.every_minutes:
         slot = now.floor(f"{d.every_minutes}min")
-        if now < slot + pd.Timedelta(seconds=d.settle_seconds) or state.get("email_slot") == iso(slot):
-            return False
-        state.put("email_slot", iso(slot))
-        return bool(pending)
+        boundary = (now >= slot + pd.Timedelta(seconds=d.settle_seconds)
+                    and state.get("email_slot") != iso(slot))
+        if boundary:
+            state.put("email_slot", iso(slot))
+        return bool(pending) and (boundary or instant)
     if not pending:
         return False
-    urgent = any(e["priority"] == "urgent" and not e["late"] for e in pending)
+    urgent = any(e["priority"] in ("urgent", "instant") and not e["late"] for e in pending)
     last = ts(state.get("last_email"))
     return urgent or last is None or now - last >= pd.Timedelta(minutes=d.digest_minutes)
 
 
-def deliver(cfg, state, notifier, now, report):
-    """Queue an email if one is due, then send everything in the outbox that is due."""
+def deliver(cfg, state, notifier, now, report, instant_only: bool = False):
+    """Queue an email if one is due, then send everything in the outbox that is due. An email
+    carries every pending event, so an instant one brings along whatever else is waiting."""
     pending = state.pending()
     if pending or cfg.delivery.every_minutes:
-        if _email_due(cfg, state, now, pending):
+        if _email_due(cfg, state, now, pending, instant_only):
             subject, text, html = compose(pending, cfg, now, host=socket.gethostname())
             images = None
             if cfg.delivery.charts:                    # pictures of the top rows; never blocks
@@ -316,6 +341,7 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
     runner across ticks); built here when the block is on and none is given."""
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     report = TickReport()
+    started = time.monotonic()
     note = None
     if cfg.news.on:
         from .news import LiveNews, news_step
@@ -338,6 +364,8 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
     every = cfg.delivery.every_minutes
     if not every:
         deliver(cfg, state, notifier, now, report)
+    elif report.after:                                 # an instant alert does not wait for the
+        deliver(cfg, state, notifier, now, report, instant_only=True)     # news results below
     if report.after:
         # news results still waiting for their number: asked only now that the candle emails are
         # out, and whatever came in is sent in this same tick
@@ -356,6 +384,7 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
         except Exception as e:
             report.errors["news background"] = f"{type(e).__name__}: {e}"
     state.put("heartbeat", iso(now))
+    report.seconds = time.monotonic() - started
     return report
 
 
@@ -380,7 +409,7 @@ def preview(cfg: AlertsConfig, feed, *, hours: float = 48, now=None):
         bars = got[base].get(m)
         if bars is None or isinstance(bars, Exception) or bars.empty:
             continue
-        frame = final_bars(bars, tf, now, cfg.delivery, base)
+        frame = final_bars(bars, tf, now, cfg.delivery, base, _settle(cfg, m, base))
         for a in alerts:
             prev, cool = None, a.cooldown_bars * _tf(tf)
             for row, h in judge(a, frame, None, tf):

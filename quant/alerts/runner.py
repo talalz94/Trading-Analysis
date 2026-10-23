@@ -72,8 +72,8 @@ def log_report(r):
     if r.started:
         log.info("watching (from now on): %s", "; ".join(r.started))
     if r.fetched or r.events or r.queued or r.sent:
-        log.info("fetched %s | %d new events | %d emails queued, %d sent",
-                 ",".join(r.fetched) or "-", r.events, r.queued, r.sent)
+        log.info("fetched %s | %d new events | %d emails queued, %d sent | %.1f s",
+                 ",".join(r.fetched) or "-", r.events, r.queued, r.sent, r.seconds)
     for k, v in r.errors.items():
         log.warning("%s: %s", k, v)
 

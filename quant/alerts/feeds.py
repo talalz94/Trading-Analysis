@@ -42,12 +42,72 @@ def _closed(df: pd.DataFrame, now: pd.Timestamp, bar: pd.Timedelta = BAR) -> pd.
     return df[COLS].drop_duplicates(TIME_COL, keep="last").sort_values(TIME_COL).reset_index(drop=True)
 
 
+_tls = threading.local()
+_ctx: list = []
+_ctx_lock = threading.Lock()
+
+
+def _tls_context():
+    """The certificate store, loaded ONCE per process (see session())."""
+    with _ctx_lock:
+        if not _ctx:
+            from requests.utils import DEFAULT_CA_BUNDLE_PATH
+            from urllib3.util.ssl_ import create_urllib3_context
+            c = create_urllib3_context()
+            c.load_verify_locations(DEFAULT_CA_BUNDLE_PATH)
+            _ctx.append(c)
+    return _ctx[0]
+
+
+def session():
+    """This thread's requests.Session for the candle feeds: connections kept open, and verified
+    with ONE certificate store per process. requests hands urllib3 the CA file for every new
+    connection, and OpenSSL 3 parses it each time -- 4 s of CPU on the PC, ~2 s on the server,
+    twice per Dukascopy fetch (the library opens a connection per page). That was most of a
+    Dukascopy fetch's 11-33 s, and fetching 1m bars every minute would have spent a quarter of
+    the server's CPU on it. Now a new connection costs ~0.05 s, and a wrong host, a self-signed,
+    an expired and an untrusted certificate are still refused (checked, Oct 2026). No cookies
+    are kept: the requests are exactly the ones made before, on a kept connection."""
+    s = getattr(_tls, "session", None)
+    if s is None:
+        import http.cookiejar
+        import requests
+        from requests.adapters import HTTPAdapter
+
+        class _Https(HTTPAdapter):
+            def init_poolmanager(self, *a, **kw):
+                kw["ssl_context"] = _tls_context()
+                super().init_poolmanager(*a, **kw)
+
+            def cert_verify(self, conn, url, verify, cert):
+                super().cert_verify(conn, url, verify, cert)
+                if verify is True:                   # already in the shared context: loading the
+                    conn.ca_certs = None             # file again is the cost being avoided
+
+        s = requests.Session()
+        s.mount("https://", _Https())
+        s.cookies.set_policy(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
+        _tls.session = s
+    return s
+
+
+class _DukascopyRequests:
+    """Stands in for `requests` inside dukascopy_python, which calls requests.get() for every page:
+    through session(), and with a timeout, which the library never sets (a request once hung 20
+    minutes)."""
+
+    @staticmethod
+    def get(*a, **kw):
+        kw.setdefault("timeout", 60)
+        return session().get(*a, **kw)
+
+
 def _binance_klines(params: dict, timeout: float):
     import requests
     first = _binance_host[0]
     refused = None
     for k in [first] + [i for i in range(len(_BINANCE_HOSTS)) if i != first]:
-        r = requests.get(_BINANCE_HOSTS[k] + "/api/v3/klines", params=params, timeout=timeout)
+        r = session().get(_BINANCE_HOSTS[k] + "/api/v3/klines", params=params, timeout=timeout)
         if r.status_code in (403, 451):              # "restricted location": try the other host
             refused = refused or r
             continue
@@ -101,6 +161,7 @@ logging.getLogger("DUKASCRIPT").addFilter(_quiet)
 def dukascopy_bars(symbol: str, start: pd.Timestamp, now: pd.Timestamp, *, base: str = "5m"):
     import dukascopy_python as d
     from quant.data.dukascopy import _instrument, _normalize
+    d.requests = _DukascopyRequests                  # its pages through session() (see there)
     interval = {"1m": d.INTERVAL_MIN_1, "5m": d.INTERVAL_MIN_5}[base]
     raw = d.fetch(_instrument(symbol), interval, d.OFFER_SIDE_BID,
                   start.to_pydatetime().astimezone(timezone.utc),

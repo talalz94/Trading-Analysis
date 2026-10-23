@@ -31,7 +31,7 @@ def base_of(tf: str) -> str:
     market some 1m alert watches), everything else from the 5m bars, as it always was."""
     return "1m" if TF_MINUTES[tf] < 5 else BASE_TF
 SOURCES = ("binance", "dukascopy")
-PRIORITIES = ("urgent", "normal")
+PRIORITIES = ("urgent", "normal", "instant")    # instant = urgent that ignores the clock
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,10 @@ class Delivery:
     charts: int = 0                              # a picture of the top N signal rows, inside the
                                                  # email (quant.alerts.snapshot); 0 = none
     chart_budget_seconds: int = 20               # stop drawing after this; the email still goes
+    instant_settle_seconds: int = 10             # priority="instant": its candle is judged this long
+                                                 # after it closes -- and every alert on the same
+                                                 # feed with it -- once the feed has handed it over;
+                                                 # emailed then, not at the next boundary
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,12 @@ class AlertsConfig:
                 for tf in a.tfs:
                     out.setdefault((m, tf), []).append(a)
         return out
+
+    def instant(self, market: str, base: str) -> bool:
+        """Does an instant alert read this market's `base` bars? Then that FEED is judged at
+        instant_settle_seconds, for every alert on it."""
+        return any(a.priority == "instant" and market in a.markets
+                   and any(base_of(tf) == base for tf in a.tfs) for a in self.alerts)
 
 
 class ConfigError(ValueError):
@@ -209,6 +219,10 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
     if not isinstance(em, int) or em < 0 or (em and 60 % em):
         raise ConfigError(f"DELIVERY every_minutes must be 0 or a whole divisor of 60 (5, 10, 15, "
                           f"30, 60), got {em!r}")
+    ins = delivery.instant_settle_seconds
+    if not isinstance(ins, int) or not 0 <= ins <= delivery.settle_seconds:
+        raise ConfigError(f"DELIVERY instant_settle_seconds must be a whole number of seconds "
+                          f"0-{delivery.settle_seconds} (settle_seconds), got {ins!r}")
     try:
         news = parse_news(ns.get("NEWS"))
     except NewsConfigError as e:

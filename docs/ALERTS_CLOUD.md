@@ -258,11 +258,12 @@ bash scripts/install_headline_probe.sh --uninstall              # stop and remov
 The State Department's press releases refuse Google Cloud's addresses (403); the probe retries them
 every 15 minutes and the report lists them as blocked.
 
-### Switch to the trendline alerts (one email every 5 minutes at most)
+### Switch to the trendline alerts (breaks at once, the rest every 5 minutes at most)
 
 `alerts/alerts_config_trendlines.py` watches trendlines on 1m-4h (and their early breaks), wedges
-and triangles, and news reminders from a day ahead, and sends at most one email every 5 minutes,
-with tiered subjects and pictures. It needs the code of 22 Oct 2026 or later, so update first,
+and triangles, and news reminders from a day ahead. A break is emailed as soon as its candle
+closes; everything else at most once every 5 minutes, with tiered subjects and pictures. It needs
+the code of 23 Oct 2026 or later (older code refuses `priority="instant"`), so update first,
 then copy it over your config (the old one is kept):
 
 ```bash

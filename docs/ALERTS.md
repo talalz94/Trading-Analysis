@@ -129,7 +129,7 @@ DELIVERY = dict(digest_minutes=15, catchup_max_age_minutes=30)
 | `kind` | What to look for, followed by that kind's own settings (table below). |
 | `markets` | Market names, group names, or `"all"`. |
 | `tfs` | Any of `1m 5m 15m 30m 1h 2h 4h`, as one string or a tuple. All but 1m are built from the 5m feed; 1m alerts read 1m bars, fetched only for the markets a 1m alert watches and kept only for its few hours of warm-up. |
-| `priority` | `urgent`: emailed on the tick that finds it. `normal`: waits for the digest. |
+| `priority` | `urgent`: emailed on the tick that finds it. `normal`: waits for the digest. `instant`: like urgent, and on a clock (`every_minutes`) it does not wait for the boundary either -- see §5. |
 | `cooldown_bars` | (optional) After it fires on a market and timeframe, stay quiet there for this many of its bars. |
 | `category` | (optional) The email section. Defaults to the kind's own: Candle patterns, Chart patterns, Levels & lines, Indicators, Setups. |
 
@@ -260,10 +260,14 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
 ## 5. When an email is sent
 
 - **A bar is judged once it is final**, never while it is still forming. A bar is final when it
-  has been closed for 90 seconds (Dukascopy publishes ~1 minute late; waiting the same for every
-  market puts one bar close's alerts in **one** email). Its 5m data must also reach its close, or
-  the feed must still have nothing 20 minutes after the close. The second case is a shut market,
-  for example Friday's last 4h bar.
+  has been closed for `settle_seconds` (90; waiting the same for every market puts one bar close's
+  alerts in **one** email) -- or `instant_settle_seconds` (10) on a feed an instant alert reads.
+  Its data must also reach its close, or the feed must still have nothing 20 minutes after the
+  close. The second case is a shut market, for example Friday's last 4h bar. Measured 23 Oct 2026:
+  both feeds hand over a 1m or 5m candle within seconds of its close, and every one of 36 asked
+  for 0-8 s after the close was already final (Binance in 0.3 s; Dukascopy had it on calls started
+  1 s after the close). The "Dukascopy is ~1 minute late" behind the 90 s was the fetch, not the
+  data: each request loaded the certificate file again (§7).
 - **Urgent** alerts are emailed on the tick that finds them. **Normal** ones wait for the digest:
   at most one email every `digest_minutes`. **Any email carries every pending alert**, so an urgent
   email also clears the waiting digest.
@@ -274,6 +278,15 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
   signal waits for the quarter hour it falls in. A news reminder rides in the email of the quarter
   hour at or BEFORE its time (a 15-minute reminder for 08:30 arrives at 08:17), never after the
   release. A signal found after its boundary's email has gone (a late feed) waits for the next one.
+- **`priority="instant"` skips the clock.** Its feed is fetched at every close of its timeframe
+  (a 1m alert: every minute), judged `instant_settle_seconds` (10) after the close, and the signal
+  is emailed on that tick -- with the monitor ticking at :20, ~20-30 s after the candle closed --
+  carrying whatever else was waiting. Every alert on that feed is judged on the same fetch (one
+  fetch serves them all), but the others still wait for their boundary. An instant email does not
+  use up the boundary's, and it goes BEFORE a news result poll that may take its 25 s budget. A
+  signal found late (after an outage) is not instant. Measured on Gold, USDJPY and BTC, 20-23 Oct
+  2026 with every trendline break and early break instant: ~52 emails a day, the same as with
+  everything on the 5-minute clock, because an instant email takes along what was waiting.
 - **`collapse_repeats=True`** makes a signal that repeats inside one window ONE row: same alert,
   market, timeframe and signal, with "5 times, 10:01-10:13 UTC" in its note.
 - **Section order** follows `CATEGORIES`; put `"News"` last there and the news comes after the
@@ -333,9 +346,16 @@ delete that folder.
 Measured on this PC:
 
 - **Fetching.** A market is polled only when one of its bars is due to close, so with 15m as the
-  finest timeframe that is 4 polls an hour, not 60. Each poll asks only for the new 5m bars:
-  about 2 s from Binance and 4 s from Dukascopy, run in parallel. A shut market (a weekend) backs
-  off to about 4 polls an hour.
+  finest timeframe that is 4 polls an hour, not 60 (an instant 1m alert: 60). Each poll asks only
+  for the new bars: ~0.2-0.3 s from either provider, run in parallel. A shut market (a weekend)
+  backs off to about 4 polls an hour. The feeds keep their connections open and verify them with
+  ONE certificate store per process (`feeds.session()`): `requests` hands every new connection the
+  CA file, and OpenSSL 3 (Python 3.13 here, Ubuntu 24.04 on the server) takes ~4 s of CPU to parse
+  it -- twice per Dukascopy fetch, since the library opens a connection per page. That was most of
+  a Dukascopy poll's 11-33 s, and a 1m poll every minute would have spent a quarter of the
+  server's CPU on it. Now a poll costs ~0.02 s of CPU after a one-time ~4 s load; a wrong host, a
+  self-signed, an expired and an untrusted certificate are still refused. The log line of every
+  tick ends with how long it took.
 - **Detecting.** Each alert is evaluated only on its new bars plus its warm-up, never on the whole
   history. Warm-ups run from 60 candles (candle patterns) to about 600 (an EMA-200). Most kinds
   take milliseconds; chart patterns take a few hundred. Each process pays a one-time compile of

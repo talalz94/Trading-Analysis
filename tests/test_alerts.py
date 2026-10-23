@@ -6,6 +6,7 @@ Everything runs on synthetic bars through FakeFeed and ListNotifier, with an exp
 test states exactly what the clock said and what the feed had.
 """
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -133,6 +134,11 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
         got = (a.params["touch_tol"], a.params["wick_tol"], a.params.get("max_distance", 8),
                a.params.get("prefer_newer", False), a.params.get("hold", 0))
         assert got == ((0.4, 0.3, 20, True, 1) if loose else (0.3, 0.15, 8, False, 0))
+    # every BREAK is mailed the moment its candle is final; formations and patterns keep the clock
+    assert {a.name for a in cfg.alerts if a.priority == "instant"} == {
+        "trendline broken", "trendline broken, 1m", "early break, 15m-4h lines",
+        "early break, 5m lines"}
+    assert cfg.delivery.instant_settle_seconds == 10
     assert cfg.delivery.every_minutes == 5 and cfg.delivery.collapse_repeats
     assert cfg.categories[-1] == "News" and cfg.news.on and cfg.markets
     assert cfg.news.remind_before["high"] == (1440, 720, 360, 120, 60, 30, 15)
@@ -607,11 +613,116 @@ def test_repeats_in_one_window_are_one_row(tmp_path):
     assert len(rows) == 2 and "3 times" in text
 
 
+def _rows(text):
+    """(mark, alert slug, close HH:MM) of each signal row of an email's text."""
+    out = []
+    for line in text.splitlines():
+        if line[2:].startswith(("A ", "B ")):
+            ref = line.rsplit("ref ", 1)[1]
+            out.append((line[0], ref.split(".", 3)[3], line.split(" UTC")[0][-5:]))
+    return out
+
+
+def test_an_instant_alert_is_mailed_on_its_own_candle_not_at_the_boundary(tmp_path):
+    # the server's 5-minute clock: a 1m break closing at 00:04 goes at the 00:04:20 tick (10 s
+    # after its close, the feed already has it) -- not at 00:07:20 with its quarter -- while a
+    # normal alert on another market still waits for its boundary and its 90 s
+    instant = dict(ONE_MIN, priority="instant")
+    r = ClockRig(tmp_path, [instant, spike_alert(name="5m", tfs="5m", markets=("A",))],
+                 spikes_1m=["2026-06-03 00:03", "2026-06-03 00:08"], a=["2026-06-03 00:05"],
+                 delivery=dict(every_minutes=5))
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:13:20")
+    sent = [r.when[i] for i in sorted(r.when)]
+    assert sent == [at("2026-06-03 00:04:20"), at("2026-06-03 00:09:20"), at("2026-06-03 00:12:20")]
+    assert [_rows(r.mail.sent[i][1]) for i in range(3)] == [
+        [("!", "1m-spike", "00:04")], [("!", "1m-spike", "00:09")], [(" ", "5m", "00:10")]]
+    # (instant reads as urgent: the "!"), and the 1m feed is asked at every minute's close
+    asked = sorted({c[2] for c in r.feed.calls if c[-1] == "1m"})
+    assert asked == list(pd.date_range(at("2026-06-03 00:00:20"), at("2026-06-03 00:13:20"),
+                                       freq="1min"))
+
+
+def test_an_instant_email_brings_what_is_waiting_and_leaves_the_boundary_to_the_rest(tmp_path):
+    # a normal 1m alert on the SAME feed is judged when the instant one is (one fetch serves
+    # both): its 00:02 candle rides along in the instant email of 00:04:20; its 00:05 candle,
+    # found after that, goes at the 00:07:20 boundary -- the instant email did not spend it
+    r = ClockRig(tmp_path, [dict(ONE_MIN, priority="instant", level=1500),
+                            dict(ONE_MIN, name="1m normal", priority="normal")],
+                 spikes_1m=["2026-06-03 00:02", "2026-06-03 00:05"],
+                 delivery=dict(every_minutes=5))
+    r.feed.bars_1m["B"].loc[r.feed.bars_1m["B"][TIME_COL] == at("2026-06-03 00:03"), "high"] = 2000
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:09:20")
+    sent = [r.when[i] for i in sorted(r.when)]
+    assert sent == [at("2026-06-03 00:04:20"), at("2026-06-03 00:07:20")]
+    assert sorted(_rows(r.mail.sent[0][1])) == [(" ", "1m-normal", "00:03"),
+                                                 (" ", "1m-normal", "00:04"),
+                                                 ("!", "1m-spike", "00:04")]
+    assert _rows(r.mail.sent[1][1]) == [(" ", "1m-normal", "00:06")]
+    assert all(e["status"] == "sent" for e in r.events())
+
+
+def test_one_fetch_serves_every_alert_on_an_instant_feed(tmp_path):
+    # an instant 5m alert and a normal 15m one both read market A's 5m bars: both are judged on
+    # the fetch 10 s after each 5m close -- the 15m one never asks again at its own 90 s
+    r = ClockRig(tmp_path, [spike_alert(name="5m", tfs="5m", markets=("A",), priority="instant"),
+                            spike_alert(name="15m", tfs="15m", markets=("A",))],
+                 a=["2026-06-03 00:00"], delivery=dict(every_minutes=5))
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:20:20")
+    asked = [c[2] for c in r.feed.calls if c[0] == "A"]
+    assert asked == [at(f"2026-06-03 00:{m:02d}:20") for m in (0, 5, 10, 15, 20)]
+    sent = [r.when[i] for i in sorted(r.when)]
+    assert sent == [at("2026-06-03 00:05:20"), at("2026-06-03 00:17:20")]   # 15m: its boundary
+    assert _rows(r.mail.sent[1][1]) == [(" ", "15m", "00:15")]
+
+
+def test_show_reruns_an_instant_feed_from_the_alerts_own_candle(tmp_path, monkeypatch):
+    # on a 15-minute clock the monitor judges a 1m feed a quarter hour at a time, so `show` starts
+    # its look at the quarter hour; an instant alert's feed is judged candle by candle
+    from quant.alerts.show import build_chart
+    seen = []
+
+    class Spy(Spike):
+        def evaluate(self, frame, p, tf):
+            seen.append(frame[TIME_COL].iloc[0])
+            return super().evaluate(frame, p, tf)
+    monkeypatch.setitem(REGISTRY, "spike", Spy())
+    for prio, start in (("normal", "2026-06-02 23:55"), ("instant", "2026-06-03 00:06")):
+        cfg = config(tmp_path, [dict(ONE_MIN, priority=prio)], dict(every_minutes=15))
+        seen.clear()
+        build_chart(cfg, cfg.alerts[0], "B", "1m", at("2026-06-03 00:12"), bars1())
+        assert seen[0] == at(start), prio                 # 5 candles of warm-up before either
+
+
+def test_without_a_clock_an_instant_alert_is_urgent_and_judged_10_s_after_its_close(tmp_path):
+    r = Rig(tmp_path, [spike_alert(tfs="5m", markets=("A",), priority="instant")],
+            a=["2026-06-03 00:05", "2026-06-03 00:10"])
+    sent = []
+    for t in ("2026-06-03 00:01:30", "2026-06-03 00:10:20", "2026-06-03 00:15:20"):
+        n = len(r.mail.sent)
+        r.tick(t)
+        sent += [t] * (len(r.mail.sent) - n)
+    # 20 s after each close (90 s for the rest), and the second does not wait for the digest
+    assert sent == ["2026-06-03 00:10:20", "2026-06-03 00:15:20"]
+
+
+def test_a_late_instant_signal_waits_like_any_other(tmp_path):
+    # found long after its candle (the monitor was off), at 01:00:50: not instant, it waits for
+    # the 01:00 boundary's email at 01:01:50
+    r = ClockRig(tmp_path, [dict(ONE_MIN, priority="instant")], spikes_1m=["2026-06-03 00:03"],
+                 delivery=dict(every_minutes=5, catchup_max_age_minutes=30))
+    r.run("2026-06-03 00:00:20", "2026-06-03 00:01:20")
+    r.run("2026-06-03 01:00:50", "2026-06-03 01:03:50")
+    assert [r.when[i] for i in sorted(r.when)] == [at("2026-06-03 01:01:50")]
+    assert r.events()[0]["late"] == 1 and r.events()[0]["created"] < "2026-06-03T01:01"
+
+
 @pytest.mark.parametrize("delivery, says", [
     (dict(subject="loud"), "subject must be"),
     (dict(charts=11), "charts must be"),
     (dict(every_minutes=7), "every_minutes"),
     (dict(every_minute=15), r"unknown settings \['every_minute'\]"),
+    (dict(instant_settle_seconds=120), "instant_settle_seconds"),
+    (dict(instant_settle_seconds=-1), "instant_settle_seconds"),
 ])
 def test_a_delivery_mistake_is_refused_by_name(tmp_path, delivery, says):
     with pytest.raises(ConfigError, match=says):
@@ -1039,6 +1150,66 @@ class _Resp:
             raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
 
+def test_feed_connections_load_the_certificates_once_and_still_verify(tmp_path):
+    # requests hands urllib3 the CA file for every new connection, and OpenSSL 3 parses it each
+    # time (4 s of CPU on the PC, ~2 s on the server): the feeds' sessions verify against ONE
+    # store loaded per process -- while still requiring a valid certificate for the right host
+    import ssl
+    import threading
+    from quant.alerts import feeds
+    got = []
+    t = threading.Thread(target=lambda: got.append(feeds.session()))
+    t.start()
+    t.join()
+    mine = feeds.session()
+    assert mine is feeds.session() and got[0] is not mine            # one per thread, kept
+    ctx = feeds._tls_context()
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+    assert ctx.cert_store_stats()["x509_ca"] > 100                   # the CA bundle is in it
+    for s in (mine, got[0]):
+        a = s.get_adapter("https://api.binance.com")
+        assert a.poolmanager.connection_pool_kw["ssl_context"] is ctx
+        conn = a.poolmanager.connection_from_url("https://api.binance.com")
+        a.cert_verify(conn, "https://api.binance.com", True, None)
+        assert conn.ca_certs is None and conn.cert_reqs == "CERT_REQUIRED"
+        mine_ca = tmp_path / "my-ca.pem"
+        mine_ca.write_text("")
+        a.cert_verify(conn, "https://api.binance.com", str(mine_ca), None)
+        assert conn.ca_certs == str(mine_ca)                         # an explicit file still loads
+        assert s.cookies._policy.allowed_domains() == ()             # no cookies: same requests
+
+
+def test_dukascopy_pages_go_through_the_kept_session_with_a_timeout(monkeypatch):
+    # the library calls requests.get() for every page, with no timeout: the feed hands it the
+    # thread's session, and a timeout. Its two pages here (the rows, then nothing new) are
+    # parsed into the same candles as ever
+    import json
+    import requests
+    import dukascopy_python as d
+    from quant.alerts import feeds
+    t0 = int(at("2026-06-03 00:00").timestamp() * 1000)
+    rows = [[t0 + k * 60_000, 100 + k, 101 + k, 99 + k, 100.5 + k, 1.0] for k in range(4)]
+    calls = []
+
+    def get(url, headers=None, params=None, timeout=None):
+        calls.append((url, timeout))
+        cur = int(params["last_update"])
+        page = [r for r in rows if r[0] >= cur]
+        return SimpleNamespace(text=f"{params['jsonp']}({json.dumps(page)});")
+
+    def no_network(*a, **kw):
+        raise AssertionError("requests.get used directly")
+    monkeypatch.setattr(requests, "get", no_network)
+    monkeypatch.setattr(feeds, "session", lambda: SimpleNamespace(get=get))
+    monkeypatch.setattr(d, "requests", requests)                     # as the library ships
+    got = feeds.dukascopy_1m("XAUUSD", at("2026-06-03 00:00"), at("2026-06-03 00:03:30"))
+    assert d.requests is feeds._DukascopyRequests
+    assert len(calls) == 2 and all(t == 60 for _, t in calls)
+    assert got[TIME_COL].tolist() == [at("2026-06-03 00:00"), at("2026-06-03 00:01"),
+                                      at("2026-06-03 00:02")]       # 00:03 is still forming
+    assert got["close"].tolist() == [100.5, 101.5, 102.5] and got["high"].iloc[0] == 101
+
+
 def test_binance_refusing_a_server_falls_back_to_its_market_data_host(monkeypatch):
     """A US server (Google's free VM) gets HTTP 451 from api.binance.com; the same candles come
     from data-api.binance.vision, and the host that answered is used from then on."""
@@ -1052,14 +1223,15 @@ def test_binance_refusing_a_server_falls_back_to_its_market_data_host(monkeypatc
         calls.append(url.rsplit("/api/v3", 1)[0])
         return _Resp(451) if "api.binance.com" in url else _Resp(200, kline)
 
-    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(feeds, "session", lambda: SimpleNamespace(get=get))
     monkeypatch.setattr(feeds, "_binance_host", [0])
     bars_ = feeds.binance_5m("BTCUSDT", at("2026-06-03 00:00"), at("2026-06-03 00:20"))
     assert len(bars_) == 3 and calls == ["https://api.binance.com", "https://data-api.binance.vision"]
     feeds.binance_5m("BTCUSDT", at("2026-06-03 00:00"), at("2026-06-03 00:20"))
     assert calls[2:] == ["https://data-api.binance.vision"]          # remembered: one call
 
-    monkeypatch.setattr(requests, "get", lambda url, params=None, timeout=None: _Resp(451))
+    monkeypatch.setattr(feeds, "session", lambda: SimpleNamespace(
+        get=lambda url, params=None, timeout=None: _Resp(451)))
     monkeypatch.setattr(feeds, "_binance_host", [0])
     with pytest.raises(requests.HTTPError, match="refuses this server on every host"):
         feeds.binance_5m("BTCUSDT", at("2026-06-03 00:00"), at("2026-06-03 00:20"))
@@ -1126,13 +1298,15 @@ def test_show_re_runs_the_alert_on_its_own_candle_and_draws_it(tmp_path):
     assert not quiet.reproduced                       # nothing fired there: said, not hidden
 
 
-def test_every_trendline_alert_the_monitor_sends_redraws_with_its_own_line(tmp_path):
+@pytest.mark.parametrize("priority", ["normal", "instant"])
+def test_every_trendline_alert_the_monitor_sends_redraws_with_its_own_line(tmp_path, priority):
     pytest.importorskip("plotly")    # `show` is the PC's browser chart; the server has no plotly
     # the real case: 1m lines on the 15-minute clock, where the monitor judges a quarter hour of
-    # candles at once -- show must re-run from the same window or the line can differ
+    # candles at once -- show must re-run from the same window or the line can differ. An
+    # instant alert's feed is judged candle by candle, so its window starts at its own candle
     from quant.alerts.show import alert_chart, make_ref
     tl = dict(name="lines", kind="trendline", event="both", fit="strict", touch_tol=0.3,
-              markets=("B",), tfs="1m")
+              markets=("B",), tfs="1m", priority=priority)
     r = ClockRig(tmp_path, [tl])
     r.run("2026-06-02 21:00:20", "2026-06-03 05:47:20")
     ev = r.events()

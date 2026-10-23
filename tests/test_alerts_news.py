@@ -439,6 +439,29 @@ def test_on_a_clock_a_result_polled_at_the_boundary_rides_in_that_email(tmp_path
     assert "spike" in text and "0.5%" in text
 
 
+def test_an_instant_alert_does_not_wait_for_the_results_poll_nor_take_its_boundary(tmp_path):
+    # a 5m break closing at 12:35 while the 12:30 CPI result is awaited: the break goes first, at
+    # 12:35:20 BEFORE the poll (which may take its whole 25 s budget), and the number the poll
+    # brings still goes in that tick -- the instant email did not spend the 12:30 boundary
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")),
+            alerts=[dict(SPIKE, priority="instant")], spikes=["2026-10-14 12:30"],
+            news_cfg=dict(remind_before={}), delivery=dict(every_minutes=15))
+    r.tick("2026-10-14 12:00")
+    order = []
+
+    def poll(now, pending=None):
+        order.append(("poll", len(r.mail.sent)))
+        r.news.ev = calendar(rel("2026-10-14 12:30", actual="0.5%"))
+        return {}
+    r.news.poll_results = poll
+    r.tick("2026-10-14 12:35:20")
+    assert order == [("poll", 1)]                   # one email out before the poll began
+    assert len(r.mail.sent) == 2
+    (s1, t1, _), (s2, t2, _) = r.mail.sent
+    assert "spike" in t1 and "0.5%" not in t1
+    assert "0.5%" in t2 and "spike" not in t2
+
+
 @pytest.mark.parametrize("minutes, says", [
     (15, "15 min"), (60, "1 h"), (150, "2 h 30 min"), (720, "12 h"), (1440, "1 day"),
     (1560, "1 day 2 h"), (2880, "2 days"), (0, "0 min"),
