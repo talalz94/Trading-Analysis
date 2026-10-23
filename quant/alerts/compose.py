@@ -166,6 +166,8 @@ def tier_subject(events, cfg, now) -> str:
 
 def compose(events, cfg, now, *, host: str = "", title: str = ""):
     """-> (subject, text, html); with DELIVERY subject="tiers" the subject is tier_subject()."""
+    # an instant alert is an urgent one that does not wait for the clock: it reads as urgent
+    events = [dict(e, priority="urgent") if e.get("priority") == "instant" else e for e in events]
     subject, text, html = _compose(events, cfg, now, host=host, title=title)
     if getattr(cfg.delivery, "subject", "classic") == "tiers" and events:
         subject = tier_subject(events, cfg, now)

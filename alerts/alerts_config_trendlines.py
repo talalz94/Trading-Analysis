@@ -1,5 +1,5 @@
 """
-ALERTS — TRENDLINES, WEDGES & TRIANGLES, NEWS. ONE EMAIL EVERY 5 MINUTES AT MOST.
+ALERTS — TRENDLINES, WEDGES & TRIANGLES, NEWS. BREAKS AT ONCE, THE REST EVERY 5 MINUTES.
 
 What it watches, on Gold, USDJPY and BTC:
   TRENDLINES  a line FORMS or price BREAKS it, on 1m 5m 15m 1h 4h, fitted STRICT: each line runs
@@ -14,12 +14,17 @@ What it watches, on Gold, USDJPY and BTC:
   No candlestick alerts.
 
 HOW THE EMAILS COME (§3 DELIVERY)
-  Every 5 minutes at most: at :02 :07 :12 ... UTC, once those 5 minutes' candles have closed,
-  ONE email with everything found in them -- sections Chart patterns, Trendlines, News, in that
-  order. A 1m signal waits for the 5 minutes it falls in, wherever in them the candle closed: it
-  arrives 2-7 minutes after its candle; a 5m, 15m, 1h or 4h one ~2 minutes after its close. The
-  same signal repeating -- three 1m closes through a line between :00 and :05 -- is ONE row:
-  "3 times, 10:01-10:04 UTC". Nothing found, no email.
+  BREAKS AT ONCE: a trendline broken on 1m-4h, or an early break, is emailed as soon as its
+  candle has closed -- the monitor looks at :20 past every minute, so ~20-30 seconds after the
+  close -- with whatever else was already waiting (priority="instant" in §2).
+  EVERYTHING ELSE every 5 minutes at most: at :02 :07 :12 ... UTC, once those 5 minutes' candles
+  have closed, ONE email with everything found in them -- sections Chart patterns, Trendlines,
+  News, in that order. A line forming goes in the next of them: a 1m one 20 s to ~5 minutes after
+  its candle (its 1m feed is read every minute for the breaks), a 5m, 15m, 1h or 4h one ~2 minutes
+  after its close. The same signal repeating in those 5 minutes is ONE row: "3 times,
+  10:01-10:04 UTC". Nothing found, no email.
+  ~52 emails a day either way (20-23 Oct 2026, last 3 days of candles): ~22 of them breaks sent
+  at once, which take along what was waiting, so the 5-minute emails have less to carry.
   A news reminder comes in the email at or before its time: a 15-minute reminder for a release
   at 08:30 arrives at 08:17. Never after the release.
 
@@ -45,8 +50,8 @@ HOW TO USE IT
 
   2. SWITCH TO IT. The monitor only ever reads alerts/alerts_config.py, so this file goes there
      (keep a backup of the old one). An alert it has not seen before starts from NOW, so nothing
-     from the past is mailed. It needs the code of 20 Oct 2026 or later (1m bars, the 15-minute
-     clock, the strict trendlines): older code refuses its settings BY NAME and keeps the old file.
+     from the past is mailed. It needs the code of 23 Oct 2026 or later (priority="instant"):
+     older code refuses its settings BY NAME and keeps the old file.
 
      On the Google Cloud server, in the browser SSH window:
          cd ~/quant && git stash && git pull && git stash pop && bash scripts/install_alerts_linux.sh
@@ -99,7 +104,8 @@ CATEGORIES = ("Chart patterns", "Trendlines", "News")
 #   on        True = watching · False = kept here, switched off
 #   name      any name, unique (renaming an alert starts it afresh)
 #   markets   "all", a group, or names from §1     tfs   "1m" "5m" "15m" "30m" "1h" "2h" "4h"
-#   priority  "urgent" / "normal": marks the row; on the 5-minute clock both wait for it
+#   priority  "instant" = emailed as soon as its candle closes (~20-30 s), not at the 5-minute
+#             mark · "urgent" / "normal" = how the row is marked; both wait for the 5-minute mark
 #
 #   ~N/day = how often it fired, as set: 5m-4h on Gold + USDJPY + BTC, Mar-Aug 2026; 1m on BTC
 #   alone, Jun-Aug 2026 (the only 1m history kept) -- the three markets together are ~2-3x that.
@@ -141,7 +147,7 @@ ALERTS = [
 
     dict(on=True,  name="trendline broken", kind="trendline", category="Trendlines",
          event="break", closes=1, **STRICT,
-         markets="all", tfs=("5m", "15m", "1h", "4h"), priority="urgent"),
+         markets="all", tfs=("5m", "15m", "1h", "4h"), priority="instant"),
 
     #      1m, PER MARKET per day (12-22 Oct 2026):  Gold 9.2 formed 5.3 broken · USDJPY 10.9 / 6.3
     #      · BTC 10.6 / 6.3   (before prefer_newer and hold: 8.9 / 5.6 · 10.3 / 6.7 · 10.1 / 6.3)
@@ -151,7 +157,7 @@ ALERTS = [
 
     dict(on=True,  name="trendline broken, 1m", kind="trendline", category="Trendlines",
          event="break", closes=1, **STRICT_1M,
-         markets="all", tfs=("1m",), priority="urgent"),
+         markets="all", tfs=("1m",), priority="instant"),
 
     # ── EARLY BREAKS ── a 15m / 1h / 4h line closed through by a 5m candle, and a 5m line by a
     #      1m candle: up to an hour before the line's own candle closes. The same lines as the
@@ -161,11 +167,11 @@ ALERTS = [
     #      the 1h alert came at 04:02, 10 pips lower. Early: 1h/4h lines P2, 15m and 5m lines P3
     dict(on=True,  name="early break, 15m-4h lines", kind="early_break", category="Trendlines",
          line_tfs=("15m", "1h", "4h"), **STRICT,
-         markets="all", tfs=("5m",), priority="urgent"),
+         markets="all", tfs=("5m",), priority="instant"),
 
     dict(on=True,  name="early break, 5m lines", kind="early_break", category="Trendlines",
          line_tfs=("5m",), **STRICT,
-         markets="all", tfs=("1m",), priority="urgent"),
+         markets="all", tfs=("1m",), priority="instant"),
 
     # ── WEDGES & TRIANGLES ── "formed": the shape is in place (its pivots confirmed); the note
     #      says where it would break and the measured target. "breakout": price CLOSED through
@@ -192,7 +198,8 @@ ALERTS = [
 # ══ §3  DELIVERY ════════════════════════════════════════════════════════════════════════════════
 DELIVERY = dict(
     every_minutes=5,                 # ONE email every 5 minutes at most, at :02 :07 :12 ... UTC,
-                                     #   with everything found in it -- urgent and news included.
+                                     #   with everything found in it -- urgent and news included;
+                                     #   priority="instant" alerts do not wait for it (§2)
                                      #   15 = one a quarter hour: fewer emails, but a 1m break can
                                      #   arrive 17 min late (21 Oct: at the low, not 4 min after)
     collapse_repeats=True,           # a signal repeating in those 5 minutes is one row, with

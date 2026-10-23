@@ -2623,3 +2623,43 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   MORE than 3 days short (the weekend slack), and this was 2. Not a fault -- history_days already
   carries x7/5 + 3 days of margin over the 2,530 1m candles the 5m-line early breaks need (~5,000
   held) -- and the store grows to 6 days by itself, since it is now trimmed at 6.
+
+### Trendline breaks emailed at once, and why a Dukascopy poll took 30 s (2026-10-23)
+
+- The user asked for break alerts "the moment price closes". On the 5-minute clock a 1m break
+  waited for its boundary (2-7 min) and every candle waited `settle_seconds` = 90 s (~2.5 min
+  with the :20 tick). New priority="instant": the alert's feed is fetched at every close of its
+  timeframe, judged `instant_settle_seconds` (10) after it, emailed that tick. Every alert on the
+  same FEED is judged on that fetch (otherwise a normal 15m alert on the 5m feed made a second,
+  empty poll at its own 90 s); an instant email carries what is pending, does not spend the
+  boundary, and goes before a news result poll. All trendline breaks (1m-4h) and both early breaks
+  are instant in alerts_config_trendlines.py; formations and patterns keep the clock.
+- Is 10 s safe? Polled both feeds around closes: 36 of 36 1m/5m candles asked for 0-8 s after the
+  close were already FINAL (equal to a fetch 3 minutes later); Binance has a candle in 0.3 s and
+  Dukascopy had it on calls STARTED 1 s after the close. Its candles appear only once closed.
+- The "Dukascopy publishes ~1 minute late" behind the 90 s (2026-10-12 note) was the FETCH:
+  11-33 s per call. cProfile: `load_verify_locations` -- requests hands every NEW connection the
+  CA file and OpenSSL 3 parses it in ~4 s of CPU (Python 3.13 / Windows here; Ubuntu 24.04's
+  OpenSSL 3 on the server, ~2 s -- the headline probe's 24 s a round was the same thing), and
+  dukascopy_python opens a fresh connection for each of its two pages. A shared SSLContext is not
+  enough: urllib3 loads `ca_certs` INTO it per connection, so cert_verify must drop ca_certs.
+  feeds.session(): per-thread Session, context loaded once, no cookies; a new connection 0.03 s
+  of CPU; wrong host / self-signed / expired / untrusted root still refused (badssl.com). Polls
+  now ~0.25 s. Without it, a 1m poll a minute would have spent ~25% of the e2-micro's CPU.
+- Volume, last 3 days of live candles (20-23 Oct, Gold + USDJPY + BTC): 51.7 emails/day all on
+  the clock, 52.3 with instant breaks (21.7 instant, 30.7 at boundaries) -- an instant email takes
+  along what was waiting. Busiest hour 8. Instant events/day: 1m breaks 17.1, 5m-4h breaks 3.6,
+  early breaks 2.0.
+- CPU of judging (no network, BTC Aug 2026 served to three markets, ticks every minute for an
+  hour): 65 s on the clock vs 80 s instant on the PC; the boundary spikes shrink (max 10.2 s ->
+  5.7 s) since a 1m feed is judged a candle at a time.
+- Still between the close and the email: the :20 tick, the fetch, judging, three pictures and
+  SMTP. The 1m break also keeps hold=1 (the user's choice of 22 Oct): it fires on the SECOND close
+  beyond the line. hold=0 in STRICT_1M would fire on the first, with ~70% of those closed back
+  across within 10 minutes.
+- Live on the PC (23 Oct 14:40-14:52 UTC, real feeds, scratch state, no SMTP): the first tick
+  (history download) 32 s; every 1m tick done 1-2 s after its :20 start, i.e. a 1m candle judged
+  ~21-22 s after its close; ticks that also fetch the 5m feeds 3-10 s. A USDJPY 1m resistance
+  line formed on the 14:52 close, was judged at 14:52:20 and rode the 14:50 boundary email sent
+  that same tick: a NORMAL 1m alert on an instant feed is judged every minute too, so 1m
+  formations now arrive 20 s to ~5 min after their candle instead of 2-7 min.

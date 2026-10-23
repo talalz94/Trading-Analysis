@@ -126,9 +126,13 @@ def build_chart(cfg, alert, market: str, tf: str, close, bars: pd.DataFrame, *,
     # the window the monitor judged: the alert's warm-up before the FIRST new candle of that
     # look, ending on the alert's own. On a 15-minute clock a 1m or 5m candle is judged with the
     # rest of its quarter hour, so that look began at the quarter hour, not at this candle --
-    # and a line fitted from another start can differ.
+    # and a line fitted from another start can differ. A feed an instant alert reads is judged
+    # candle by candle, every alert on it.
     warm = det.warmup_for(alert.params, tf)
     every = cfg.delivery.every_minutes
+    instant = getattr(cfg, "instant", None)
+    if instant is not None and instant(market, base):
+        every = 0
     first_new = bar.floor(f"{every}min") if every and TF_MINUTES[tf] < every else bar
     j = int((frame[TIME_COL] < first_new).sum())
     # the fallback is bounded: the whole stored history of a 15m pattern took 5 s to re-run
