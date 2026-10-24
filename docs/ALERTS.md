@@ -188,6 +188,16 @@ back across within 10 minutes ~70% of the time; with `hold=1`, 42% are still bey
 minutes later (31% before), at about the same number of alerts. The trendline config sets both
 on its 1m alerts.
 
+**Short lines after big swings (`span`).** A line is fitted from the last 16 swing points, and its
+touches must cover at least `span` (0.5) of the time those points span. After a stretch of big
+swings the 16 reach back hours, and a short clean line is refused: BTC 1m on 24 Oct, touches 01:38
+/ 02:20 / 02:53 = 75 minutes against 111 needed. `span=1/3` lets it in (formed 02:59, broke 03:10).
+Measured 12-24 Oct on Gold + USDJPY + BTC 1m, per day: 29 -> 38 lines formed and 17 -> 21 breaks,
+breaks no more or less likely to hold (43-48% in every variant), and both Gold lines above still
+caught. A smaller `swing_size` caught BTC too, but 2.5 doubled the alerts and LOST the 22 Oct
+Gold line: more swing points means the 16 cover less time, so long lines are forgotten. The
+trendline config sets `span=1/3` on its 1m alerts.
+
 **Breaking a level by a rule.** Trendline and S/R-zone breaks take a rule. It is counted from the
 first close through, over consecutive candles, against the level as it stood there: a trendline is
 carried along its own slope, a zone is held flat. A close back across the level ends that break.
@@ -228,7 +238,7 @@ fit checks the swings alone, so a wick can cross a line by two ATR (docs/CHART_G
 "Trendlines"). Strict roughly halves the lines and the alerts: on Gold + USDJPY + BTC, Mar–Aug
 2026, "formed" on 1h/4h went from ~0.5 to ~0.3 a day. **`alerts/alerts_config_trendlines.py`** is
 a ready-made config built on it: strict trendlines forming and breaking on 1m-4h (1m a little
-looser, with `prefer_newer` and `hold=1`), early breaks of 15m-4h lines on 5m closes and of 5m
+looser, with `prefer_newer`, `hold=1` and `span=1/3`), early breaks of 15m-4h lines on 5m closes and of 5m
 lines on 1m closes, wedges and triangles forming and breaking out on 15m-4h, high-impact news
 reminders from a day ahead down to 15 minutes, and at most one email every 5 minutes with tiered
 subjects and pictures, with the steps to preview it and switch to it at the top of the file.
@@ -482,7 +492,11 @@ NEWS = dict(
 - **Volume:** about 24 emails a week as shipped, measured on 2024's calendar.
 - **Reminders can go hours ahead.** Each level takes any minutes from 1 to 2880 (two days), so
   `remind_before={"critical": (1440, 60, 15)}` adds a reminder 24 hours before every critical
-  release. Same-minute releases still share one email.
+  release. Same-minute releases still share one email. A level reminds of releases AT that level
+  until a higher level is named: `{"high": (60, 15), "medium": (15,)}` reminds of medium ones 15
+  minutes ahead and leaves high and critical ones on their own (60, 15). Medium only reaches the
+  currencies covered at medium (`currencies`). The trendline config does this for USD: the 13:45
+  flash PMIs of 23 Oct broke a Gold line a minute later; ~3 such times a week.
 - **Results** for US releases need `FRED_API_KEY` in `.env`. CPI, PPI, payrolls, unemployment and
   hourly earnings come from the BLS about a minute after 8:30. Retail sales, PCE, GDP, claims,
   durable goods, JOLTS and the regional surveys come when FRED posts them, usually within the

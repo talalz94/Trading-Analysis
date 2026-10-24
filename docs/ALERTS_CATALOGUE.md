@@ -135,6 +135,7 @@ dict(on=True, name="...", kind="chart", patterns=('double_top', 'double_bottom',
 | `max_distance` | `8.0` | a line is dropped once price closes this many ATR away from it; 1m wants 20, as its ATR shrinks in quiet hours |
 | `prefer_newer` | `False` | a new line with as many touches as the live one takes its place if its last touch is more recent |
 | `hold` | `0` | a break must hold this many MORE closes in a row before it counts; a close back meanwhile keeps the line alive (0 = the first close through) |
+| `span` | `0.5` | a line's touches must cover at least this share of the stretch the fitter remembers (its last 16 swing points); 1/3 lets shorter lines in |
 
 ```python
 dict(on=True, name="...", kind="trendline", event='both', closes=2, markets="all", tfs="1h")

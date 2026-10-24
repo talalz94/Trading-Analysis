@@ -84,11 +84,15 @@ line are live at a time, and by default a new line needs MORE touches to replace
 `prefer_newer=True` lets one with as many touches in when its last touch is more recent.
 `break_sustain_bars=N` keeps a line alive through a close beyond it until N more closes in a row
 confirm the break; a close back restarts the count (0: the first close retires the line).
+`min_span_frac` (0.5) is how much of the stretch covered by the last 16 swing points a line's
+touches must span; after big swings that stretch is hours long and a short clean line is refused
+(1/3 lets it in).
 
 Notebook 23 and the market view use `fit="strict"`; notebook 21 and the strategy file keep the
 default. The trendline alerts take the same choices as `fit=`, `touch_tol=`, `wick_tol=`,
-`prefer_newer=` and `hold=` (= `break_sustain_bars`); `alerts/alerts_config_trendlines.py` uses
-strict everywhere, and `prefer_newer` with `hold=1` on 1m (docs/ALERTS.md).
+`prefer_newer=`, `hold=` (= `break_sustain_bars`) and `span=` (= `min_span_frac`);
+`alerts/alerts_config_trendlines.py` uses strict everywhere, and `prefer_newer`, `hold=1` and
+`span=1/3` on 1m (docs/ALERTS.md).
 
 ## Previous period highs and lows
 

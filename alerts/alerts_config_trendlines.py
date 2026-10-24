@@ -10,7 +10,8 @@ What it watches, on Gold, USDJPY and BTC:
   PATTERNS    rising / falling wedge, ascending / descending / symmetrical triangle FORMED and
               BROKEN OUT of, on 15m 1h 4h (1m and 5m are written below, switched off: ~40 a day)
   NEWS        high and critical releases: reminders 1 day, 12 h, 6 h, 2 h, 1 h, 30 and 15 min
-              before; the evening preview, the weekly outlook and the results as before
+              before; MEDIUM US releases (flash PMIs, jobless claims ...) 15 min before; the
+              evening preview, the weekly outlook and the results as before
   No candlestick alerts.
 
 HOW THE EMAILS COME (§3 DELIVERY)
@@ -116,7 +117,7 @@ STRICT = dict(fit="strict", touch_tol=0.3, wick_tol=0.15)
 #   wick_tol=0.15  a wick may poke through by at most 0.15 ATR before the line is drawn
 
 STRICT_1M = dict(fit="strict", touch_tol=0.4, wick_tol=0.3, max_distance=20,
-                 prefer_newer=True, hold=1)
+                 prefer_newer=True, hold=1, span=1/3)
 #   1m is looser, because its ATR is tiny (Gold: ~1 point) and shrinks further in quiet hours:
 #   touch_tol=0.4 / wick_tol=0.3  0.3 / 0.15 ATR asked for a hand-drawn Gold line's touches to sit
 #                                 within 0.3 points, so the line of 21 Oct 17:17 never existed
@@ -132,6 +133,13 @@ STRICT_1M = dict(fit="strict", touch_tol=0.4, wick_tol=0.3, max_distance=20,
 #                                 closed back across within 10 minutes; with hold=1, 42% of breaks
 #                                 are still beyond the line 10 minutes later (31% before). Both
 #                                 Gold lines still alert: 21 Oct at 18:51, 22 Oct at 03:15
+#   span=1/3                      a line's touches must cover a third (not half) of the stretch the
+#                                 fitter remembers -- its last 16 swing points, which after big
+#                                 swings reach back hours. BTC 24 Oct: 01:38 / 02:20 / 02:53 = 75 min
+#                                 against 111 needed, never drawn; now formed 02:59, broke 03:10.
+#                                 1m lines a day, three markets: 29 -> 38 formed, 17 -> 21 broken;
+#                                 the Gold lines above unchanged. A smaller swing size caught BTC
+#                                 too but doubled the alerts and lost the 22 Oct Gold line
 
 ALERTS = [
 
@@ -149,8 +157,8 @@ ALERTS = [
          event="break", closes=1, **STRICT,
          markets="all", tfs=("5m", "15m", "1h", "4h"), priority="instant"),
 
-    #      1m, PER MARKET per day (12-22 Oct 2026):  Gold 9.2 formed 5.3 broken · USDJPY 10.9 / 6.3
-    #      · BTC 10.6 / 6.3   (before prefer_newer and hold: 8.9 / 5.6 · 10.3 / 6.7 · 10.1 / 6.3)
+    #      1m, PER MARKET per day (12-24 Oct 2026):  Gold 11.6 formed 6.0 broken · USDJPY 13.1 / 7.4
+    #      · BTC 13.5 / 7.4   (before span=1/3: 8.6 / 4.8 · 10.2 / 5.9 · 10.4 / 6.0)
     dict(on=True,  name="trendline formed, 1m", kind="trendline", category="Trendlines",
          event="formed", **STRICT_1M,
          markets="all", tfs=("1m",), priority="normal"),
@@ -226,8 +234,11 @@ NEWS = dict(
     timezone="Asia/Karachi",                                # the times in your news emails
     week_ahead="Sun 20:00",                                 # the week's high + critical news
     day_ahead="20:00",                                      # tomorrow's covered news, each evening
-    remind_before={"high": (1440, 720, 360, 120, 60, 30, 15)},   # minutes before; "high" covers
-                                                            #   critical too, never medium
+    remind_before={"high": (1440, 720, 360, 120, 60, 30, 15),   # minutes before; "high" covers
+                   "medium": (15,)},                        #   critical too, never medium.
+                                                            #   medium: only USD is covered at
+                                                            #   medium (currencies above): 23 Oct's
+                                                            #   13:45 flash PMIs broke Gold's line
     results="high",                    # actual vs forecast, and what it means for the currency
     warn_alerts=30,                    # an alert within 30 min of high news says so
 )                                      #   (None turns week_ahead / day_ahead / results off)

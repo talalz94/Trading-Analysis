@@ -56,11 +56,12 @@ class _Line:
 
 
 def _fit_side(pivots: List[_Pivot], kind: int, *, tol: float, min_touches: int,
-              min_span_bars: int, bars: Optional[_Bars] = None) -> Optional[_Fit]:
+              min_span_bars: int, bars: Optional[_Bars] = None,
+              min_span_frac: float = 0.5) -> Optional[_Fit]:
     side = [p for p in pivots if p.kind == kind]
     if len(side) < min_touches:
         return None
-    fit = _best_line(side, tol, min_touches, kind, bars=bars)
+    fit = _best_line(side, tol, min_touches, kind, bars=bars, min_span=min_span_frac)
     if fit is None or len(fit.pivots) < min_touches:
         return None
     if fit.pivots[-1].i - fit.pivots[0].i < min_span_bars:
@@ -76,7 +77,7 @@ def add_trendlines(df: pd.DataFrame, *,
                    max_distance_atr: float = 8.0, break_sustain_bars: int = 0,
                    fit: str = "ransac", wick_tol_atr: float = 0.15,
                    closes_through: int = 1, prefer_newer: bool = False,
-                   prefix: str = "tl") -> pd.DataFrame:
+                   min_span_frac: float = 0.5, prefix: str = "tl") -> pd.DataFrame:
     """Fit the live support and resistance trendlines bar by bar and flag their breaks.
 
     Adds, per bar:
@@ -154,9 +155,17 @@ def add_trendlines(df: pd.DataFrame, *,
         many touches as the live one. False (the default, unchanged): the live one stays. True: the
         new one wins if its last touch is more recent -- a falling support of 20:36 / 01:02 / 01:25
         held Gold 1m's slot on 22 Oct until 03:19 while a rising one formed under price at 02:57.
+    min_span_frac
+        A line's touches must span at least this share of the stretch its window of
+        `lookback_pivots` swing points covers (0.5, unchanged). After a stretch of big swings that
+        window reaches back hours, so a short clean line is refused: BTC 1m on 24 Oct, touches
+        01:38 / 02:20 / 02:53 = 75 min against 111 needed (the window reached back to 23:05).
+        1/3 lets it in (measured on Gold, USDJPY and BTC 1m: 29 -> 38 lines a day).
     """
     if fit not in ("ransac", "strict", "bestfit"):
         raise ValueError(f"fit must be 'ransac', 'strict' or 'bestfit', got {fit!r}")
+    if not 0 < min_span_frac <= 1:
+        raise ValueError(f"min_span_frac must be above 0 and at most 1, got {min_span_frac!r}")
     out = df.reset_index(drop=True).copy()
     if f"zz_label" not in out.columns:
         out = add_zigzag_structure(out, atr_mult=atr_mult, atr_period=atr_period)
@@ -190,7 +199,7 @@ def add_trendlines(df: pd.DataFrame, *,
                 for kind in (+1, -1):
                     fit = _fit_side(window, kind, tol=line_tol_atr * a,
                                     min_touches=min_touches, min_span_bars=min_span_bars,
-                                    bars=bars)
+                                    bars=bars, min_span_frac=min_span_frac)
                     if fit is None:
                         continue
                     # A line that has already been broken or retired does not come back. Refitting

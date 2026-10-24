@@ -290,7 +290,9 @@ class TrendlineDetector(Detector):
               "prefer_newer": (False, "a new line with as many touches as the live one takes its "
                                       "place if its last touch is more recent"),
               "hold": (0, "a break must hold this many MORE closes in a row before it counts; a "
-                          "close back meanwhile keeps the line alive (0 = the first close through)")}
+                          "close back meanwhile keeps the line alive (0 = the first close through)"),
+              "span": (0.5, "a line's touches must cover at least this share of the stretch the "
+                            "fitter remembers (its last 16 swing points); 1/3 lets shorter lines in")}
     example = dict(event="both", closes=2)
 
     def check(self, p):
@@ -307,6 +309,8 @@ class TrendlineDetector(Detector):
             raise ValueError("max_distance must be above 0 (ATRs)")
         if int(p["hold"]) < 0 or int(p["hold"]) != p["hold"]:
             raise ValueError("hold must be a whole number of closes, 0 or more")
+        if not 0 < float(p["span"]) <= 1:
+            raise ValueError("span must be above 0 and at most 1 (a share of the stretch)")
 
     def warmup_bars(self, params):
         return 500         # a line may live 500 bars
@@ -320,7 +324,8 @@ class TrendlineDetector(Detector):
                            wick_tol_atr=float(p["wick_tol"]),
                            max_distance_atr=float(p["max_distance"]),
                            prefer_newer=bool(p["prefer_newer"]),
-                           break_sustain_bars=int(p["hold"]))
+                           break_sustain_bars=int(p["hold"]),
+                           min_span_frac=float(p["span"]))
         lines = trendline_table(d)
         when = frame[TIME_COL] + pd.Timedelta(minutes=_TF_MIN.get(tf, 0))   # each bar's close
         hits = []

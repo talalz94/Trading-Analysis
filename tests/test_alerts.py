@@ -134,6 +134,9 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
         got = (a.params["touch_tol"], a.params["wick_tol"], a.params.get("max_distance", 8),
                a.params.get("prefer_newer", False), a.params.get("hold", 0))
         assert got == ((0.4, 0.3, 20, True, 1) if loose else (0.3, 0.15, 8, False, 0))
+        assert a.params.get("span", 0.5) == (1 / 3 if loose else 0.5)     # 1m only (BTC 24 Oct)
+    # medium US releases (the 13:45 flash PMIs of 23 Oct) get one reminder, 15 minutes ahead
+    assert cfg.news.remind_before["medium"] == (15,)
     # every BREAK is mailed the moment its candle is final; formations and patterns keep the clock
     assert {a.name for a in cfg.alerts if a.priority == "instant"} == {
         "trendline broken", "trendline broken, 1m", "early break, 15m-4h lines",
@@ -397,6 +400,56 @@ def test_the_1m_break_redraws_with_the_line_that_broke():
     assert c.frame[TIME_COL].iat[c.first] == at("2026-10-21 14:09")     # from its first touch
 
 
+BTC_24 = Path(__file__).parent / "data" / "btc_1m_2026-10-24.csv"
+
+
+def test_a_short_1m_line_after_big_swings_is_drawn_at_span_one_third():
+    # 24 Oct 2026, BTC 1m: a rising support through the 01:38, 02:20 and 02:53 lows. The fitter
+    # remembers the last 16 swing points, and after the evening's big swings they reached back to
+    # 23:05 (222 min of lows); a line's touches had to span half of that, 111 min, and these span
+    # 75. With span 1/3 the monitor's own look -- one candle at a time, an instant feed -- draws it
+    # on the 02:58 candle and breaks it on 03:09 (two closes below, hold=1)
+    import dataclasses
+    from quant.alerts.engine import judge
+    from quant.alerts.show import build_chart
+    cfg = load_config(DEFAULT_CONFIG.with_name("alerts_config_trendlines.py"))
+    formed = next(a for a in cfg.alerts if a.name == "trendline formed, 1m")
+    broken = next(a for a in cfg.alerts if a.name == "trendline broken, 1m")
+    bars = pd.read_csv(BTC_24, comment="#")
+    bars[TIME_COL] = pd.to_datetime(bars[TIME_COL], utc=True)
+    t = bars[TIME_COL]
+
+    def on(alert, close, **change):            # the look the monitor takes at that candle
+        a = dataclasses.replace(alert, params=dict(alert.params, **change, direction="down"))
+        k = int((t < at(close) - pd.Timedelta(minutes=1)).sum())
+        return [h for _, h in judge(a, bars.iloc[:k + 1], t.iat[k - 1], "1m")]
+
+    got = on(formed, "2026-10-24 02:59")
+    assert [h["what"] for h in got] == ["support trendline formed"] and "3 touches" in got[0]["note"]
+    got = on(broken, "2026-10-24 03:10")
+    assert [h["what"] for h in got] == ["broke a support trendline"]
+    assert "line formed 24 Oct 02:59" in got[0]["note"]
+    # the half-window rule it used to have: never drawn, so never broken
+    every = [h for a in (formed, broken)
+             for _, h in judge(dataclasses.replace(a, params=dict(a.params, span=0.5)), bars,
+                               at("2026-10-24 02:00"), "1m") if "support" in h["what"]]
+    assert every == []
+    # the email picture and `show` draw that line, from its first touch
+    c = build_chart(cfg, broken, "BTC", "1m", at("2026-10-24 03:10"), bars,
+                    what="broke a support trendline")
+    assert c.reproduced and c.frame[TIME_COL].iat[c.first] == at("2026-10-24 01:38")
+
+
+def test_span_left_out_is_the_fitters_own():
+    # every line drawn before the setting existed must be drawn exactly as it was
+    import inspect
+    from quant.indicators import add_trendlines
+    from quant.indicators.chart_patterns import _best_line
+    fitter = inspect.signature(add_trendlines).parameters["min_span_frac"].default
+    best = inspect.signature(_best_line).parameters["min_span"].default
+    assert REGISTRY["trendline"].params["span"][0] == fitter == best == 0.5
+
+
 def test_max_distance_left_out_is_the_fitters_own():
     # every alert written before the setting existed must fit exactly as it did
     import inspect
@@ -429,6 +482,8 @@ def plain(kind, **kw):
     (plain("trendline", direction="sideways"), "direction must be"),
     (plain("trendline", max_distance=0), "max_distance must be above 0"),
     (plain("trendline", hold=-1), "hold must be a whole number"),
+    (plain("trendline", span=0), "span must be above 0 and at most 1"),
+    (plain("trendline", span=1.5), "span must be above 0 and at most 1"),
     (plain("early_break", line_tfs=("3h",)), "line_tfs must be timeframes"),
     (plain("early_break", line_tfs=("1h",), fit="loose"), "fit must be ransac | strict"),
     (plain("setup", setup="time_entry_long@v1"), "unknown setup"),        # the metronome
