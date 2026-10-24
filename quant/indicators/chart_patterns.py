@@ -377,7 +377,7 @@ def _pivots_from_zigzag(df: pd.DataFrame, prefix: str = "zz") -> List[_Pivot]:
 
 
 def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int, *,
-               bars: Optional[_Bars] = None) -> Optional[_Fit]:
+               bars: Optional[_Bars] = None, min_span: float = 0.5) -> Optional[_Fit]:
     """The best TRENDLINE through a set of pivots — a line several of them sit on, not all of them.
 
     Fitting through every pivot in a window is wrong and was the second half of the original bug: a
@@ -400,6 +400,9 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int, *,
     only if every candle from its first touch to now is clear: no close beyond it, no wick beyond it
     by more than `bars.wick_tol`. Candidates are tried best first (touches, span, then the smallest
     mean distance of the touches), so the winner is the best line that is actually CLEAN.
+
+    `min_span`: the touches must span at least this share of the window's span (0.5; the
+    trendlines' `min_span_frac` passes another).
     """
     n = len(pivots)
     if n < max(2, min_touches):
@@ -440,7 +443,7 @@ def _best_line(pivots: List[_Pivot], tol: float, min_touches: int, side: int, *,
     with np.errstate(invalid="ignore"):
         spans = np.nanmax(xs, axis=1) - np.nanmin(xs, axis=1)
     keep &= counts >= min_touches
-    keep &= spans >= 0.5 * total_span        # touches must cover the window, not cluster
+    keep &= spans >= min_span * total_span   # touches must cover the window, not cluster
     if not keep.any():
         return None
 

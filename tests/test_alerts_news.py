@@ -148,6 +148,30 @@ def test_reminder_offsets_come_from_the_nearest_level_at_or_below():
     assert reminder_offsets(nc, "medium") == ()
 
 
+def test_a_medium_level_reminds_of_medium_releases_and_leaves_high_ones_their_own():
+    nc = parse_news(dict(NEWS, remind_before={"high": (60, 15), "medium": (15,)}))
+    assert reminder_offsets(nc, "medium") == (15,)
+    assert reminder_offsets(nc, "high") == reminder_offsets(nc, "critical") == (60, 15)
+    assert reminder_offsets(nc, "low") == ()
+
+
+def test_a_medium_us_release_gets_its_one_reminder_15_minutes_ahead(tmp_path):
+    # 23 Oct 2026: the 13:45 flash PMIs (medium) broke Gold's rising line a minute later. USD is
+    # covered at medium, so they are reminded of at 13:30; a medium EUR release is not covered
+    ev = calendar(rel("2026-10-23 13:45", "Flash Manufacturing PMI", impact="medium"),
+                  rel("2026-10-23 13:45", "Flash Services PMI", impact="medium"),
+                  rel("2026-10-23 13:45", "German Thing", cur="EUR", impact="medium"))
+    r = Rig(tmp_path, events=ev, news_cfg=dict(remind_before={"high": (60, 15), "medium": (15,)}))
+    sent = []
+    for t in pd.date_range("2026-10-23 12:30", "2026-10-23 13:50", freq="1min", tz="UTC"):
+        n = len(r.mail.sent)
+        tick(r.cfg, r.state, r.mail, r.feed, now=t, news=r.news)
+        sent += [t] * (len(r.mail.sent) - n)
+    assert sent == [pd.Timestamp("2026-10-23 13:30", tz="UTC")]
+    assert "Flash Manufacturing PMI" in r.mail.sent[0][0] and "in 15 min" in r.mail.sent[0][0]
+    assert "German" not in r.mail.sent[0][1]
+
+
 # ── reminders ───────────────────────────────────────────────────────────────────────────────
 def test_reminders_go_once_each_and_never_after_the_release(tmp_path):
     r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")))

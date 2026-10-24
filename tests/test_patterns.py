@@ -744,7 +744,8 @@ def test_a_strict_trendline_is_clear_of_every_candle_it_spans(rnd, wick_tol):
 
 @pytest.mark.parametrize("kw", [dict(fit="strict", line_tol_atr=0.3),
                                 dict(fit="bestfit", line_tol_atr=0.4, wick_tol_atr=0.45),
-                                dict(fit="strict", line_tol_atr=0.3, prefer_newer=True)])
+                                dict(fit="strict", line_tol_atr=0.3, prefer_newer=True),
+                                dict(fit="strict", line_tol_atr=0.3, min_span_frac=1 / 3)])
 def test_strict_trendlines_are_causal(rnd, kw):
     from quant.indicators import add_trendlines
     k = 2200
@@ -752,6 +753,13 @@ def test_strict_trendlines_are_causal(rnd, kw):
     part = add_trendlines(rnd.iloc[:k].copy(), **kw)
     for col in ("tl_sup", "tl_res", "tl_break_dn", "tl_break_up"):
         np.testing.assert_array_equal(full[col].to_numpy()[:k], part[col].to_numpy())
+
+
+@pytest.mark.parametrize("bad", [0, -0.1, 1.2])
+def test_a_span_share_outside_0_to_1_is_refused(rnd, bad):
+    from quant.indicators import add_trendlines
+    with pytest.raises(ValueError, match="min_span_frac"):
+        add_trendlines(rnd.iloc[:300].copy(), min_span_frac=bad)
 
 
 def test_bestfit_is_the_least_squares_line_with_one_close_through_allowed():

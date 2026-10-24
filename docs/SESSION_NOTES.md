@@ -2663,3 +2663,40 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   line formed on the 14:52 close, was judged at 14:52:20 and rode the 14:50 boundary email sent
   that same tick: a NORMAL 1m alert on an instant feed is judged every minute too, so 1m
   formations now arrive 20 s to ~5 min after their candle instead of 2-7 min.
+
+### Missed lines: BTC 24 Oct (the span rule), Gold 23 Oct (two touches, and news) (2026-10-24)
+
+- BTC 1m 24 Oct: the user's rising support (Exness BTCUSD sits ~110 below Binance BTCUSDT, same
+  shape) runs under the Binance lows 01:38 / 02:20 / 02:53. Never drawn: _best_line wants a line's
+  touches to span half the stretch of the last 16 swing points (`spans >= 0.5 * total_span`), and
+  after the evening's big swings those reached back to 23:05 -- 222 min of lows, 111 needed, the
+  line has 75. Its steeper cousin through 01:38 / 02:20 also had a close 0.1 below it at 02:54.
+  Price closed under the line from 03:08 (the drop seen on Exness at 03:35-03:47 came later).
+- Measured 12-24 Oct, Gold + USDJPY + BTC 1m, the 22 Oct method (one pass of the alert's own
+  detector, per 1,380 candles; validated against the monitor's candle-by-candle look on 22 Oct:
+  25/25, 24/24, 50/50 alerts at swing 2.5, within 1-3 at 3.5):
+
+  | 1m setting | formed/day | broken/day | held 10 candles | BTC 24 | Gold 21 | Gold 22 |
+  |---|---|---|---|---|---|---|
+  | swing 3.5 (was) | 29.2 | 16.8 | 45% | no | yes | yes |
+  | swing 3.0 | 40.4 | 22.3 | 46% | yes | yes | no |
+  | swing 2.5 | 59.5 | 33.2 | 48% | yes | yes | no |
+  | 3.5 + span 1/3 (now) | 38.3 | 20.7 | 43% | yes | yes | yes |
+  | 3.5 + span 1/4 | 42.7 | 22.4 | 44% | yes | yes | yes |
+  | 2.5 + 24 / 32 pivots | ~60 | ~34 | 44-47% | no | yes / no | no |
+  | min_touches 2 | 75.9 | 45.1 | - | - | - | - |
+
+  Smaller swings lose LONG lines: lookback_pivots is a count, so more pivots cover less time and
+  Gold 22 Oct's line (anchored 21 Oct 19:03) is forgotten. No variant changes how often a break
+  holds. Chosen: span 1/3 (`min_span_frac`, opt-in, default 0.5 byte-identical); BTC passes it by
+  one minute (74 needed), 1/4 would give margin at +4 formed / +2 broken a day.
+- Gold 23 Oct: an "ascending triangle" (flat top 4,033, rising line through 04:50 4,001.8 and
+  08:09 4,009.4) broke on the 13:46 close and fell to 3,975 by 14:30. The rising line has TWO
+  swing lows; nothing touched it from 08:09 to the break, so no 3-touch rule draws it, and the
+  triangle alert found nothing on 1m / 5m / 15m. What the monitor sent (replayed): 1m support
+  formed 12:06, broken 12:13 -- price then ROSE to 4,032.6 within the hour. The 13:46 break came a
+  minute after the US flash manufacturing + services PMIs (13:45, medium), which the config did
+  not remind of (high only). min_touches=2 would have alerted breaks at 07:53, 11:58, 12:13 and
+  13:34 that morning, at 2.6x the volume.
+- Added: medium-level reminders 15 min ahead (only USD is covered at medium; ~3 times a week).
+  The user kept "trendline formed, 1m" (it drives ~22 of the ~37 emails/day 1m lines cause).

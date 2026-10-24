@@ -233,7 +233,8 @@ def _trendline_marks(alert, win, lo, last, hits):
                        wick_tol_atr=float(p["wick_tol"]),
                        max_distance_atr=float(p["max_distance"]),
                        prefer_newer=bool(p["prefer_newer"]),
-                       break_sustain_bars=int(p["hold"]))
+                       break_sustain_bars=int(p["hold"]),
+                       min_span_frac=float(p["span"]))
     tb = trendline_table(d)
     k = len(win) - 1
     out, first = [], lo + k
