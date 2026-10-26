@@ -2700,3 +2700,17 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   13:34 that morning, at 2.6x the volume.
 - Added: medium-level reminders 15 min ahead (only USD is covered at medium; ~3 times a week).
   The user kept "trendline formed, 1m" (it drives ~22 of the ~37 emails/day 1m lines cause).
+
+### Push notifications through ntfy (2026-10-26)
+
+- The user wanted alert emails OUT of the main inbox (a Gmail filter: skip inbox, label "Trading
+  Alerts") AND a pop-up for every one. Gmail cannot do both: its PC pop-ups fire only for mail that
+  lands in the inbox, the iPhone app cannot notify per label, and the alerts are sent from the
+  user's own address to itself, which Gmail usually does not notify for at all.
+- Telegram was the obvious channel and is out: it is blocked in Pakistan (api.telegram.org gives
+  no answer from the user's connection; works in the UAE). The SERVER reads Telegram channels fine,
+  so it stays a headline SOURCE in the probe. ntfy.sh answers from Pakistan (1.7 s).
+- push.py: one notification per email, posted as JSON to ntfy's root (the topic is a password and
+  never appears in a URL). Round trip checked against ntfy.sh with a throwaway topic: the emoji
+  title, priority 5 and the TradingView click came back exactly as sent. ntfy.sh's daily limit is
+  250 messages; ~60 emails a day.

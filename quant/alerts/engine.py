@@ -26,6 +26,9 @@ does the same right thing:
    its timeframe, judged `instant_settle_seconds` after the close (as soon as the feed has the bar,
    instead of 90 s), and the event is emailed on that tick. Every alert on the same FEED is judged
    then too -- one fetch serves them all -- but the others still wait for their boundary.
+9. With DELIVERY push="ntfy" every email also goes out as a push notification (quant.alerts.push),
+   sent as soon as the email is composed -- before its pictures are drawn -- and a failed push never
+   holds up or changes the email.
 """
 from __future__ import annotations
 
@@ -57,6 +60,7 @@ class TickReport:
     sent: int = 0
     after: List[Callable] = field(default_factory=list)   # news work to run once candles are out
     seconds: float = 0.0                                  # how long the tick took, in the log
+    pushed: int = 0                                       # push notifications sent (DELIVERY push)
 
 
 def _tf(tf) -> pd.Timedelta:
@@ -301,13 +305,26 @@ def _email_due(cfg, state, now, pending, instant_only: bool = False) -> bool:
     return urgent or last is None or now - last >= pd.Timedelta(minutes=d.digest_minutes)
 
 
-def deliver(cfg, state, notifier, now, report, instant_only: bool = False):
+def _push(cfg, pusher, pending, subject, report):
+    """The email's push notification (DELIVERY push). Never raises: a failed push is reported and
+    the email goes regardless."""
+    from .push import NtfyPusher, message
+    try:
+        (pusher or NtfyPusher.from_env()).send(message(pending, subject, cfg))
+        report.pushed += 1
+    except Exception as e:
+        report.errors["push"] = f"{type(e).__name__}: {e}"
+
+
+def deliver(cfg, state, notifier, now, report, instant_only: bool = False, pusher=None):
     """Queue an email if one is due, then send everything in the outbox that is due. An email
     carries every pending event, so an instant one brings along whatever else is waiting."""
     pending = state.pending()
     if pending or cfg.delivery.every_minutes:
         if _email_due(cfg, state, now, pending, instant_only):
             subject, text, html = compose(pending, cfg, now, host=socket.gethostname())
+            if cfg.delivery.push != "off":             # before the pictures: they take seconds
+                _push(cfg, pusher, pending, subject, report)
             images = None
             if cfg.delivery.charts:                    # pictures of the top rows; never blocks
                 from .snapshot import attach, email_charts, pack
@@ -336,9 +353,11 @@ def deliver(cfg, state, notifier, now, report, instant_only: bool = False):
         report.sent += 1
 
 
-def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -> TickReport:
+def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None,
+         pusher=None) -> TickReport:
     """`news` is the calendar the NEWS block reads (quant.alerts.news.LiveNews, kept by the
-    runner across ticks); built here when the block is on and none is given."""
+    runner across ticks); built here when the block is on and none is given. `pusher` sends the
+    push notifications (DELIVERY push); None = ntfy, from the environment."""
     now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     report = TickReport()
     started = time.monotonic()
@@ -363,9 +382,10 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
         detect(cfg, state, ok, now, report, news_note=note)
     every = cfg.delivery.every_minutes
     if not every:
-        deliver(cfg, state, notifier, now, report)
+        deliver(cfg, state, notifier, now, report, pusher=pusher)
     elif report.after:                                 # an instant alert does not wait for the
-        deliver(cfg, state, notifier, now, report, instant_only=True)     # news results below
+        deliver(cfg, state, notifier, now, report, instant_only=True,     # news results below
+                pusher=pusher)
     if report.after:
         # news results still waiting for their number: asked only now that the candle emails are
         # out, and whatever came in is sent in this same tick
@@ -376,7 +396,7 @@ def tick(cfg: AlertsConfig, state: State, notifier, feed, now=None, news=None) -
                 report.errors["news results"] = f"{type(e).__name__}: {e}"
     if every or report.after:
         # on a clock, ONE email per boundary: the results asked for above ride in it
-        deliver(cfg, state, notifier, now, report)
+        deliver(cfg, state, notifier, now, report, pusher=pusher)
     if cfg.news.on and hasattr(news, "background"):
         # the slow fetches nothing in this tick waits for -- after the candle emails are out
         try:
