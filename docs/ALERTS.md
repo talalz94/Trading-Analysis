@@ -351,7 +351,10 @@ the log and `status`; the email goes regardless.
 **Set up (5 minutes):**
 1. On the server, make a topic and put it in `.env` -- it works like a PASSWORD (anyone who knows it
    can read your alerts), so make it random and never put it in the repo:
-   `echo "NTFY_TOPIC=alerts-$(openssl rand -hex 12)" >> .env`, then `grep NTFY_TOPIC .env` to read it.
+   `sed -i -e '$a\' .env && echo "NTFY_TOPIC=alerts-$(openssl rand -hex 12)" >> .env`, then
+   `grep NTFY_TOPIC .env` to read it. The `sed` first ends the file's last line: without it, a
+   `.env` with no final newline gets the topic glued onto its last setting (it happened -- the FRED
+   key became `<key>NTFY_TOPIC=...` and push said NTFY_TOPIC was not set).
 2. **Phone:** install the ntfy app (Android / iPhone) → **+** → that topic (server ntfy.sh).
 3. **PC:** open https://ntfy.sh/app in Chrome or Edge → **Subscribe to topic** → that topic → allow
    notifications, and tick background notifications so they come with the tab closed.

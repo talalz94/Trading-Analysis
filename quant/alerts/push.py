@@ -7,7 +7,8 @@ The settings live in the environment (.env, git-ignored), never in the repo:
 
     NTFY_TOPIC    the topic your phone and browser subscribe to. It works like a PASSWORD: anyone
                   who knows it can read your alerts and post to it, so make it long and random
-                  (`echo NTFY_TOPIC=alerts-$(openssl rand -hex 12) >> .env`)
+                  (`sed -i -e '$a\\' .env && echo NTFY_TOPIC=alerts-$(openssl rand -hex 12) >> .env`
+                  -- the sed ends the file's last line first, or the topic is glued onto it)
     NTFY_SERVER   default https://ntfy.sh (or your own ntfy server)
     NTFY_TOKEN    optional: an access token, for a server where the topic is reserved
 
