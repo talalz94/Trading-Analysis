@@ -248,7 +248,7 @@ Every alert email can also pop up on your phone and PC (docs/ALERTS.md, "Push no
 topic name works like a password, so it goes only in `.env`:
 
 ```bash
-cd ~/quant && echo "NTFY_TOPIC=alerts-$(openssl rand -hex 12)" >> .env && grep NTFY_TOPIC .env
+cd ~/quant && sed -i -e '$a\' .env && echo "NTFY_TOPIC=alerts-$(openssl rand -hex 12)" >> .env && grep NTFY_TOPIC .env
 ```
 
 Subscribe to that topic in the ntfy app on your phone and at https://ntfy.sh/app on your PC, then
