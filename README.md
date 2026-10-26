@@ -602,7 +602,8 @@ There are 16 alert kinds, each with an on/off switch in the config:
 `alerts/alerts_config_trendlines.py` is the ready-made config the author runs on a Google Cloud
 server: trendlines on 1m-4h and their early breaks, wedges and triangles, high-impact news
 reminders. A break is emailed as soon as its candle closes (~20-30 s, `priority="instant"`), the
-rest at most every 5 minutes, with a P1 / P2 / P3 subject and pictures of the top signals. Every email row has a ref; `python -m quant.alerts show <ref>` redraws it on your PC.
+rest at most every 5 minutes, with a P1 / P2 / P3 subject and pictures of the top signals. Every
+email can also pop up on your phone and PC as a push notification (ntfy, `push="ntfy"`). Every email row has a ref; `python -m quant.alerts show <ref>` redraws it on your PC.
 
 Markets can be any Binance pair or any of Dukascopy's 1,380 instruments: FX, metals, oil,
 indices, crypto CFDs, bonds and stocks. The full menu is

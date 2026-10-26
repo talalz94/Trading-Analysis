@@ -336,6 +336,34 @@ need 19 days. An EMA-200 on 4h needs about 100 days, and switching on everything
   fired on, and what came after (`--after 60` candles). The alert is found by name in
   `alerts/alerts_config.py` or any `alerts_config_*.py` beside it.
 
+### Push notifications (`push="ntfy"`)
+
+Every email can also pop up on your phone and PC, through **ntfy** (ntfy.sh: free, no account, open
+source). The server sends it the moment the email is composed -- before the pictures are drawn --
+so it does not depend on Gmail at all: Gmail can keep the alerts out of your inbox while every one
+still pops up. Telegram would do the same, but it cannot be reached from Pakistan; ntfy can.
+
+One notification per email: the subject as its title, a line per signal (`Gold 1h broke support
+line @ 4,019.50 · 14:00 UTC`, repeats counted), the priority from the top row's tier (P1 urgent,
+P2 high, P3 normal), and a tap opens the top signal's chart on TradingView. A failed push is in
+the log and `status`; the email goes regardless.
+
+**Set up (5 minutes):**
+1. On the server, make a topic and put it in `.env` -- it works like a PASSWORD (anyone who knows it
+   can read your alerts), so make it random and never put it in the repo:
+   `echo "NTFY_TOPIC=alerts-$(openssl rand -hex 12)" >> .env`, then `grep NTFY_TOPIC .env` to read it.
+2. **Phone:** install the ntfy app (Android / iPhone) → **+** → that topic (server ntfy.sh).
+3. **PC:** open https://ntfy.sh/app in Chrome or Edge → **Subscribe to topic** → that topic → allow
+   notifications, and tick background notifications so they come with the tab closed.
+4. `python -m quant.alerts test-push` sends one test notification; then set `push="ntfy"` in
+   `DELIVERY` (the trendline config already has it).
+
+`NTFY_SERVER` (default https://ntfy.sh) and `NTFY_TOKEN` (an access token) are for your own ntfy
+server or a reserved topic. ntfy.sh allows 250 messages a day per server; the trendline config sends
+~60 emails a day. The message is posted to the server's ROOT as JSON, so the topic never appears in
+a URL, an error or the log. What passes through ntfy.sh is the alert text (market, signal, price),
+nothing personal. Measured: 0.3 s a push on a kept connection.
+
 ## 6. What survives an outage, and how
 
 | what fails | what happens |
@@ -418,6 +446,7 @@ quant/alerts/config.py         reads and checks the config (fresh each tick)
             engine.py          one resumable tick: fetch what is due, judge, queue, send
             store.py           SQLite state + atomic bar files
             compose.py         the email (text + HTML, categories in config order)
+            push.py            the same alert as a push notification (ntfy; DELIVERY push)
             notify.py          Gmail SMTP from .env; FileNotifier / ListNotifier
             runner.py          the loop, the lock, the log, `status`
             news.py            the NEWS block: reminders, previews, results (section 11)

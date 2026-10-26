@@ -242,6 +242,19 @@ cd ~/quant && git checkout $(cat ~/code_before.txt) && cp ~/alerts_config_before
 
 and later `git checkout research/scenario-framework-2026-07-30` to return to the latest.
 
+### Push notifications on your phone and PC (ntfy)
+
+Every alert email can also pop up on your phone and PC (docs/ALERTS.md, "Push notifications"). The
+topic name works like a password, so it goes only in `.env`:
+
+```bash
+cd ~/quant && echo "NTFY_TOPIC=alerts-$(openssl rand -hex 12)" >> .env && grep NTFY_TOPIC .env
+```
+
+Subscribe to that topic in the ntfy app on your phone and at https://ntfy.sh/app on your PC, then
+`.venv/bin/python -m quant.alerts test-push` sends a test, and `push="ntfy"` in `DELIVERY` turns
+it on for every email (`sudo systemctl restart quant-alerts` once, so the monitor reads `.env`).
+
 ### The headline probe (a 7-day test of news sources)
 
 `experiments/headline_probe.py` records 12 free headline sources (FinancialJuice RSS and Telegram,

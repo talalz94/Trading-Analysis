@@ -2,6 +2,7 @@
     python -m quant.alerts list         every instrument, timeframe, pattern, kind and setup you can use
     python -m quant.alerts check        what WOULD have fired in the last 48h -> preview.html; sends nothing
     python -m quant.alerts test-email   one short email, to prove the .env settings work
+    python -m quant.alerts test-push    one push notification, to prove NTFY_TOPIC works
     python -m quant.alerts tick         one pass of the monitor, then exit
     python -m quant.alerts run          the monitor itself (what the scheduled task starts)
     python -m quant.alerts status       is it running, when did it last email, what is queued
@@ -20,8 +21,8 @@ from .config import DEFAULT_CONFIG, DEFAULT_STATE, load_config
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m quant.alerts", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["list", "check", "test-email", "tick", "run", "status",
-                                        "news", "show"])
+    ap.add_argument("command", choices=["list", "check", "test-email", "test-push", "tick", "run",
+                                        "status", "news", "show"])
     ap.add_argument("ref", nargs="?", help="show: the ref on an email row, e.g. "
                                            "btc.1m.202610191349.trendline-broken")
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -113,6 +114,17 @@ def main(argv=None) -> int:
         return 0
 
     from .notify import NotConfigured, SmtpNotifier
+    if a.command == "test-push":                     # needs no email settings
+        from .push import NtfyPusher
+        try:
+            pusher = NtfyPusher.from_env()
+        except NotConfigured as e:
+            print(f"push is not set up: {e}", file=sys.stderr)
+            return 2
+        pusher.send(dict(title="quant alerts: push works", priority=3,
+                         message="If this popped up, every alert email will pop up too."))
+        print(f"sent through {pusher.server} to the topic in .env")   # never the topic itself
+        return 0
     try:
         notifier = SmtpNotifier.from_env()
     except NotConfigured as e:

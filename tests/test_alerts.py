@@ -96,9 +96,10 @@ class Rig:
         _OPEN.append(self.state)
         self.feed = FakeFeed({"A": bars(a, **bar_kw), "B": bars(b, seed=1, **bar_kw)})
         self.mail = ListNotifier(fail=fail)
+        self.pusher = None                           # a ListPusher where push is tested
 
     def tick(self, when):
-        return tick(self.cfg, self.state, self.mail, self.feed, now=at(when))
+        return tick(self.cfg, self.state, self.mail, self.feed, now=at(when), pusher=self.pusher)
 
     def events(self):
         return [dict(r) for r in self.state.db.execute("SELECT * FROM events ORDER BY bar_time")]
@@ -137,6 +138,7 @@ def test_the_trendline_config_loads_and_fits_its_lines_strict():
         assert a.params.get("span", 0.5) == (1 / 3 if loose else 0.5)     # 1m only (BTC 24 Oct)
     # medium US releases (the 13:45 flash PMIs of 23 Oct) get one reminder, 15 minutes ahead
     assert cfg.news.remind_before["medium"] == (15,)
+    assert cfg.delivery.push == "ntfy"                 # every email also pops up (NTFY_TOPIC)
     # every BREAK is mailed the moment its candle is final; formations and patterns keep the clock
     assert {a.name for a in cfg.alerts if a.priority == "instant"} == {
         "trendline broken", "trendline broken, 1m", "early break, 15m-4h lines",
@@ -592,7 +594,7 @@ class ClockRig(Rig):
     def run(self, start, end, step="1min"):
         for t in pd.date_range(at(start), at(end), freq=step):
             n = len(self.mail.sent)
-            tick(self.cfg, self.state, self.mail, self.feed, now=t)
+            tick(self.cfg, self.state, self.mail, self.feed, now=t, pusher=self.pusher)
             for i in range(n, len(self.mail.sent)):
                 self.when[i] = t
 
@@ -716,6 +718,112 @@ def test_an_instant_email_brings_what_is_waiting_and_leaves_the_boundary_to_the_
     assert all(e["status"] == "sent" for e in r.events())
 
 
+def test_every_email_also_pops_up_once_at_the_same_moment(tmp_path):
+    # push="ntfy": one notification per email, sent in the tick that composes it -- the instant
+    # ones at 00:04:20 and 00:09:20, the 5m one at its boundary -- with the email's subject as
+    # its title, a line per signal and a tap that opens the top signal's chart
+    from quant.alerts.push import ListPusher
+    r = ClockRig(tmp_path, [dict(ONE_MIN, priority="instant"),
+                            spike_alert(name="5m", tfs="5m", markets=("A",))],
+                 spikes_1m=["2026-06-03 00:03", "2026-06-03 00:08"], a=["2026-06-03 00:05"],
+                 delivery=dict(every_minutes=5, push="ntfy", subject="tiers"))
+    r.pusher = ListPusher()
+    pushed_at = []
+    for t in pd.date_range(at("2026-06-03 00:00:20"), at("2026-06-03 00:13:20"), freq="1min"):
+        n = len(r.pusher.sent)
+        tick(r.cfg, r.state, r.mail, r.feed, now=t, pusher=r.pusher)
+        pushed_at += [t] * (len(r.pusher.sent) - n)
+    assert pushed_at == [at("2026-06-03 00:04:20"), at("2026-06-03 00:09:20"),
+                         at("2026-06-03 00:12:20")]
+    assert [m["title"] for m in r.pusher.sent] == [s.removeprefix("[Alerts] ")
+                                                   for s, _, _ in r.mail.sent]
+    first = r.pusher.sent[0]
+    assert first["message"].startswith("B 1m spike @ ") and first["message"].endswith("00:04 UTC")
+    assert first["click"].endswith("symbol=BINANCE:BBBUSDT&interval=1")
+    assert first["priority"] == 3                        # a P3 row: the default priority
+    assert "topic" not in first                          # the pusher adds it, from .env
+
+
+def test_a_push_is_ranked_like_the_subject_and_names_each_signal_once():
+    from quant.alerts.push import message
+    import types as _t
+    cfg = _t.SimpleNamespace(delivery=_t.SimpleNamespace(subject_prefix="[Alerts]"))
+    ev = [dict(alert="lines", category="Trendlines", priority="instant", market="Gold", tf=tf,
+               what=w, side="bear", price=p, close_time=c, late=0,
+               detail='{"tv": "OANDA:XAUUSD"}')
+          for tf, w, p, c in (("1m", "broke a support trendline", 4020.1, "2026-10-23T13:46:00+00:00"),
+                              ("1h", "broke a support trendline", 4019.5, "2026-10-23T14:00:00+00:00"),
+                              ("1m", "broke a support trendline", 4018.0, "2026-10-23T13:47:00+00:00"))]
+    m = message(ev, "[Alerts] 🔴 P1 · Gold 1h broke support line · 14:02 UTC", cfg)
+    assert m["title"] == "🔴 P1 · Gold 1h broke support line · 14:02 UTC"
+    assert m["priority"] == 5                            # P1 = urgent
+    assert m["message"].splitlines() == ["Gold 1h broke support line @ 4,019.50 · 14:00 UTC",
+                                         "Gold 1m broke support line @ 4,020.10 · 13:46 UTC (2x)"]
+    assert m["click"].endswith("symbol=OANDA:XAUUSD&interval=60")   # the top row's chart
+    m15 = message([dict(ev[0], tf="15m")], "[Alerts] x", cfg)
+    assert m15["priority"] == 4                          # P2 = high
+
+
+def test_a_failed_push_never_stops_the_email(tmp_path):
+    from quant.alerts.push import ListPusher
+    r = Rig(tmp_path, [spike_alert(priority="urgent", markets=("A",))],
+            a=["2026-06-03 00:20", "2026-06-03 02:20"], delivery=dict(push="ntfy"))
+    r.pusher = ListPusher(fail=1)
+    r.tick("2026-06-03 00:01:30")
+    rep = r.tick("2026-06-03 01:01:30")
+    assert len(r.mail.sent) == 1 and r.pusher.sent == [] and "fake ntfy outage" in rep.errors["push"]
+    rep = r.tick("2026-06-03 03:01:30")
+    assert len(r.mail.sent) == 2 and len(r.pusher.sent) == 1 and rep.pushed == 1
+
+
+def test_push_off_is_the_email_it_always_was(tmp_path):
+    from quant.alerts.push import ListPusher
+    r = Rig(tmp_path, [spike_alert(priority="urgent", markets=("A",))], a=["2026-06-03 00:20"])
+    r.pusher = ListPusher()
+    r.tick("2026-06-03 00:01:30")
+    r.tick("2026-06-03 01:01:30")
+    assert len(r.mail.sent) == 1 and r.pusher.sent == []
+
+
+def test_push_without_a_topic_says_so_and_the_email_still_goes(tmp_path, monkeypatch):
+    from quant.alerts import feeds
+    monkeypatch.setenv("NTFY_TOPIC", "")                 # set but empty: .env cannot fill it in
+    monkeypatch.setattr(feeds, "session", lambda: pytest.fail("posted without a topic"))
+    r = Rig(tmp_path, [spike_alert(priority="urgent", markets=("A",))], a=["2026-06-03 00:20"],
+            delivery=dict(push="ntfy"))
+    r.tick("2026-06-03 00:01:30")
+    rep = r.tick("2026-06-03 01:01:30")
+    assert len(r.mail.sent) == 1 and "NTFY_TOPIC" in rep.errors["push"]
+
+
+def test_ntfy_gets_json_at_its_root_so_the_topic_is_never_in_a_url(monkeypatch, capsys):
+    from quant.alerts import feeds
+    from quant.alerts.__main__ import main
+    from quant.alerts.push import NtfyPusher, PushError
+    posts, status = [], [200]
+
+    def post(url, json=None, headers=None, timeout=None):
+        posts.append((url, json, headers, timeout))
+        return SimpleNamespace(status_code=status[0], text='{"error":"limit reached"}')
+    monkeypatch.setattr(feeds, "session", lambda: SimpleNamespace(post=post))
+    NtfyPusher("s3cret-topic", server="https://ntfy.sh").send(dict(title="t", message="m"))
+    url, body, headers, timeout = posts[-1]
+    assert url == "https://ntfy.sh/" and body == dict(title="t", message="m", topic="s3cret-topic")
+    assert headers == {} and timeout == 10
+    NtfyPusher("s3cret-topic", token="tk_1").send(dict(message="m"))
+    assert posts[-1][2] == {"Authorization": "Bearer tk_1"}
+    status[0] = 429
+    with pytest.raises(PushError, match="HTTP 429") as e:
+        NtfyPusher("s3cret-topic").send(dict(message="m"))
+    assert "s3cret-topic" not in str(e.value)
+    # the command that proves the setup sends one and never prints the topic
+    status[0] = 200
+    monkeypatch.setenv("NTFY_TOPIC", "s3cret-topic")
+    assert main(["test-push"]) == 0
+    assert posts[-1][1]["topic"] == "s3cret-topic"
+    assert "s3cret-topic" not in capsys.readouterr().out
+
+
 def test_one_fetch_serves_every_alert_on_an_instant_feed(tmp_path):
     # an instant 5m alert and a normal 15m one both read market A's 5m bars: both are judged on
     # the fetch 10 s after each 5m close -- the 15m one never asks again at its own 90 s
@@ -777,6 +885,7 @@ def test_a_late_instant_signal_waits_like_any_other(tmp_path):
     (dict(every_minutes=7), "every_minutes"),
     (dict(every_minute=15), r"unknown settings \['every_minute'\]"),
     (dict(instant_settle_seconds=120), "instant_settle_seconds"),
+    (dict(push="bell"), "push must be 'off' or 'ntfy'"),
     (dict(instant_settle_seconds=-1), "instant_settle_seconds"),
 ])
 def test_a_delivery_mistake_is_refused_by_name(tmp_path, delivery, says):

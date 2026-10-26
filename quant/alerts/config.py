@@ -81,6 +81,8 @@ class Delivery:
                                                  # after it closes -- and every alert on the same
                                                  # feed with it -- once the feed has handed it over;
                                                  # emailed then, not at the next boundary
+    push: str = "off"                            # "ntfy": every email also pops up on your phone
+                                                 # and PC (quant.alerts.push; NTFY_TOPIC in .env)
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> AlertsConfig:
     if not isinstance(em, int) or em < 0 or (em and 60 % em):
         raise ConfigError(f"DELIVERY every_minutes must be 0 or a whole divisor of 60 (5, 10, 15, "
                           f"30, 60), got {em!r}")
+    if delivery.push not in ("off", "ntfy"):
+        raise ConfigError(f"DELIVERY push must be 'off' or 'ntfy', got {delivery.push!r}")
     ins = delivery.instant_settle_seconds
     if not isinstance(ins, int) or not 0 <= ins <= delivery.settle_seconds:
         raise ConfigError(f"DELIVERY instant_settle_seconds must be a whole number of seconds "

@@ -39,6 +39,11 @@ THE SUBJECT SAYS HOW IMPORTANT THE EMAIL IS -- it leads with the most important 
   In Gmail, a filter on  subject:"P1"  can star it and mark it important (and send it to your
   phone); one on  subject:"P3"  can skip the inbox. Back to the plain subject: subject="classic".
 
+PUSH NOTIFICATIONS (push="ntfy"): every email also pops up on your phone (the ntfy app) and PC
+(ntfy.sh/app in Chrome or Edge) the moment it is composed -- the subject as the title, a line per
+signal, P1 urgent / P2 high / P3 normal, a tap opens the chart. Needs NTFY_TOPIC in the server's
+.env; `python -m quant.alerts test-push` checks it. Without it the emails go as before.
+
 CHARTS IN THE EMAIL (charts=3): the 3 most important signals are drawn at the top of the email --
 the candles, the line or shape that fired, a star on the candle it fired on. ~40 KB each. On the
 server they need matplotlib (the install script adds it); without it the email simply goes
@@ -218,7 +223,10 @@ DELIVERY = dict(
                                      #   or shape that fired on its candles. 3 covered every row
                                      #   of every email in a 48 h test; 0 = no pictures
     catchup_max_age_minutes=30,      # found later than this after its candle closed (PC was off)
-)                                    #   -> listed under "While offline", never sent as urgent
+                                     #   -> listed under "While offline", never sent as urgent
+    push="ntfy",                     # every email ALSO pops up on your phone and PC, at the same
+)                                    #   moment: NTFY_TOPIC in .env, the ntfy app / ntfy.sh/app
+                                     #   subscribed to it (docs/ALERTS.md, "Push notifications")
 
 # ══ §4  NEWS ════════════════════════════════════════════════════════════════════════════════════
 #   Driven by the economic calendar, not by candles. See what it covers right now:
