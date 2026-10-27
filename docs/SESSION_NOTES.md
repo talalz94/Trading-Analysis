@@ -2775,3 +2775,19 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   on ~505 4h candles. Whether Exness hands a calc_on context months of 1h/4h candles is the probe's
   second question. Cost on the stand-in: 2-6 s per 14-18k 1m candles for each of the four files,
   peak 4 / 3 / 6 / 18 drawing changes in an update (trendlines_mtf / structure / bias / levels).
+
+### The first probe on Exness, and the seam (2026-10-27)
+
+- US Tech 100, 1m: every construct worked: calc_on, a class SecContext, Var, param_ref, 16 values
+  with none wrong, LabelAbs and LabelRel. Each timeframe got ~1,000 of its OWN candles (15m 1045 =
+  15.3 days, 1h 1011 = 62 days, 4h 1003 = 228 days) while the chart held only 1,662 1m candles
+  (1.2 days). So history is not the limit for 1h/4h lines (alerts: 505 4h candles). 100% on round
+  UTC times.
+- "seen early 1" on each timeframe and "forming 1 of 1": the CSV docs say a timeframe's unclosed
+  last candle becomes "the freshest data" when the chart switches to live. Exness computes that
+  forming candle as if CLOSED while loading (is_closed_bar true) and hands it over. The indicators'
+  guard refuses it. Open question: when it really closes, does Indie roll it back first, or compute
+  it on top? The stand-in models both (seam="redo" / "again"). Computed on top, an HH/HL label
+  changed over 400 live candles, so each timeframe context now keeps a copy of its state from
+  before the latest candle (_save / _load / _once), and the same candle a second time starts from
+  that copy. Exact under both. Probe v2 says which one Exness does ("twice ... (changed ...)").

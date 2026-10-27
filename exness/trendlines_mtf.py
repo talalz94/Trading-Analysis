@@ -127,9 +127,40 @@ class Lines(SecContext):
         for k in range(18):
             out.append(nan)
         self._out = self.new_var(out)
+        # the state before the latest candle, for when it is computed again
+        self._k_atr_w = self.new_var(self._atr_w.get())
+        self._k_atr_n = self.new_var(self._atr_n.get())
+        self._k_prev_close = self.new_var(self._prev_close.get())
+        self._k_zz_dir = self.new_var(self._zz_dir.get())
+        self._k_zz_px = self.new_var(self._zz_px.get())
+        self._k_zz_i = self.new_var(self._zz_i.get())
+        self._k_zz_hi = self.new_var(self._zz_hi.get())
+        self._k_zz_lo = self.new_var(self._zz_lo.get())
+        self._k_pv_i = self.new_var(list(self._pv_i.get()))
+        self._k_pv_px = self.new_var(list(self._pv_px.get()))
+        self._k_pv_kind = self.new_var(list(self._pv_kind.get()))
+        self._k_ret_sig = self.new_var(list(self._ret_sig.get()))
+        self._k_ret_first = self.new_var(list(self._ret_first.get()))
+        self._k_ret_kind = self.new_var(list(self._ret_kind.get()))
+        self._k_on = self.new_var(list(self._on.get()))
+        self._k_slope = self.new_var(list(self._slope.get()))
+        self._k_icpt = self.new_var(list(self._icpt.get()))
+        self._k_touches = self.new_var(list(self._touches.get()))
+        self._k_start = self.new_var(list(self._start.get()))
+        self._k_born = self.new_var(list(self._born.get()))
+        self._k_end = self.new_var(list(self._end.get()))
+        self._k_beyond = self.new_var(list(self._beyond.get()))
+        self._k_last = self.new_var(list(self._last.get()))
+        self._k_sig = self.new_var(list(self._sig.get()))
+        self._k_sfirst = self.new_var(list(self._sfirst.get()))
+        self._k_level = self.new_var(list(self._level.get()))
+        self._k_brk = self.new_var(list(self._brk.get()))
+        self._k_out = self.new_var(list(self._out.get()))
+        self._done_t = self.new_var(nan)        # the latest candle computed
 
     def calc(self):
         if self.is_closed_bar:
+            self._once()
             i = self.bar_index
             a = self._atr()
             confirmed = self._zigzag(i, a)
@@ -167,6 +198,76 @@ class Lines(SecContext):
                 o[b + 7] = self._icpt.get()[s]
         o[16] = float(i)
         o[17] = self.time[0]
+
+    def _save(self) -> None:
+        self._k_atr_w.set(self._atr_w.get())
+        self._k_atr_n.set(self._atr_n.get())
+        self._k_prev_close.set(self._prev_close.get())
+        self._k_zz_dir.set(self._zz_dir.get())
+        self._k_zz_px.set(self._zz_px.get())
+        self._k_zz_i.set(self._zz_i.get())
+        self._k_zz_hi.set(self._zz_hi.get())
+        self._k_zz_lo.set(self._zz_lo.get())
+        self._k_pv_i.set(list(self._pv_i.get()))
+        self._k_pv_px.set(list(self._pv_px.get()))
+        self._k_pv_kind.set(list(self._pv_kind.get()))
+        self._k_ret_sig.set(list(self._ret_sig.get()))
+        self._k_ret_first.set(list(self._ret_first.get()))
+        self._k_ret_kind.set(list(self._ret_kind.get()))
+        self._k_on.set(list(self._on.get()))
+        self._k_slope.set(list(self._slope.get()))
+        self._k_icpt.set(list(self._icpt.get()))
+        self._k_touches.set(list(self._touches.get()))
+        self._k_start.set(list(self._start.get()))
+        self._k_born.set(list(self._born.get()))
+        self._k_end.set(list(self._end.get()))
+        self._k_beyond.set(list(self._beyond.get()))
+        self._k_last.set(list(self._last.get()))
+        self._k_sig.set(list(self._sig.get()))
+        self._k_sfirst.set(list(self._sfirst.get()))
+        self._k_level.set(list(self._level.get()))
+        self._k_brk.set(list(self._brk.get()))
+        self._k_out.set(list(self._out.get()))
+
+    def _load(self) -> None:
+        self._atr_w.set(self._k_atr_w.get())
+        self._atr_n.set(self._k_atr_n.get())
+        self._prev_close.set(self._k_prev_close.get())
+        self._zz_dir.set(self._k_zz_dir.get())
+        self._zz_px.set(self._k_zz_px.get())
+        self._zz_i.set(self._k_zz_i.get())
+        self._zz_hi.set(self._k_zz_hi.get())
+        self._zz_lo.set(self._k_zz_lo.get())
+        self._pv_i.set(list(self._k_pv_i.get()))
+        self._pv_px.set(list(self._k_pv_px.get()))
+        self._pv_kind.set(list(self._k_pv_kind.get()))
+        self._ret_sig.set(list(self._k_ret_sig.get()))
+        self._ret_first.set(list(self._k_ret_first.get()))
+        self._ret_kind.set(list(self._k_ret_kind.get()))
+        self._on.set(list(self._k_on.get()))
+        self._slope.set(list(self._k_slope.get()))
+        self._icpt.set(list(self._k_icpt.get()))
+        self._touches.set(list(self._k_touches.get()))
+        self._start.set(list(self._k_start.get()))
+        self._born.set(list(self._k_born.get()))
+        self._end.set(list(self._k_end.get()))
+        self._beyond.set(list(self._k_beyond.get()))
+        self._last.set(list(self._k_last.get()))
+        self._sig.set(list(self._k_sig.get()))
+        self._sfirst.set(list(self._k_sfirst.get()))
+        self._level.set(list(self._k_level.get()))
+        self._brk.set(list(self._k_brk.get()))
+        self._out.set(list(self._k_out.get()))
+
+    def _once(self) -> None:
+        """Exness computes a timeframe's still-forming candle as if closed when a chart
+        loads. If that candle is computed again when it really closes, start it from the
+        state before its first time, so it counts once, with its final values."""
+        if self.time[0] == self._done_t.get():
+            self._load()
+        else:
+            self._save()
+        self._done_t.set(self.time[0])
 
     def _finish(self, s: int, broke: bool) -> None:
         self._on.get()[s] = False

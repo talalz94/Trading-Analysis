@@ -13,7 +13,12 @@
 #      forming candle either way, this only says what Exness does);
 #   4. whether the higher timeframes' candles start on round UTC times (4h at 00, 04, 08 ...),
 #      which places a higher-timeframe line between its closes;
-#   5. text labels (LabelAbs, LabelRel) with the arguments the real indicators use.
+#   5. text labels (LabelAbs, LabelRel) with the arguments the real indicators use;
+#   6. (v2) WHERE an early view happens -- on history (a real fault) or only live, where a chart
+#      switching to live is handed each timeframe's freshest candle -- and whether a candle is
+#      computed TWICE: Exness computes the still-forming higher-timeframe candle as if closed while
+#      loading; when it really closes, is it redone from scratch or computed again on top? Leave
+#      the probe running past a 1h close for that line to mean something.
 #
 # Put it on a 1m or 5m chart. The last line says ALL GOOD, or what failed. If the editor refuses to
 # save or add it, the error message is the answer: copy it back.
@@ -34,23 +39,36 @@ class Candles(SecContext):
         self._first = self.new_var(nan)              # open time of the first
         self._last = self.new_var(nan)               # open time of the latest closed one
         self._aligned = self.new_var(0)              # how many opened on a round UTC time
+        self._last_close = self.new_var(nan)         # the latest closed one's close
+        self._twice = self.new_var(0)                # closed updates of a candle already closed
+        self._changed = self.new_var(0)              # ... with a different close the second time
+        self._as_last = self.new_var(0)              # closed updates while it was the last candle
         self._echo = check_value
 
     def calc(self):
         if self.is_closed_bar:
-            self._n.set(self._n.get() + 1)
-            if isnan(self._first.get()):
-                self._first.set(self.time[0])
+            if self.is_last_bar:
+                self._as_last.set(self._as_last.get() + 1)
+            if self.time[0] == self._last.get():       # this candle was closed before
+                self._twice.set(self._twice.get() + 1)
+                if self.close[0] != self._last_close.get():
+                    self._changed.set(self._changed.get() + 1)
+            else:
+                self._n.set(self._n.get() + 1)
+                if isnan(self._first.get()):
+                    self._first.set(self.time[0])
+                step = float(self.time_frame.to_minutes()) * 60.0
+                if self.time[0] - step * float(int(self.time[0] / step)) == 0.0:
+                    self._aligned.set(self._aligned.get() + 1)
             self._last.set(self.time[0])
-            step = float(self.time_frame.to_minutes()) * 60.0
-            if self.time[0] - step * float(int(self.time[0] / step)) == 0.0:
-                self._aligned.set(self._aligned.get() + 1)
+            self._last_close.set(self.close[0])
         return (float(self._n.get()), self._first.get(), self._last.get(),
                 float(self._aligned.get()), float(self.time_frame.to_minutes()), self._echo,
-                self.time[0], self.close[0], 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)
+                self.time[0], float(self._twice.get()), float(self._changed.get()),
+                float(self._as_last.get()), 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
 
 
-@indicator('Timeframe probe', overlay_main_pane=True)
+@indicator('Timeframe probe v2', overlay_main_pane=True)
 @param.float('check_value', default=7.0, min=0.0, max=100.0, step=1.0, title='Check value (leave at 7)')
 @param.bool('try_lower', default=False, title='Also try 1m below the chart (needs Indie 5.14)')
 class Main(MainContext):
@@ -78,16 +96,17 @@ class Main(MainContext):
          self._d15) = self.calc_on(Candles, time_frame=tf_low)
         self._n = self.new_var(0)                    # chart candles
         self._first = self.new_var(nan)
-        self._early = self.new_var([0, 0, 0, 0])     # chart candles that saw an unclosed one
+        self._early = self.new_var([0, 0, 0, 0])     # history candles that saw an unclosed one
+        self._early_live = self.new_var([0, 0, 0, 0])  # ... and live ones
         self._forming = self.new_var([0, 0, 0, 0])   # live candles shown a forming one
         self._live = self.new_var(0)                 # live chart candles closed so far
         self._bad = self.new_var([0, 0, 0, 0])       # values that came back wrong
         blank: list[LabelRel] = []
-        for r in range(6):
+        for r in range(7):
             blank.append(LabelRel('', RelativePosition(va.TOP, ha.LEFT, 0.04 + 0.045 * float(r), 0.01),
                                   bg_color=rgba(0, 0, 0, 0.6), text_color=rgba(255, 255, 255, 1.0), font_size=12))
         self._rows = self.new_var(blank)
-        self._shown = self.new_var(['', '', '', '', '', ''])
+        self._shown = self.new_var(['', '', '', '', '', '', ''])
         self._mark = self.new_var(LabelAbs('probe', AbsolutePosition(0.0, 0.0),
                                            bg_color=color.BLUE(0.3), text_color=rgba(255, 255, 255, 1.0),
                                            font_size=10))
@@ -129,12 +148,15 @@ class Main(MainContext):
                     v = self._vals(s)
                     m = float(self._want[s]) * 60.0
                     if not isnan(v[2]) and v[2] + m > close_t:
-                        self._early.get()[s] = self._early.get()[s] + 1
+                        if self.is_last_bar:
+                            self._early_live.get()[s] = self._early_live.get()[s] + 1
+                        else:
+                            self._early.get()[s] = self._early.get()[s] + 1
                     if self.is_last_bar and not isnan(v[6]) and v[6] + m > close_t:
                         self._forming.get()[s] = self._forming.get()[s] + 1
                     ok = v[4] == float(self._want[s]) and v[5] == self._check
-                    for q in range(8):
-                        ok = ok and v[8 + q] == float(q + 1)
+                    for q in range(6):
+                        ok = ok and v[10 + q] == float(q + 1)
                     if not isnan(v[0]) and not ok:
                         self._bad.get()[s] = self._bad.get()[s] + 1
         if self.is_last_bar:
@@ -143,9 +165,12 @@ class Main(MainContext):
     def _report(self) -> None:
         days = (self.time[0] - self._first.get()) / 86400.0
         text: list[str] = []
-        text.append('Timeframe probe: chart ' + self._name(self._chart_m) + ', '
+        text.append('Timeframe probe v2: chart ' + self._name(self._chart_m) + ', '
                     + str(self._n.get()) + ' candles over ' + str(round(days, 1)) + ' days')
         good = True
+        twice = 0
+        changed = 0
+        closes = 99
         for s in range(4):
             name = self._names[s]
             if not self._on[s]:
@@ -162,16 +187,30 @@ class Main(MainContext):
             span = (v[2] - v[1]) / 86400.0
             share = round(100.0 * v[3] / v[0])
             text.append(name + ': ' + str(int(v[0])) + ' candles, ' + str(round(span, 1))
-                        + ' days; ' + str(int(share)) + '% start on round UTC times; seen early '
-                        + str(self._early.get()[s]) + '; live: forming ' + str(self._forming.get()[s])
-                        + ' of ' + str(self._live.get()) + '; wrong values ' + str(self._bad.get()[s]))
+                        + ' days, ' + str(int(share)) + '% on round UTC times; early: history '
+                        + str(self._early.get()[s]) + ', live ' + str(self._early_live.get()[s])
+                        + '; forming live ' + str(self._forming.get()[s]) + '/' + str(self._live.get())
+                        + '; twice ' + str(int(v[7])) + ' (changed ' + str(int(v[8])) + ') in '
+                        + str(int(v[9])) + ' last-candle closes; wrong ' + str(self._bad.get()[s]))
             if self._early.get()[s] > 0 or self._bad.get()[s] > 0:
                 good = False
+            twice += int(v[7])
+            changed += int(v[8])
+            if s < 2:                                  # 15m and 1h: one closes live soon
+                closes = min(closes, int(v[9]))
         if good:
-            text.append('ALL GOOD: the multi-timeframe indicators can run here')
+            text.append('OK: nothing early on history; early views only live, which the indicators ignore')
         else:
             text.append('PROBLEM: copy this panel back')
-        for r in range(6):
+        if changed > 0:
+            text.append('NOTE: a candle was computed twice with different values -- send this panel to Claude')
+        elif twice > 0:
+            text.append('A candle was computed twice with the same values -- send this panel to Claude')
+        elif closes >= 2 and closes < 99:
+            text.append('Recomputed cleanly: no candle computed twice')
+        else:
+            text.append('Leave it running past the next 1h close, then look again')
+        for r in range(7):
             t = ''
             if r < len(text):
                 t = text[r]

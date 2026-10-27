@@ -128,6 +128,8 @@ def test_the_panel_says_why_and_what_it_cannot_show(monkeypatch):
 
 @pytest.mark.parametrize("variant", [dict(live_merge="forming", realtime_last=60),
                                      dict(backfill_first=True), dict(lookahead=True),
+                                     dict(realtime_last=400, seam="redo"),      # Exness's seam,
+                                     dict(realtime_last=400, seam="again"),     # both endings
                                      dict(realtime_last=40, rerun=range(0, 6300, 7))])
 def test_a_forming_candle_or_a_rerun_changes_nothing(monkeypatch, variant):
     # compared on EVERY candle: the file ends at 00:00 UTC, where every timeframe closes at once,
@@ -152,6 +154,8 @@ def test_a_forming_candle_or_a_rerun_changes_nothing(monkeypatch, variant):
         assert got == want
     assert [r.text for r in ctx._rows.get()] == [r.text for r in plain._rows.get()]
     assert rt.state(ctx)[1] == rt.state(plain)[1]
+    if variant.get("seam"):                       # its own state too, after the seam
+        assert rt.sec_state(ctx) == rt.sec_state(plain)
     assert ctx.chart.peak <= 90
 
 
