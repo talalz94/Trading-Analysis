@@ -2714,3 +2714,31 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   never appears in a URL). Round trip checked against ntfy.sh with a throwaway topic: the emoji
   title, priority 5 and the TradingView click came back exactly as sent. ntfy.sh's daily limit is
   250 messages; ~60 emails a day.
+
+### The alerts' trendlines on Exness, exactly (2026-10-27)
+
+- The user asked whether the trendlines could appear on their own on any Exness chart, by the
+  same algorithm. exness/trendlines.py is add_trendlines(fit="strict") in Indie, with
+  `Settings: auto` = the alerts' own values for the chart's timeframe (1m -> STRICT_1M, else the
+  5m-4h ones). Chart's own timeframe only, like the FVG indicator.
+- "Exact" needed two things beyond porting the rules:
+  1. The ATR is computed in the script, as pandas' ewm(alpha=1/14, adjust=False) does it: alpha
+     rewritten as 1/(1+com), and the update skipped when the running value equals the true
+     range. Using the terminal's own ATR would move every swing threshold by its last bits.
+  2. When two candidate lines have the same touches and span, the smaller mean deviation wins,
+     and that mean is a numpy row sum. numpy sums fewer than 8 values left to right and 8+ with
+     eight running totals combined in pairs; a plain loop gets a different last bit on 25% of
+     rows of 8+ values in the test's sample, which on a tie changes which line is drawn.
+- The clear-check (no close beyond the line, wicks within tolerance, from the first touch) was
+  the cost: its tolerance needed the largest |line price| on the span, a full pass. A line's
+  largest is at one of its ends, and rounding keeps slope x candle + intercept in order, so the
+  two ends give the identical value -- half the work, nothing changed.
+- Tested on the stand-in runtime (tests/test_exness_trendlines.py) against add_trendlines: five
+  real-candle cases + 48 custom settings, all equal on every candle. The support-above-
+  resistance drop never fired on ~46,000 1m candles under six settings (the research comment
+  says 1 in 156,000), so it is tested on a hand-set state. 30 mutants, 28 caught, 2 equivalent.
+- What only Exness can show: its time limit (not documented) and how far back a script may read
+  its own candles (Indie documents a limit only for series a script creates; on 12 days of 1m
+  Gold, BTC and USDJPY the deepest read was 663 candles). The work: 1.3-2.4M candle checks per
+  14-18k candles, 2-4 s in CPython on the stand-in, at most ~11,600 in one update. If Save or Add
+  to chart fails, the error names which.
