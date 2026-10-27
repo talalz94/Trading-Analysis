@@ -127,14 +127,18 @@ def load_indicator(monkeypatch):
     indie.indicator = lambda *a, **k: (lambda cls: cls)
     indie.param = types.SimpleNamespace(**{k: _param(k) for k in ("str", "float", "int", "bool",
                                                                   "color")})
-    indie.color = types.SimpleNamespace(GREEN=Color("green"), RED=Color("red"),
-                                        GRAY=Color("gray"))
+    col = types.ModuleType("indie.color")            # named colours proven on Exness only
+    col.GREEN, col.RED = Color("green"), Color("red")
+    col.rgba = lambda r, g, b, a=1.0: Color("gray" if (r, g, b) == (128, 128, 128) else
+                                            f"rgb({r},{g},{b})", a)
+    indie.color = col
     indie.line_style = types.SimpleNamespace(SOLID="solid", DOTTED="dotted", DASHED="dashed")
     indie.MainContext = Context
     draws = types.ModuleType("indie.drawings")
     draws.LineSegment, draws.AbsolutePosition = Segment, Pos
     monkeypatch.setitem(sys.modules, "indie", indie)
     monkeypatch.setitem(sys.modules, "indie.drawings", draws)
+    monkeypatch.setitem(sys.modules, "indie.color", indie.color)
     spec = importlib.util.spec_from_file_location("exness_trendlines", INDIE_FILE)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)

@@ -23,6 +23,7 @@ from .levels import (add_prev_day_levels, add_round_levels, add_session_levels,
 from .momentum import add_squeeze_momentum, add_wavetrend, add_ema_gradient
 from .trendlines import add_trendlines, trendline_table
 from .fvg import add_fvgs, fvg_count_cols, fvg_table, fvg_on_grid, mtf_fvgs, MITIGATION_MODES
+from .bias import add_bias, BIAS_LABELS
 
 __all__ = [
     "ema", "sma", "add_emas", "add_mtf_emas", "add_smas",
@@ -42,4 +43,5 @@ __all__ = [
     "add_prev_day_levels", "add_week_levels", "add_session_levels", "add_vwap",
     "add_volume_features", "add_round_levels", "level_events", "period_levels",
     "session_windows", "PERIODS",
+    "add_bias", "BIAS_LABELS",
 ]
