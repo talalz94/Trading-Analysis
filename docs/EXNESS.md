@@ -28,24 +28,41 @@ If Save or Add to chart shows an error, copy the message back. It names the line
 
 ## Paste the probe first
 
-`probe_timeframes.py` writes a short report in the top-left corner. Put it on a 1m or 5m chart.
-It checks:
+`probe_timeframes.py` (v2) writes a short report in the top-left corner. Put it on a 1m or 5m chart,
+and for the last line, leave it running past the next 1h close. Per timeframe it gives:
 
-- **whether reading other timeframes works.** The three multi-timeframe indicators read 15m, 1h
-  and 4h candles from inside one indicator (Indie's `calc_on`). The probe builds the same
-  structures they do, so if it runs, they will.
-- **how much history each timeframe gets**, in candles and days. A 4h line in the email alerts is
-  fitted on about 505 4h candles (about 3 months). With less history, the first lines can differ
-  until enough has built up. They are never wrong in the sense of looking ahead.
-- **seen early** must be 0. It counts chart candles that were handed a higher-timeframe candle
-  that had not closed yet. The indicators guard against that themselves, so this only describes
-  the terminal.
-- **live: forming** counts live candles shown a higher timeframe's still-forming candle. Some
-  terminals do this. The indicators ignore forming candles either way.
-- **% start on round UTC times**: whether 4h candles open at 00, 04, 08 ... UTC. A higher
-  timeframe's line is placed between its closes on that assumption.
-- **ALL GOOD** at the bottom means the multi-timeframe indicators can run. Otherwise the line says
-  **PROBLEM**: copy the panel back.
+- **candles and days** of that timeframe the indicator was given;
+- **% on round UTC times**: whether 4h candles open at 00, 04, 08 ... UTC;
+- **early: history N, live M**:
+  - **history** counts chart candles on history that were handed a candle that had not closed.
+    It must be 0.
+  - **live** counts the same thing on live candles. It is expected (see below), and the
+    indicators ignore it.
+- **forming live**: live candles shown a forming candle;
+- **twice ... (changed ...)**: candles computed a second time, and with different values;
+- **wrong**: values that came back wrong or out of order (must be 0).
+
+The verdict lines:
+- **OK** (nothing early on history) or **PROBLEM**.
+- After a live close, either **Recomputed cleanly** or **NOTE: a candle was computed twice**.
+
+**What the first probe showed on Exness** (US Tech 100, 1m, 27 Oct 2026):
+
+- **Everything works:** the secondary contexts, `param_ref`, 16 values with none wrong, and the
+  text labels.
+- **About 1,000 candles of each timeframe,** whatever the chart holds: 15m 15 days, 1h 62 days,
+  4h 228 days. The chart itself had 1.2 days of 1m. The alerts fit 4h lines on 505 4h candles, so
+  the 1h and 4h lines have the history they need.
+- **100% on round UTC times.**
+- **Exactly one early view per timeframe, at the switch to live.** When the chart loads, Exness
+  computes each timeframe's still-forming candle as if it had closed, and hands it over as the
+  freshest data, as Indie's docs describe. The indicators refuse it, because its candle has not
+  closed by the chart candle's close.
+
+Whether Exness later computes that candle a second time is the `twice` column. The indicators are
+exact either way: each timeframe saves its state before a candle and, if the same candle comes
+again, starts it from that state. Both endings are tested (`seam="redo"` and `seam="again"` in the
+stand-in).
 
 `Also try 1m below the chart` asks for a timeframe finer than the chart. That needs Indie 5.14, and
 on an older Indie it fails with an error, which is itself the answer.

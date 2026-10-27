@@ -17,6 +17,11 @@ What it models, each from the Indie docs or from what Exness did to the FVG indi
     first one);
     A third, `lookahead=True`, is Indie's documented calc_on(lookahead=True): candles merged by
     their OPENING time, so every chart candle sees the final values of the candle it is in;
+  - THE SEAM, as Exness showed it (probe, 27 Oct 2026): when the chart goes live, each higher
+    timeframe's still-FORMING candle has been computed as if closed (with its candles so far) and
+    is handed to the chart as the freshest data. `seam="redo"` then recomputes that candle from
+    scratch when it really closes (Indie's rollback); `seam="again"` computes it a second time on
+    top of the first. Which one Exness does is what probe v2 measures;
   - @param_ref: a secondary context's __init__ gets the chart's settings by id.
 """
 from __future__ import annotations
@@ -295,7 +300,8 @@ def _setup(ctx, data, minutes):
 
 
 def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lower_ok=False,
-        live_merge="closed", backfill_first=False, lookahead=False, spy=None, **settings):
+        live_merge="closed", backfill_first=False, lookahead=False, seam=None, spy=None,
+        **settings):
     """Feed `bars` candle by candle the way Exness does. Every secondary context runs on its own
     timeframe's candles (from `frames` {minutes: DataFrame}, else bucketed from `bars`), each closed
     candle once, before the first chart candle that closes at or after it. `spy(ctx)` is called
@@ -331,7 +337,7 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
         st["chart"] = copy.deepcopy(ctx.chart.on)
         for r in ctx._requests:
             st[id(r)] = ({id(v): copy.deepcopy(v.work) for v in r.ctx._vars}, len(r.outputs),
-                         r.next, dict(r.merged))
+                         r.next, dict(r.merged), getattr(r, "redo", None))
         return st
 
     def restore(st):
@@ -339,11 +345,11 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
             v.work = copy.deepcopy(st[id(v)])
         ctx.chart.on = copy.deepcopy(st["chart"])
         for r in ctx._requests:
-            vs, n_out, nxt, merged = st[id(r)]
+            vs, n_out, nxt, merged, redo = st[id(r)]
             for v in r.ctx._vars:
                 v.work = copy.deepcopy(vs[id(v)])
             del r.outputs[n_out:]
-            r.next, r.merged = nxt, dict(merged)
+            r.next, r.merged, r.redo = nxt, dict(merged), redo
 
     def update(k, closed, first, state, live):
         if not first:
@@ -354,7 +360,7 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
         close_t = full["time"][k] + S
         for r in ctx._requests:
             _advance(r, k, close_t, live and live_merge == "forming",
-                     close_t - S if lookahead else None)
+                     close_t - S if lookahead else None, live)
         ctx.calc()
         if not closed:
             ctx.chart.forming += ctx.chart.changes
@@ -362,6 +368,10 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
     for k in range(n):
         ctx.bar_index = k
         live = k >= n - realtime_last
+        if seam and realtime_last and k == n - realtime_last:
+            for r in ctx._requests:
+                if r.minutes > S // 60:
+                    _seam(r, bars, full, k, seam)
         state = snapshot() if (live or k in rerun) else None
         first = True
         if live:
@@ -380,20 +390,46 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
     return ctx
 
 
-def _sec_closed(req, h):
+def _seam(req, bars, full, k0, mode):
+    """The forming candle at the switch to live, computed as if closed with its candles so far."""
+    h = req.next
+    if h >= len(req.close) or req.full["time"][h] >= full["time"][k0]:
+        return                                          # no candle has formed yet
+    t = full["time"]
+    inside = (t >= req.full["time"][h]) & (t < full["time"][k0])
+    keep = {c: req.ctx.data[c][h] for c in ("open", "high", "low", "close")}
+    req.ctx.data["open"][h] = full["open"][inside][0]
+    req.ctx.data["high"][h] = full["high"][inside].max()
+    req.ctx.data["low"][h] = full["low"][inside].min()
+    req.ctx.data["close"][h] = full["close"][inside][-1]
+    before = {id(v): copy.deepcopy(v.work) for v in req.ctx._vars}
+    _sec_closed(req, h, True)
+    for c, v in keep.items():
+        req.ctx.data[c][h] = v
+    req.next = h                                        # it closes for real later
+    req.redo = (h, before) if mode == "redo" else None
+
+
+def _sec_closed(req, h, live=False):
     sec = req.ctx
+    redo = getattr(req, "redo", None)
+    if redo is not None and redo[0] == h:              # Indie's rollback: from before it
+        for v in sec._vars:
+            v.work = copy.deepcopy(redo[1][id(v)])
+        req.redo = None
     sec.bar_index, sec.is_closed_bar = h, True
-    sec.is_last_bar = h == len(req.close) - 1
+    sec.is_last_bar = live
     out = sec.calc()
     req.outputs.append(out if isinstance(out, tuple) else (out,))
     req.next = h + 1
 
 
-def _advance(req, k, close_t, forming, opened_by=None):
+def _advance(req, k, close_t, forming, opened_by=None, live=False):
     while req.next < len(req.close) and req.close[req.next] <= close_t:
-        _sec_closed(req, req.next)
-    while opened_by is not None and req.next < len(req.close) and             req.full["time"][req.next] <= opened_by:            # lookahead: by opening time
-        _sec_closed(req, req.next)
+        _sec_closed(req, req.next, live)
+    while (opened_by is not None and req.next < len(req.close)
+           and req.full["time"][req.next] <= opened_by):        # lookahead: by opening time
+        _sec_closed(req, req.next, live)
     seen = req.outputs[-1] if req.outputs else None
     if forming and req.next < len(req.close) and req.full["time"][req.next] < close_t:
         # a live chart candle shown its own timeframe's FORMING candle, which updates too and
@@ -443,3 +479,14 @@ def state(ctx):
         held[f"sec{i}"] = {k: plain(v.get()) for k, v in vars(r.ctx).items()
                            if k.startswith("_") and hasattr(v, "get") and not isinstance(v, dict)}
     return held, sorted(map(repr, (plain(d) for d in ctx.chart.on.values())))
+
+
+def sec_state(ctx):
+    """Each secondary context's own state, without its copy of the state before the latest
+    candle (_k..., _done_t): after a candle computed twice it must equal a clean run's."""
+    out = []
+    for r in getattr(ctx, "_requests", []):
+        out.append({k: plain(v.get()) for k, v in vars(r.ctx).items()
+                    if k.startswith("_") and hasattr(v, "get") and not isinstance(v, dict)
+                    and not k.startswith("_k") and k != "_done_t"})
+    return out

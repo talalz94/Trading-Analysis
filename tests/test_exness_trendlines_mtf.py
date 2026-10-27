@@ -196,6 +196,8 @@ def test_thickness_names_the_timeframe_and_tags_the_higher_ones(runs, monkeypatc
 
 @pytest.mark.parametrize("variant", [dict(live_merge="forming", realtime_last=60),
                                      dict(backfill_first=True), dict(lookahead=True),
+                                     dict(realtime_last=400, seam="redo"),      # Exness's seam,
+                                     dict(realtime_last=400, seam="again"),     # both endings
                                      dict(realtime_last=40, rerun=range(0, 3000, 7))])
 def test_a_forming_candle_or_a_rerun_changes_nothing(monkeypatch, variant):
     bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")[:3000]
@@ -204,6 +206,8 @@ def test_a_forming_candle_or_a_rerun_changes_nothing(monkeypatch, variant):
     ctx = rt.run(mod, bars, bar_secs=300, max_kept=5, **variant)
     assert rt.state(ctx)[1] == rt.state(plain)[1]
     assert ctx._mk_t.get() == plain._mk_t.get()
+    if variant.get("seam"):                       # its own state too, after the seam
+        assert rt.sec_state(ctx) == rt.sec_state(plain)
     assert ctx.chart.peak <= 90 and ctx.chart.forming == 0
 
 

@@ -95,6 +95,8 @@ def test_labels_sit_on_their_swing_candle_name_their_timeframe_and_stack(monkeyp
 
 @pytest.mark.parametrize("variant", [dict(live_merge="forming", realtime_last=60),
                                      dict(backfill_first=True), dict(lookahead=True),
+                                     dict(realtime_last=400, seam="redo"),      # Exness's seam,
+                                     dict(realtime_last=400, seam="again"),     # both endings
                                      dict(realtime_last=40, rerun=range(0, 6300, 7))])
 def test_a_forming_candle_or_a_rerun_changes_no_label(monkeypatch, variant):
     # the terminal may show a higher timeframe's FORMING candle while a chart candle forms, or
@@ -106,6 +108,8 @@ def test_a_forming_candle_or_a_rerun_changes_no_label(monkeypatch, variant):
     ctx = rt.run(mod, bars, bar_secs=300, **variant)
     assert rt.state(ctx)[1] == rt.state(plain)[1]
     assert ctx._code.get() == plain._code.get() and ctx._pt.get() == plain._pt.get()
+    if variant.get("seam"):                       # its own state too, after the seam
+        assert rt.sec_state(ctx) == rt.sec_state(plain)
     assert ctx.chart.peak <= 90 and ctx.chart.forming == 0
 
 

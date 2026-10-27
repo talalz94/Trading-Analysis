@@ -58,12 +58,74 @@ class Bias(SecContext):
         self._lo_state = self.new_var(0)              # -1 HL, -2 LL
         self._trend = self.new_var(0)
         self._out = self.new_var([nan, nan, nan, nan, nan, nan, nan, nan])
+        # the state before the latest candle, for when it is computed again
+        self._k_atr_w = self.new_var(self._atr_w.get())
+        self._k_atr_n = self.new_var(self._atr_n.get())
+        self._k_prev_close = self.new_var(self._prev_close.get())
+        self._k_ef = self.new_var(self._ef.get())
+        self._k_es = self.new_var(self._es.get())
+        self._k_en = self.new_var(self._en.get())
+        self._k_dir = self.new_var(self._dir.get())
+        self._k_ext_px = self.new_var(self._ext_px.get())
+        self._k_ext_i = self.new_var(self._ext_i.get())
+        self._k_prev_hi = self.new_var(self._prev_hi.get())
+        self._k_prev_lo = self.new_var(self._prev_lo.get())
+        self._k_hi_state = self.new_var(self._hi_state.get())
+        self._k_lo_state = self.new_var(self._lo_state.get())
+        self._k_trend = self.new_var(self._trend.get())
+        self._k_out = self.new_var(list(self._out.get()))
+        self._done_t = self.new_var(nan)        # the latest candle computed
 
     def calc(self):
         if self.is_closed_bar:
+            self._once()
             self._step()
         o = self._out.get()
         return o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7]
+
+    def _save(self) -> None:
+        self._k_atr_w.set(self._atr_w.get())
+        self._k_atr_n.set(self._atr_n.get())
+        self._k_prev_close.set(self._prev_close.get())
+        self._k_ef.set(self._ef.get())
+        self._k_es.set(self._es.get())
+        self._k_en.set(self._en.get())
+        self._k_dir.set(self._dir.get())
+        self._k_ext_px.set(self._ext_px.get())
+        self._k_ext_i.set(self._ext_i.get())
+        self._k_prev_hi.set(self._prev_hi.get())
+        self._k_prev_lo.set(self._prev_lo.get())
+        self._k_hi_state.set(self._hi_state.get())
+        self._k_lo_state.set(self._lo_state.get())
+        self._k_trend.set(self._trend.get())
+        self._k_out.set(list(self._out.get()))
+
+    def _load(self) -> None:
+        self._atr_w.set(self._k_atr_w.get())
+        self._atr_n.set(self._k_atr_n.get())
+        self._prev_close.set(self._k_prev_close.get())
+        self._ef.set(self._k_ef.get())
+        self._es.set(self._k_es.get())
+        self._en.set(self._k_en.get())
+        self._dir.set(self._k_dir.get())
+        self._ext_px.set(self._k_ext_px.get())
+        self._ext_i.set(self._k_ext_i.get())
+        self._prev_hi.set(self._k_prev_hi.get())
+        self._prev_lo.set(self._k_prev_lo.get())
+        self._hi_state.set(self._k_hi_state.get())
+        self._lo_state.set(self._k_lo_state.get())
+        self._trend.set(self._k_trend.get())
+        self._out.set(list(self._k_out.get()))
+
+    def _once(self) -> None:
+        """Exness computes a timeframe's still-forming candle as if closed when a chart
+        loads. If that candle is computed again when it really closes, start it from the
+        state before its first time, so it counts once, with its final values."""
+        if self.time[0] == self._done_t.get():
+            self._load()
+        else:
+            self._save()
+        self._done_t.set(self.time[0])
 
     def _ema(self, w: float, x: float, a: float) -> float:
         if w != x:
