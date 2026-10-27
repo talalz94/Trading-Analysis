@@ -68,8 +68,9 @@ quant/
 ├── alerts/            # email alerts when a pattern forms (python -m quant.alerts; docs/ALERTS.md)
 └── cli.py             # `quant fetch | backtest | report`
 alerts/alerts_config.py  # what the alerts monitor watches (state in alerts/state/, git-ignored)
-exness/fair_value_gaps.py  # the research FVG as an Indie indicator for the Exness web terminal
-exness/trendlines.py       # the alerts' strict trendlines as an Indie indicator for the same terminal
+exness/                   # the research tools as Indie indicators for the Exness web terminal
+                           #   (docs/EXNESS.md): FVGs, trendlines (chart TF, or 15m/1h/4h too with
+                           #   early-break marks), HH/HL, a bias panel, day/week/session levels
 experiments/  examples/  notebooks/  tests/ (+ tests/data fixtures)  docs/  data/ (parquet cache, git-ignored)
 ```
 
@@ -560,7 +561,7 @@ to_html(res, "reports/run.html", df=df, price_df=df, title="PAXG EMA")   # offli
 
 ---
 
-## Fair value gaps and trendlines on the Exness web terminal
+## Indicators for the Exness web terminal
 
 [`exness/fair_value_gaps.py`](exness/fair_value_gaps.py) is the research FVG ported to Indie, the
 language of the Exness terminal's indicator editor: paste it in, Save, Add to chart. Same gaps as
@@ -572,6 +573,24 @@ alerts use: on whatever timeframe the chart shows, the support and resistance li
 themselves, with the alerts' own settings for that timeframe (`Settings: auto`; `custom` to change
 them). A test requires the same lines as `add_trendlines`, on the same candles, to the last digit.
 Exness's candles are not quite Dukascopy's or Binance's, so a line can still differ from an alert's.
+
+Four more read OTHER timeframes from inside one indicator. Paste
+[`exness/probe_timeframes.py`](exness/probe_timeframes.py) first: its report says whether Exness
+allows that, and how much history each timeframe gets.
+
+- [`trendlines_mtf.py`](exness/trendlines_mtf.py): the chart's lines and 15m, 1h and 4h lines,
+  told apart by thickness, with a mark where a chart candle first closes through a higher
+  timeframe's line (the alerts' early break).
+- [`structure.py`](exness/structure.py): HH / HL / LH / LL labels per timeframe.
+- [`bias.py`](exness/bias.py): a panel with each timeframe's bias, strongly bearish to strongly
+  bullish, from `quant.indicators.add_bias`.
+
+[`levels.py`](exness/levels.py) draws the previous day, week and month highs and lows, and the
+Sydney, Tokyo, London and New York session highs and lows, each in its own clock.
+
+None of them can look ahead. Each timeframe is computed on closed candles only, and a chart candle
+takes a higher timeframe's state only once that candle has closed. A test checks this against
+terminals that try to show more. [`docs/EXNESS.md`](docs/EXNESS.md) has the details.
 
 ## Email alerts
 

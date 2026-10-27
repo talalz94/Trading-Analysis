@@ -2742,3 +2742,36 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   Gold, BTC and USDJPY the deepest read was 663 candles). The work: 1.3-2.4M candle checks per
   14-18k candles, 2-4 s in CPython on the stand-in, at most ~11,600 in one update. If Save or Add
   to chart fails, the error names which.
+
+### Exness: other timeframes, HH/HL, bias, levels (2026-10-27)
+
+- The user asked for the alerts' 15m/1h/4h trendlines on lower-timeframe charts (with the early
+  marker), HH/HL per timeframe, a bias per timeframe, and session/day/week highs and lows, all on
+  Exness. Built as five files (docs/EXNESS.md): probe_timeframes (paste first), trendlines_mtf,
+  structure, bias, levels; add_bias is the new research reference (quant/indicators/bias.py).
+- Exness's Indie is 5.13-5.18 by evidence: it accepts Rectangle + line_style (5.13) and raised
+  the "cannot erase" error that 5.19 made a no-op. So no tables (5.17: the bias panel is LabelRel
+  rows) and no lower timeframes unless asked (5.14). Indie's docs give calc_on since 3.0 and a
+  class-form SecContext (what @sec_context desugars to) with new_var / is_closed_bar / param_ref;
+  only Exness can confirm, hence the probe, which uses every one of those constructs.
+- ONE SAFETY RULE for all three multi-timeframe files: compute on closed candles only, and take a
+  higher timeframe's state only if its candle closed by the chart candle's close. Tested against
+  three bad terminals: one showing forming candles live, one backfilling the first candle, and
+  one merging by OPENING time (calc_on lookahead=True). The first two could not tell whether the
+  guard was there -- a fitter that returns stored closed state hides it -- which the mutation run
+  showed; the third does.
+- trendlines_mtf's fitter is trendlines.py's code copied by a generator (drawing calls removed),
+  so its exactness carries over; each timeframe's lines, breaks and drawn geometry equal
+  add_trendlines on that timeframe's candles. The early mark is the alerts' rule made causal: a
+  DROPPED line stays live until the close of the candle that dropped it. EarlyBreakDetector in
+  hindsight ends it at the close of its last valid candle -- its live behaviour already matches.
+- Found by the tests: a 4h candle's bucket was searched only 8 entries back, behind sixteen 15m
+  and four 1h entries, so 4h labels sat on partial extremes; and the "late state" rule called
+  Sunday's first candles late because the previous chart candle was after Friday's.
+- Daylight saving is spelt out in levels.py (US, UK/EU, Sydney) and held to zoneinfo hour by
+  hour 2024-2028; sessions to session_windows, levels to period_levels in all three day clocks.
+- HISTORY DECIDES THE HIGHER LINES: on 12 days of 1m data the strict fitter finds Gold 3 / 0 / 0
+  and BTC 2 / 0 / 0 lines on 15m / 1h / 4h (920 / 230 / 62 Gold candles); the alerts fit a 4h line
+  on ~505 4h candles. Whether Exness hands a calc_on context months of 1h/4h candles is the probe's
+  second question. Cost on the stand-in: 2-6 s per 14-18k 1m candles for each of the four files,
+  peak 4 / 3 / 6 / 18 drawing changes in an update (trendlines_mtf / structure / bias / levels).

@@ -46,6 +46,7 @@
 # (gold, FX) and Binance (BTC) -- the same rules on slightly different candles.
 from math import isnan, nan
 from indie import indicator, param, color, line_style, MainContext
+from indie.color import rgba
 from indie.drawings import LineSegment, AbsolutePosition
 
 
@@ -67,7 +68,7 @@ from indie.drawings import LineSegment, AbsolutePosition
 @param.int('reach', default=20, min=2, max=500, title='Live lines reach ahead (candles)')
 @param.color('res_color', default=color.RED, title='Resistance colour')
 @param.color('sup_color', default=color.GREEN, title='Support colour')
-@param.color('old_color', default=color.GRAY, title='Dropped line colour')
+@param.color('old_color', default=rgba(128, 128, 128, 1.0), title='Dropped line colour')
 class Main(MainContext):
     def __init__(self, preset, swing_size, min_touches, touch_tol, wick_tol, max_distance, hold,
                  span, prefer_newer, show_res, show_sup, keep_old, max_kept, reach, res_color,
