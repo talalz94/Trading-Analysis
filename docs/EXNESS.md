@@ -59,7 +59,15 @@ The verdict lines:
   freshest data, as Indie's docs describe. The indicators refuse it, because its candle has not
   closed by the chart candle's close.
 
-Whether Exness later computes that candle a second time is the `twice` column. The indicators are
+**The second probe** (US Tech 100, 1h chart, past a live 4h close, 27 Oct 2026) answered the last
+question:
+- **early: history 0** over 279 days of 4h, so the merge on history is clean.
+- **twice 0:** the candle that was forming at load closed live and was **redone from scratch**,
+  which is Indie's documented rollback.
+- **wrong 0.**
+
+Exness therefore behaves exactly as the indicators assume. Whether a candle is computed a second
+time is the `twice` column. The indicators are
 exact either way: each timeframe saves its state before a candle and, if the same candle comes
 again, starts it from that state. Both endings are tested (`seam="redo"` and `seam="again"` in the
 stand-in).

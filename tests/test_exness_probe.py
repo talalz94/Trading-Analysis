@@ -101,3 +101,15 @@ def test_on_a_1m_chart_every_higher_timeframe_is_asked(monkeypatch):
     rows = _rows(rt.run(rt.load(PROBE, monkeypatch), bars, bar_secs=60))
     assert all("candles" in r for r in rows[1:4]) and rows[5].startswith("OK")
     assert rows[3].startswith("4h: ")
+
+
+@pytest.mark.parametrize("seam, verdict", [("redo", "Recomputed cleanly"),
+                                           ("again", "NOTE: a candle was computed twice")])
+def test_on_a_1h_chart_the_4h_close_alone_gives_the_verdict(monkeypatch, seam, verdict):
+    # Exness, 27 Oct 2026: on a 1h chart only 4h is asked; its one live close answered the
+    # question (twice 0) while v2 still said "leave it running" -- it waited for 15m and 1h
+    bars = rt.htf_bars(rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv"), 60)
+    rows = _rows(rt.run(rt.load(PROBE, monkeypatch), bars, bar_secs=3600, realtime_last=6,
+                        seam=seam))
+    assert "not asked" in rows[1] and "not asked" in rows[2] and "early: history 0" in rows[3]
+    assert rows[5].startswith("OK") and rows[6].startswith(verdict)
