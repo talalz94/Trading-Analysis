@@ -10,9 +10,9 @@
 # of the part loaded. `Day starts` picks the clock: UTC midnight (as Exness's daily candles),
 # New York midnight, or 17:00 New York (the FX day, so Sunday evening belongs to Monday).
 #
-# SESSIONS: Sydney 07-16, Tokyo 09-18, London 08-17 and New York 08-17, each in ITS OWN clock with
-# its own daylight saving (London opens at 08:00 London time all year: 07:00 or 08:00 UTC), on its
-# own Monday to Friday. A session's high and low are drawn over the session (solid) and then
+# SESSIONS (charts of 1h and less): Sydney 07-16, Tokyo 09-18, London 08-17 and New York 08-17,
+# each in ITS OWN clock with its own daylight saving (London opens at 08:00 London time all year:
+# 07:00 or 08:00 UTC), on its own Monday to Friday. A session's high and low are drawn over the session (solid) and then
 # carried on (dotted) until the same session opens again, so Tokyo's range is still there in
 # London. While a session is open its lines show the high and low SO FAR.
 #
@@ -53,7 +53,8 @@ class Main(MainContext):
                  show_tokyo, show_london, show_new_york, extend, sessions_kept, day_color,
                  week_color, month_color, sydney_color, tokyo_color, london_color,
                  new_york_color):
-        self._secs = float(self.time_frame.to_minutes()) * 60.0
+        cm = self.time_frame.to_minutes()
+        self._secs = float(cm) * 60.0
         # the day's clock: zone (0 UTC, 1 New York) and a shift (+7 h: 17:00 New York -> midnight)
         self._dzone = 0
         self._dshift = 0.0
@@ -62,7 +63,10 @@ class Main(MainContext):
         if day_start == '17:00 New York (FX day)':
             self._dzone = 1
             self._dshift = 7.0 * 3600.0
-        self._pshow = [show_day, show_week, show_month]
+        # a period's levels on charts finer than the period only (on a daily chart the previous
+        # day is just the candle before)
+        self._pshow = [show_day and cm < 1440, show_week and cm < 10080,
+                       show_month and cm < 43200]
         self._pkept = [days_kept, max(2, days_kept // 5), 3]
         # colours by index: 0-2 day / week / month, 3-6 the sessions
         self._cols = [day_color, week_color, month_color, sydney_color, tokyo_color, london_color,
@@ -74,7 +78,11 @@ class Main(MainContext):
         self._sopen = [7.0, 9.0, 8.0, 8.0]
         self._sclose = [16.0, 18.0, 17.0, 17.0]
         self._sname = ['Sydney', 'Tokyo', 'London', 'New York']
-        self._sshow = [show_sydney, show_tokyo, show_london, show_new_york]
+        # sessions on charts whose candles fit inside the hour only: a 4h candle straddles a
+        # session's open and close, so its high could be from outside the session
+        fits = cm <= 60 and 60 % cm == 0
+        self._sshow = [show_sydney and fits, show_tokyo and fits, show_london and fits,
+                       show_new_york and fits]
         self._extend = extend
         self._skept = sessions_kept
         # period state: the current period's key, its high / low, whether the chart holds all of

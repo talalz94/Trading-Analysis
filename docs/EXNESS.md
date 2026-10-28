@@ -83,6 +83,16 @@ Every multi-timeframe indicator follows the same two rules, so none of them can 
    when a 1h candle closes, never while one forms.
 2. **The chart takes a higher timeframe's state only once its candle has closed by the chart
    candle's close.** If the terminal ever hands over a candle early, it is ignored.
+3. **At the very instant a candle closes, its state counts only if its close is the chart's
+   close.** A 1h candle and the 5m candle ending with it close at the same price, because they are
+   the same market at the same moment. Exness does not say whether, at that instant, the chart or
+   the 1h timeframe updates first. Chart first, just after a load, it could be handed the version
+   of that candle computed at load. That version fails this test, so the final one is taken a chart
+   candle later. Tested on real candles: a 1h support broken by a candle that had not broken it 5
+   minutes in, and a 15m candle whose first 5 minutes alone would confirm a swing it never makes.
+4. **A candle computed twice counts once.** Each timeframe keeps a copy of its state from before
+   the latest candle and starts again from it if the same candle comes back. Exness redoes it
+   anyway, so this is insurance.
 
 The tests run every indicator against two badly-behaved terminals as well as a correct one: one
 that shows the forming higher-timeframe candle live, and one that shows the first candle before it
@@ -132,6 +142,8 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
   trendlines use. A swing high is confirmed once price falls `Swing size` × ATR below the highest
   high since the last swing low, and the mirror for lows. A swing high above the previous one is HH,
   otherwise LH. A swing low above the previous one is HL, otherwise LL.
+- **Only swings the chart holds** are labelled. Each timeframe arrives with ~1,000 candles of its
+  own, mostly from before the chart's first candle; those swings are counted but not drawn.
 - **When a label appears:** on the candle that **confirms** the swing (for a 1h swing, at the close
   of the 1h candle that confirms it). It is **drawn** at the swing itself (for a 1h swing, at the
   chart candle that made that 1h candle's high or low). So it sits where the swing was but appears
@@ -166,7 +178,11 @@ probe says whether you have it.
   - **UTC midnight**: as Exness's own daily candles.
   - **New York midnight**.
   - **17:00 New York**: the FX day, so Sunday evening belongs to Monday.
-- **Sessions:** Sydney 07–16, Tokyo 09–18, London 08–17 and New York 08–17, each in **its own
+- **Each period shows only on charts finer than the period**: on a daily chart the previous day
+  is just the candle before, so it shows the week and month only.
+- **Sessions** show on charts of 1h and less, whose candles fit inside the hours; a 4h candle
+  straddles a session's open and close. Sydney 07–16, Tokyo 09–18, London 08–17 and New York
+  08–17, each in **its own
   clock** with its own daylight saving, Monday to Friday local. Each session's high and low are
   drawn over the session (solid), then carried on (dotted) until that session opens again. While a
   session is open, its lines show the high and low **so far**.

@@ -144,3 +144,50 @@ def test_settings_switch_timeframes_and_keep_labels_bounded(monkeypatch):
     ctx = rt.run(mod, bars, bar_secs=300, swing_size=6.0, labels_kept=10_000)
     want = _research(bars, 5, 5, swing=6.0)
     assert _labels(ctx, 0) == [(r["code"], r["px"], r["pt"]) for r in want]
+
+
+@pytest.mark.parametrize("seam", ["redo", "again"])
+def test_the_chart_running_before_its_timeframes_labels_the_same(monkeypatch, seam):
+    # chart first at a shared close (see test_exness_trendlines_mtf): every label names the same
+    # swing at the same candle; only when it appears can be a chart candle later
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")
+    mod = rt.load(STRUCT, monkeypatch)
+    plain = rt.run(mod, bars, bar_secs=300, labels_kept=10_000)
+    ctx = rt.run(mod, bars, bar_secs=300, labels_kept=10_000, realtime_last=400, seam=seam,
+                 main_first=True)
+
+    def labels(c):
+        return [(lab.text, lab.position.time, code, px, pt) for lab, code, px, pt in
+                zip(c._labs.get(), c._code.get(), c._px.get(), c._pt.get())]
+    assert labels(ctx) == labels(plain)
+    assert ctx.chart.peak <= 90 and ctx.chart.forming == 0
+
+
+def test_no_label_for_a_swing_from_before_the_chart(monkeypatch):
+    # each timeframe arrives with its own history, ~1,000 candles on Exness, far older than the
+    # chart's: swings from before the chart's first candle are counted but not drawn
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")
+    mod = rt.load(STRUCT, monkeypatch)
+    hist = {60: rt.htf_bars(bars, 60), 240: rt.htf_bars(bars, 240), 15: rt.htf_bars(bars, 15)}
+    chart = bars.iloc[3000:].reset_index(drop=True)            # the chart starts 10 days in
+    ctx = rt.run(mod, chart, bar_secs=300, labels_kept=10_000, frames=hist)
+    t0 = chart["open_time"].iloc[0].timestamp()
+    assert ctx._labs.get() and all(lab.position.time >= t0 for lab in ctx._labs.get())
+    for s in (1, 2):                                           # yet every swing was counted
+        want = _research(bars, [15, 60][s - 1], 5)
+        assert ctx._seen.get()[s] == len(want)
+
+
+@pytest.mark.parametrize("k0, what", [(589, "15m candle of 24 Sep 07:45"),
+                                      (2200, "1h candle of 1 Oct 22:00")])
+def test_a_candle_loaded_half_way_does_not_leave_a_swing_it_never_made(monkeypatch, k0, what):
+    # 5 minutes into these candles the zigzag would confirm a swing; the finished candle makes a
+    # new extreme instead, and confirms nothing. Loaded there, chart first at its close, the
+    # version computed at load must not become a label that stays for good
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")[:k0 + 60]
+    mod = rt.load(STRUCT, monkeypatch)
+    plain = rt.run(mod, bars, bar_secs=300, labels_kept=10_000)
+    ctx = rt.run(mod, bars, bar_secs=300, labels_kept=10_000, realtime_last=60, seam="redo",
+                 main_first=True)
+    assert [(c, p, t) for c, p, t in zip(ctx._code.get(), ctx._px.get(), ctx._pt.get())] == \
+        [(c, p, t) for c, p, t in zip(plain._code.get(), plain._px.get(), plain._pt.get())]

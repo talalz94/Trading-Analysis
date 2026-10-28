@@ -178,3 +178,21 @@ def test_live_candles_reruns_and_the_drawing_limit(monkeypatch):
     seg = ctx._seg_owner.get()
     assert seg.count(0) == 20 and all(seg.count(10 + s) == 20 for s in range(4))
     assert len(ctx.chart.items(rt.LineSegment)) == len(seg)
+
+
+def test_sessions_only_where_candles_fit_inside_the_hour_and_periods_above_the_chart(
+        monkeypatch):
+    # a 4h candle straddles a session's open and close, so its high could be from outside the
+    # session; on a daily chart the previous day is just the candle before
+    mod = rt.load(LEVELS, monkeypatch)
+    hourly = _synthetic("2026-01-25 23:00", 130)
+    owners = lambda c: set(c._seg_owner.get())
+    one_h = rt.run(mod, hourly, bar_secs=3600, **ALL)
+    assert {10, 11, 12, 13} <= owners(one_h) and {0, 1, 2} <= owners(one_h)
+    four_h = rt.run(mod, rt.htf_bars(hourly, 240), bar_secs=4 * 3600, **ALL)
+    assert owners(four_h) == {0, 1, 2}                          # no sessions
+    daily = rt.run(mod, rt.htf_bars(hourly, 1440), bar_secs=86400, **ALL)
+    assert owners(daily) == {1, 2}                              # no day levels, no sessions
+    # what is drawn above the chart is still period_levels'
+    want = _want_periods(rt.htf_bars(hourly, 1440), "W", "UTC midnight")
+    assert _segments(daily, daily._cols[1], "dashed") == want

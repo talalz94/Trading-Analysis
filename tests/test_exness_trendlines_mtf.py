@@ -258,3 +258,43 @@ def test_the_fitter_is_trendlines_pys_own_copied_unchanged():
     spec.loader.exec_module(sync)
     want = sync.fitter_block((ROOT / "exness" / "trendlines.py").read_text(encoding="utf-8"))
     assert sync.current_block(MTF.read_text(encoding="utf-8")) == want
+
+
+@pytest.mark.parametrize("seam", ["redo", "again"])
+def test_the_chart_running_before_its_timeframes_draws_the_same(monkeypatch, seam):
+    # Exness does not say whether, at a shared close, the chart or the higher timeframe updates
+    # first. Chart first, it is handed the candle closing now before that timeframe has finished
+    # it (after a load, the version computed at load): a state at its own close is taken only if
+    # its close IS the chart's close, else a chart candle later. Every line, end and early mark is
+    # the clean run's; only a live line's tip can sit a candle further on
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")[:3000]
+    mod = rt.load(MTF, monkeypatch)
+    plain = rt.run(mod, bars, bar_secs=300, max_kept=10_000, marks_kept=10_000)
+    ctx = rt.run(mod, bars, bar_secs=300, max_kept=10_000, marks_kept=10_000, realtime_last=400,
+                 seam=seam, main_first=True)
+
+    def drawn(c):
+        old = sorted(zip(map(repr, map(rt.plain, c._old.get())), c._old_slot.get(),
+                         c._old_broke.get()))
+        live = sorted((k, rt.plain(c._seg.get()[k])[1:3]) for k in range(8) if c._cur.get()[k] >= 0)
+        return old, live, list(zip(c._mk_k.get(), c._mk_t.get()))
+    assert drawn(ctx) == drawn(plain)
+    assert ctx.chart.peak <= 90 and ctx.chart.forming == 0
+
+
+@pytest.mark.parametrize("k0, what", [(1933, "15m resistance broken by the 30 Sep 23:45 candle"),
+                                      (4801, "1h support broken by the 14 Oct 23:00 candle")])
+def test_a_break_candle_loaded_half_way_is_not_taken_unfinished(monkeypatch, k0, what):
+    # The chart goes live 5 minutes into the candle that BREAKS a line; after those 5 minutes the
+    # line still held. Chart first at that candle's close, it is handed the version computed at
+    # load: taken as it is, the line would stay live, then end as DROPPED, never as broken. Its
+    # close is not the chart's close at that instant, so it waits a chart candle for the final one
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")[:k0 + 60]
+    mod = rt.load(MTF, monkeypatch)
+    plain = rt.run(mod, bars, bar_secs=300, max_kept=10_000, marks_kept=10_000)
+    ctx = rt.run(mod, bars, bar_secs=300, max_kept=10_000, marks_kept=10_000, realtime_last=60,
+                 seam="redo", main_first=True)
+    assert 1 in plain._old_broke.get()
+    assert list(zip(ctx._old_slot.get(), ctx._old_broke.get())) == \
+        list(zip(plain._old_slot.get(), plain._old_broke.get()))
+    assert [rt.plain(o) for o in ctx._old.get()] == [rt.plain(o) for o in plain._old.get()]

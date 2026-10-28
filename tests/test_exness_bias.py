@@ -168,3 +168,36 @@ def test_lower_timeframes_only_when_asked(monkeypatch):
     ctx = rt.run(mod, five, bar_secs=300, try_lower=True, lower_ok=True, frames={1: one})
     row = ctx._rows.get()[0].text
     assert row.startswith("1m  ") and add_bias(one)["bias_label"].iloc[-1] in row
+
+
+@pytest.mark.parametrize("seam", ["redo", "again"])
+def test_the_chart_running_before_its_timeframes_ends_on_the_same_panel(monkeypatch, seam):
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")
+    mod = rt.load(BIAS, monkeypatch)
+    plain = rt.run(mod, bars, bar_secs=300)
+    got = []
+    ctx = rt.run(mod, bars, bar_secs=300, realtime_last=400, seam=seam, main_first=True,
+                 spy=lambda c: got.append(list(c._last.get())))
+    assert [r.text for r in ctx._rows.get()] == [r.text for r in plain._rows.get()]
+    close = (bars["open_time"].astype("int64") // 10**9).to_numpy(float) + 300
+    for k, row in enumerate(got):                              # and never ahead on the way
+        for s, m in enumerate(MINS):
+            if not np.isnan(row[s * 8 + 7]):
+                assert row[s * 8 + 7] + m * 60 <= close[k]
+
+
+def test_a_candle_loaded_half_way_never_shows_its_unfinished_bias(monkeypatch):
+    # loaded 5 minutes into the 14 Oct 23:00 1h candle, chart first at its close: on every chart
+    # candle each line is the clean run's on that candle or the one before -- never the version
+    # computed at load (its EMAs, from a 5-minute close, match neither)
+    k0 = 4801
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")[:k0 + 60]
+    mod = rt.load(BIAS, monkeypatch)
+    want, got = [], []
+    rt.run(mod, bars, bar_secs=300, spy=lambda c: want.append(rt.plain(c._last.get())))
+    rt.run(mod, bars, bar_secs=300, realtime_last=60, seam="redo", main_first=True,
+           spy=lambda c: got.append(rt.plain(c._last.get())))
+    for k in range(k0, len(bars)):
+        for s in range(6):
+            row = got[k][s * 8:s * 8 + 8]
+            assert row in (want[k][s * 8:s * 8 + 8], want[k - 1][s * 8:s * 8 + 8]), (k, MINS[s])
