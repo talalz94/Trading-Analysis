@@ -2796,3 +2796,13 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   candle is REDONE from scratch (Indie's rollback); the _once guard is insurance, not a fix. v2's
   last line still said "leave it running": it waited for 15m/1h closes, which a 1h chart never
   asks -- the verdict now takes any timeframe asked.
+- Bug review after the probes (28 Oct): (1) the ORDER at a shared close is undocumented: chart
+  first, after a load, it could take the load-time version of a candle closing that instant and
+  never re-take it (a 1h support broken by a candle that held 5 minutes in became DROPPED, not
+  broken; a 15m candle whose first 5 minutes confirm a swing it never makes left that label for
+  good). A state at its own close now counts only if its close is the chart's close; otherwise
+  a chart candle later. Stand-in `main_first=True`; the three mutants are caught by those real
+  candles. (2) structure drew one label, the latest, for swings from before the chart's first
+  candle (each timeframe brings ~1,000 candles of its own): none now. (3) levels: sessions on
+  charts of 1h and less only (a 4h candle straddles a session), each period only on charts finer
+  than it.

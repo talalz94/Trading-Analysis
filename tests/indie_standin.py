@@ -22,6 +22,9 @@ What it models, each from the Indie docs or from what Exness did to the FVG indi
     is handed to the chart as the freshest data. `seam="redo"` then recomputes that candle from
     scratch when it really closes (Indie's rollback); `seam="again"` computes it a second time on
     top of the first. Which one Exness does is what probe v2 measures;
+  - ORDER at a shared close: `main_first=True` runs the chart's closing update of a live candle
+    BEFORE the higher-timeframe candles that close at the same instant (which order Exness uses is
+    not documented); by default they run first;
   - @param_ref: a secondary context's __init__ gets the chart's settings by id.
 """
 from __future__ import annotations
@@ -300,8 +303,8 @@ def _setup(ctx, data, minutes):
 
 
 def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lower_ok=False,
-        live_merge="closed", backfill_first=False, lookahead=False, seam=None, spy=None,
-        **settings):
+        live_merge="closed", backfill_first=False, lookahead=False, seam=None, main_first=False,
+        spy=None, **settings):
     """Feed `bars` candle by candle the way Exness does. Every secondary context runs on its own
     timeframe's candles (from `frames` {minutes: DataFrame}, else bucketed from `bars`), each closed
     candle once, before the first chart candle that closes at or after it. `spy(ctx)` is called
@@ -358,10 +361,14 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
         ctx.is_closed_bar = closed
         ctx.is_last_bar = live or k == n - 1          # live, every new candle is the last one
         close_t = full["time"][k] + S
+        late = main_first and live and closed            # the chart before its timeframes
         for r in ctx._requests:
-            _advance(r, k, close_t, live and live_merge == "forming",
+            _advance(r, k, close_t - (1 if late else 0), live and live_merge == "forming",
                      close_t - S if lookahead else None, live)
         ctx.calc()
+        if late:
+            for r in ctx._requests:
+                _advance(r, k, close_t, False, None, live)
         if not closed:
             ctx.chart.forming += ctx.chart.changes
 

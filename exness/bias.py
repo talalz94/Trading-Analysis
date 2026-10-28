@@ -310,7 +310,12 @@ class Main(MainContext):
                 if self._on[s]:
                     v = self._vals(s)
                     m = float(self._mins[s]) * 60.0
-                    if not isnan(v[7]) and v[7] + m <= close_t:
+                    # a state is taken once its candle has CLOSED by this candle's close -- and at
+                    # that very close only if its close is this candle's close (the same market at
+                    # the same instant): otherwise it may not be final yet, and it is taken a
+                    # chart candle later
+                    done = v[7] + m < close_t or (v[7] + m == close_t and v[5] == self.close[0])
+                    if not isnan(v[7]) and done:
                         for q in range(8):
                             self._last.get()[s * 8 + q] = v[q]
         if self.is_last_bar:

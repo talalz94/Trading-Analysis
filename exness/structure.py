@@ -54,6 +54,7 @@ class Swings(SecContext):
         self._trend = self.new_var(0)                 # +1 HH+HL, -1 LH+LL, 0 mixed
         self._j = self.new_var(-1)                    # the latest closed candle, and its time
         self._tj = self.new_var(nan)
+        self._c = self.new_var(nan)                   # and its close
         # the state before the latest candle, for when it is computed again
         self._k_atr_w = self.new_var(self._atr_w.get())
         self._k_atr_n = self.new_var(self._atr_n.get())
@@ -73,6 +74,7 @@ class Swings(SecContext):
         self._k_trend = self.new_var(self._trend.get())
         self._k_j = self.new_var(self._j.get())
         self._k_tj = self.new_var(self._tj.get())
+        self._k_c = self.new_var(self._c.get())
         self._done_t = self.new_var(nan)        # the latest candle computed
 
     def calc(self):
@@ -80,7 +82,8 @@ class Swings(SecContext):
             self._once()
             self._step()
         return (float(self._count.get()), float(self._label.get()), self._px.get(),
-                self._pt.get(), float(self._trend.get()), float(self._j.get()), self._tj.get())
+                self._pt.get(), float(self._trend.get()), float(self._j.get()), self._tj.get(),
+                self._c.get())
 
     def _save(self) -> None:
         self._k_atr_w.set(self._atr_w.get())
@@ -101,6 +104,7 @@ class Swings(SecContext):
         self._k_trend.set(self._trend.get())
         self._k_j.set(self._j.get())
         self._k_tj.set(self._tj.get())
+        self._k_c.set(self._c.get())
 
     def _load(self) -> None:
         self._atr_w.set(self._k_atr_w.get())
@@ -121,6 +125,7 @@ class Swings(SecContext):
         self._trend.set(self._k_trend.get())
         self._j.set(self._k_j.get())
         self._tj.set(self._k_tj.get())
+        self._c.set(self._k_c.get())
 
     def _once(self) -> None:
         """Exness computes a timeframe's still-forming candle as if closed when a chart
@@ -160,6 +165,7 @@ class Swings(SecContext):
         a = self._atr()
         self._j.set(i)
         self._tj.set(self.time[0])
+        self._c.set(self.close[0])
         t = a * self._swing
         if isnan(t) or t <= 0:
             return
@@ -243,14 +249,14 @@ class Main(MainContext):
         self._kept = labels_kept
         self._up = up_color
         self._down = down_color
-        (self._a0, self._a1, self._a2, self._a3, self._a4, self._a5,
-         self._a6) = self.calc_on(Swings, time_frame=self.time_frame)
-        (self._b0, self._b1, self._b2, self._b3, self._b4, self._b5,
-         self._b6) = self.calc_on(Swings, time_frame=self._tf('15m'))
-        (self._c0, self._c1, self._c2, self._c3, self._c4, self._c5,
-         self._c6) = self.calc_on(Swings, time_frame=self._tf('1h'))
-        (self._d0, self._d1, self._d2, self._d3, self._d4, self._d5,
-         self._d6) = self.calc_on(Swings, time_frame=self._tf('4h'))
+        (self._a0, self._a1, self._a2, self._a3, self._a4, self._a5, self._a6,
+         self._a7) = self.calc_on(Swings, time_frame=self.time_frame)
+        (self._b0, self._b1, self._b2, self._b3, self._b4, self._b5, self._b6,
+         self._b7) = self.calc_on(Swings, time_frame=self._tf('15m'))
+        (self._c0, self._c1, self._c2, self._c3, self._c4, self._c5, self._c6,
+         self._c7) = self.calc_on(Swings, time_frame=self._tf('1h'))
+        (self._d0, self._d1, self._d2, self._d3, self._d4, self._d5, self._d6,
+         self._d7) = self.calc_on(Swings, time_frame=self._tf('4h'))
         self._atr_len = 14
         a0 = 1.0 / float(self._atr_len)
         com = (1.0 - a0) / a0
@@ -260,6 +266,7 @@ class Main(MainContext):
         self._atr_n = self.new_var(0)
         self._prev_close = self.new_var(0.0)
         self._seen = self.new_var([0, 0, 0, 0])       # swings already labelled, per timeframe
+        self._t0 = self.new_var(nan)                  # the chart's first candle
         # each higher timeframe's recent candles as the chart saw them: open time, and the chart
         # candle that made its high and its low -- where a swing of that timeframe is drawn
         bt: list[float] = []
@@ -300,15 +307,15 @@ class Main(MainContext):
     def _vals(self, s: int) -> list[float]:
         if s == 0:
             return [self._a0[0], self._a1[0], self._a2[0], self._a3[0], self._a4[0], self._a5[0],
-                    self._a6[0]]
+                    self._a6[0], self._a7[0]]
         if s == 1:
             return [self._b0[0], self._b1[0], self._b2[0], self._b3[0], self._b4[0], self._b5[0],
-                    self._b6[0]]
+                    self._b6[0], self._b7[0]]
         if s == 2:
             return [self._c0[0], self._c1[0], self._c2[0], self._c3[0], self._c4[0], self._c5[0],
-                    self._c6[0]]
+                    self._c6[0], self._c7[0]]
         return [self._d0[0], self._d1[0], self._d2[0], self._d3[0], self._d4[0], self._d5[0],
-                self._d6[0]]
+                self._d6[0], self._d7[0]]
 
     def calc(self):
         if not self.is_closed_bar:
@@ -316,6 +323,8 @@ class Main(MainContext):
         a = self._atr()
         t = self.time[0]
         close_t = t + self._secs
+        if isnan(self._t0.get()):
+            self._t0.set(t)
         for s in range(1, 4):
             if self._on[s]:
                 self._bucket(s, t)
@@ -323,8 +332,12 @@ class Main(MainContext):
             if self._on[s]:
                 v = self._vals(s)
                 m = float(self._mins[s]) * 60.0
-                # only a candle that has CLOSED by this chart candle's close is used
-                if not isnan(v[0]) and not isnan(v[6]) and v[6] + m <= close_t:
+                # a state is taken once its candle has CLOSED by this candle's close -- and at
+                # that very close only if its close is this candle's close (the same market at
+                # the same instant): otherwise it may not be final yet, and it is taken a
+                # chart candle later
+                done = v[6] + m < close_t or (v[6] + m == close_t and v[7] == self.close[0])
+                if not isnan(v[0]) and not isnan(v[6]) and done:
                     if int(v[0]) > self._seen.get()[s]:
                         self._seen.get()[s] = int(v[0])
                         self._label(s, int(v[1]), v[2], v[3], a)
@@ -393,6 +406,9 @@ class Main(MainContext):
 
     def _label(self, s: int, code: int, px: float, pt: float, a: float) -> None:
         high = code > 0
+        x = self._where(s, pt, high)
+        if x < self._t0.get():
+            return                     # a swing from before the chart's first candle: not drawn
         word = 'LL'
         if code == 2:
             word = 'HH'
@@ -409,7 +425,7 @@ class Main(MainContext):
         y = px - off
         if high:
             y = px + off
-        lab = LabelAbs(self._names[s] + word, AbsolutePosition(self._where(s, pt, high), y),
+        lab = LabelAbs(self._names[s] + word, AbsolutePosition(x, y),
                        bg_color=col(0.15 + 0.1 * float(s)), text_color=col,
                        font_size=9 + 2 * s)
         self._labs.get().append(lab)

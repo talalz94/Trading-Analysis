@@ -49,7 +49,7 @@ from indie.drawings import LineSegment, LabelAbs, AbsolutePosition
 class Lines(SecContext):
     """exness/trendlines.py's fitter on this context's own candles. After each closed candle it
     returns, per side (resistance, support): on, born, broke this candle, born candle's time, first
-    touch, its time, slope, intercept -- and the candle's index and open time."""
+    touch, its time, slope, intercept -- and the candle's index, open time and close."""
     def __init__(self, preset, swing_size, min_touches, touch_tol, wick_tol, max_distance, hold,
                  span, prefer_newer):
         mode = preset
@@ -124,7 +124,7 @@ class Lines(SecContext):
         self._level = self.new_var([nan, nan])
         self._brk = self.new_var([False, False])
         out: list[float] = []
-        for k in range(18):
+        for k in range(19):
             out.append(nan)
         self._out = self.new_var(out)
         # the state before the latest candle, for when it is computed again
@@ -171,7 +171,7 @@ class Lines(SecContext):
             self._emit(i)
         o = self._out.get()
         return (o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], o[8], o[9], o[10], o[11],
-                o[12], o[13], o[14], o[15], o[16], o[17])
+                o[12], o[13], o[14], o[15], o[16], o[17], o[18])
 
     def _emit(self, i: int) -> None:
         o = self._out.get()
@@ -198,6 +198,7 @@ class Lines(SecContext):
                 o[b + 7] = self._icpt.get()[s]
         o[16] = float(i)
         o[17] = self.time[0]
+        o[18] = self.close[0]
 
     def _save(self) -> None:
         self._k_atr_w.set(self._atr_w.get())
@@ -638,16 +639,16 @@ class Main(MainContext):
         self._old_color = old_color
         (self._a0, self._a1, self._a2, self._a3, self._a4, self._a5, self._a6, self._a7,
          self._a8, self._a9, self._a10, self._a11, self._a12, self._a13, self._a14, self._a15,
-         self._a16, self._a17) = self.calc_on(Lines, time_frame=self.time_frame)
+         self._a16, self._a17, self._a18) = self.calc_on(Lines, time_frame=self.time_frame)
         (self._b0, self._b1, self._b2, self._b3, self._b4, self._b5, self._b6, self._b7,
          self._b8, self._b9, self._b10, self._b11, self._b12, self._b13, self._b14, self._b15,
-         self._b16, self._b17) = self.calc_on(Lines, time_frame=self._tf('15m'))
+         self._b16, self._b17, self._b18) = self.calc_on(Lines, time_frame=self._tf('15m'))
         (self._c0, self._c1, self._c2, self._c3, self._c4, self._c5, self._c6, self._c7,
          self._c8, self._c9, self._c10, self._c11, self._c12, self._c13, self._c14, self._c15,
-         self._c16, self._c17) = self.calc_on(Lines, time_frame=self._tf('1h'))
+         self._c16, self._c17, self._c18) = self.calc_on(Lines, time_frame=self._tf('1h'))
         (self._d0, self._d1, self._d2, self._d3, self._d4, self._d5, self._d6, self._d7,
          self._d8, self._d9, self._d10, self._d11, self._d12, self._d13, self._d14, self._d15,
-         self._d16, self._d17) = self.calc_on(Lines, time_frame=self._tf('4h'))
+         self._d16, self._d17, self._d18) = self.calc_on(Lines, time_frame=self._tf('4h'))
         self._atr_len = 14
         a0 = 1.0 / float(self._atr_len)
         com = (1.0 - a0) / a0
@@ -718,21 +719,21 @@ class Main(MainContext):
             return [self._a0[0], self._a1[0], self._a2[0], self._a3[0], self._a4[0], self._a5[0],
                     self._a6[0], self._a7[0], self._a8[0], self._a9[0], self._a10[0],
                     self._a11[0], self._a12[0], self._a13[0], self._a14[0], self._a15[0],
-                    self._a16[0], self._a17[0]]
+                    self._a16[0], self._a17[0], self._a18[0]]
         if s == 1:
             return [self._b0[0], self._b1[0], self._b2[0], self._b3[0], self._b4[0], self._b5[0],
                     self._b6[0], self._b7[0], self._b8[0], self._b9[0], self._b10[0],
                     self._b11[0], self._b12[0], self._b13[0], self._b14[0], self._b15[0],
-                    self._b16[0], self._b17[0]]
+                    self._b16[0], self._b17[0], self._b18[0]]
         if s == 2:
             return [self._c0[0], self._c1[0], self._c2[0], self._c3[0], self._c4[0], self._c5[0],
                     self._c6[0], self._c7[0], self._c8[0], self._c9[0], self._c10[0],
                     self._c11[0], self._c12[0], self._c13[0], self._c14[0], self._c15[0],
-                    self._c16[0], self._c17[0]]
+                    self._c16[0], self._c17[0], self._c18[0]]
         return [self._d0[0], self._d1[0], self._d2[0], self._d3[0], self._d4[0], self._d5[0],
                 self._d6[0], self._d7[0], self._d8[0], self._d9[0], self._d10[0], self._d11[0],
                 self._d12[0], self._d13[0], self._d14[0], self._d15[0], self._d16[0],
-                self._d17[0]]
+                self._d17[0], self._d18[0]]
 
     def calc(self):
         if not self.is_closed_bar:
@@ -745,8 +746,12 @@ class Main(MainContext):
                 v = self._vals(s)
                 m = float(self._mins[s]) * 60.0
                 tj = v[17]
-                # a state is taken only once its candle has CLOSED by this candle's close
-                if not isnan(tj) and tj + m <= close_t and tj != self._ltj.get()[s]:
+                # a state is taken once its candle has CLOSED by this candle's close -- and at
+                # that very close only if its close is this candle's close (the same market at
+                # the same instant): otherwise it may not be final yet, and it is taken a
+                # chart candle later
+                done = tj + m < close_t or (tj + m == close_t and v[18] == self.close[0])
+                if not isnan(tj) and done and tj != self._ltj.get()[s]:
                     self._take_state(s, v)
                 for side in range(2):
                     k = s * 2 + side
