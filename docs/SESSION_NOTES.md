@@ -2791,3 +2791,8 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   changed over 400 live candles, so each timeframe context now keeps a copy of its state from
   before the latest candle (_save / _load / _once), and the same candle a second time starts from
   that copy. Exact under both. Probe v2 says which one Exness does ("twice ... (changed ...)").
+- Probe v2 on Exness (US Tech 100, 1h chart, 27 Oct): 4h 1,234 candles / 279.5 days, early: history
+  0, live 2, forming live 2/3, twice 0 (changed 0) in 2 last-candle closes, wrong 0. The seam
+  candle is REDONE from scratch (Indie's rollback); the _once guard is insurance, not a fix. v2's
+  last line still said "leave it running": it waited for 15m/1h closes, which a 1h chart never
+  asks -- the verdict now takes any timeframe asked.

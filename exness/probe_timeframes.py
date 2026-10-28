@@ -18,7 +18,9 @@
 #      switching to live is handed each timeframe's freshest candle -- and whether a candle is
 #      computed TWICE: Exness computes the still-forming higher-timeframe candle as if closed while
 #      loading; when it really closes, is it redone from scratch or computed again on top? Leave
-#      the probe running past a 1h close for that line to mean something.
+#      the probe running past a close of a timeframe above the chart for that line to mean
+#      something. ANSWERED 27 Oct 2026 (US Tech 100, 1h chart, a live 4h close): redone from
+#      scratch -- twice 0. History early views 0 on 279 days of 4h.
 #
 # Put it on a 1m or 5m chart. The last line says ALL GOOD, or what failed. If the editor refuses to
 # save or add it, the error message is the answer: copy it back.
@@ -170,7 +172,7 @@ class Main(MainContext):
         good = True
         twice = 0
         changed = 0
-        closes = 99
+        closes = 0
         for s in range(4):
             name = self._names[s]
             if not self._on[s]:
@@ -196,8 +198,7 @@ class Main(MainContext):
                 good = False
             twice += int(v[7])
             changed += int(v[8])
-            if s < 2:                                  # 15m and 1h: one closes live soon
-                closes = min(closes, int(v[9]))
+            closes = max(closes, int(v[9]))            # any timeframe asked: one live close
         if good:
             text.append('OK: nothing early on history; early views only live, which the indicators ignore')
         else:
@@ -206,10 +207,10 @@ class Main(MainContext):
             text.append('NOTE: a candle was computed twice with different values -- send this panel to Claude')
         elif twice > 0:
             text.append('A candle was computed twice with the same values -- send this panel to Claude')
-        elif closes >= 2 and closes < 99:
+        elif closes >= 2:                              # the load's candle + a real close
             text.append('Recomputed cleanly: no candle computed twice')
         else:
-            text.append('Leave it running past the next 1h close, then look again')
+            text.append('Leave it running past the next close of a timeframe above, then look again')
         for r in range(7):
             t = ''
             if r < len(text):
