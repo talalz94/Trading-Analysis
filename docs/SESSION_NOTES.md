@@ -2826,3 +2826,24 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
 - Found on the way: moves were looked for on candles cut at the test's start, though "sharp" is
   judged against the day before and fetch_bars fetches that day for it -- so no move could be
   found in the first 4 hours. Moves are now found on all candles, then kept from the start.
+
+### The headline test's final report: no source beats chance (2026-11-01)
+
+- 22 Oct 01:32 -> 30 Oct 13:32 UTC, 8.5 days, 20,593 timed headlines, 12 sources, run on the server
+  with the chance baseline (ff0670b).
+- SPEED and RELIABILITY: FinancialJuice RSS is the source -- first on 93% of 1,372 shared stories,
+  258 headlines a day, a median 43 s from its own time to ours, 99.1% of polls ok. Its Telegram copy
+  is 24 s behind it; Walter Bloomberg's Telegram 19 s behind (first on 42% of the 158 it shared),
+  49 a day. investingLive appears ~33 min after its own time; Google News 25-55 min, 300-690 a day,
+  180-390 flagged a day by the draft rules. The State Dept press feed is broken (2.9% of polls ok,
+  a 56-hour gap); the Fed's feed posted nothing.
+- COVERAGE: 52 sharp moves. Against random moments with the same keyword matching, every source
+  reads "chance": investingLive 46% vs 40%, Walter 33% vs 26-29% (p_near 0.068 -- with 12 sources,
+  one under 0.07 is expected by luck), FinancialJuice 65% vs 64-65%, Google News 92-98% vs 89-99%.
+  The "first headline" on the biggest BTC moves were a Nicki Minaj story, Iranian online schools and
+  SpaceX results: broad words ("trump", "war", "bitcoin") match something every few minutes.
+- Read: keyword-matched headlines do not explain sharp moves better than chance, so a headline is
+  not an alert trigger or an explanation. If a breaking-news pop-up is still wanted for the rare big
+  event, FinancialJuice RSS is the feed (Walter's Telegram as backup) with rules tightened far below
+  its ~41 flagged a day. Limits: 52 moves is small, keyword matching is crude, and the two misses
+  that motivated the test (Gold 21 Oct, 23 Oct) predate it or were scheduled news.
