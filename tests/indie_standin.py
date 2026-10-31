@@ -124,11 +124,23 @@ class TimeFrame:
         return self._m
 
 
+class SeriesOutOfSize(RuntimeError):
+    pass
+
+
 class Series:
+    """A candle series. Exness's rule (30 Oct 2026, "Series offset=510 is out of size=506"): a
+    series grows to whatever depth is read while the chart LOADS, and once it is live a read
+    deeper than that is an error."""
     def __init__(self, ctx, name):
         self.ctx, self.name = ctx, name
+        self.size = 2
 
     def __getitem__(self, k):
+        if k >= self.size:
+            if getattr(self.ctx, "_live_now", False):
+                raise SeriesOutOfSize(f"Series offset={k} is out of size={self.size}")
+            self.size = k + 1
         j = self.ctx.bar_index - k
         return float(self.ctx.data[self.name][j]) if j >= 0 else nan
 
@@ -360,6 +372,7 @@ def run(module, bars, bar_secs=60, *, frames=None, realtime_last=0, rerun=(), lo
         ctx.chart.changes = 0
         ctx.is_closed_bar = closed
         ctx.is_last_bar = live or k == n - 1          # live, every new candle is the last one
+        ctx._live_now = live
         close_t = full["time"][k] + S
         late = main_first and live and closed            # the chart before its timeframes
         for r in ctx._requests:
@@ -410,15 +423,16 @@ def _seam(req, bars, full, k0, mode):
     req.ctx.data["low"][h] = full["low"][inside].min()
     req.ctx.data["close"][h] = full["close"][inside][-1]
     before = {id(v): copy.deepcopy(v.work) for v in req.ctx._vars}
-    _sec_closed(req, h, True)
+    _sec_closed(req, h, True, loading=True)       # computed while the chart loads
     for c, v in keep.items():
         req.ctx.data[c][h] = v
     req.next = h                                        # it closes for real later
     req.redo = (h, before) if mode == "redo" else None
 
 
-def _sec_closed(req, h, live=False):
+def _sec_closed(req, h, live=False, loading=False):
     sec = req.ctx
+    sec._live_now = live and not loading
     redo = getattr(req, "redo", None)
     if redo is not None and redo[0] == h:              # Indie's rollback: from before it
         for v in sec._vars:
@@ -444,6 +458,7 @@ def _advance(req, k, close_t, forming, opened_by=None, live=False):
         sec, h = req.ctx, req.next
         saved = {id(v): copy.deepcopy(v.work) for v in sec._vars}
         sec.bar_index, sec.is_closed_bar = h, False
+        sec._live_now = True
         out = sec.calc()
         for v in sec._vars:
             v.work = saved[id(v)]

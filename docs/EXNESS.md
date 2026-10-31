@@ -205,8 +205,16 @@ Learnt on the FVG indicator, and the reason each file looks the way it does:
   is updated, even after it closed. A plain list doesn't roll back.
 - **At most 100 drawing changes per update.** Every file makes at most 90, erasures first. What
   doesn't fit waits for the next candle, and only the drawing waits, never the logic.
-- **Run time and how far back a script may read are not published.** The trendline indicators read
-  up to ~660 candles back on 12 days of 1m data.
+- **How far back a script may read its candles, learnt the hard way** (Gold 1m, 30 Oct 2026:
+  `Series offset=510 is out of size=506`): a candle series grows to whatever depth is read while
+  the chart loads, and once it is live, a deeper read is an error. A trendline checked live can
+  reach further back than any did while loading, so both trendline indicators now keep their own
+  copy of the last 2,000 candles and read only that. The deepest any line needed on six long
+  histories (1m to 4h, 6,000 to 60,000 candles each) was 769 candles, and drawing one 979; a line
+  older than 2,000 candles would not be drawn rather than fail. The stand-in enforces the rule, and
+  a test goes live just before the deepest check of a run: the old code fails it with the same
+  error.
+- **Run time is not published.**
 
 ## Tests
 

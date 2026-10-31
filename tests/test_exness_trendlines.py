@@ -72,10 +72,17 @@ class Var:
 
 
 class Series:
+    """Exness's rule: a series grows to the depth read while the chart LOADS; live, a deeper
+    read is an error ("Series offset=510 is out of size=506", 30 Oct 2026)."""
     def __init__(self, ctx, name):
         self.ctx, self.name = ctx, name
+        self.size = 2
 
     def __getitem__(self, k):
+        if k >= self.size:
+            if getattr(self.ctx, "_live_now", False):
+                raise RuntimeError(f"Series offset={k} is out of size={self.size}")
+            self.size = k + 1
         j = self.ctx.bar_index - k
         return float(self.ctx.data[self.name][j]) if j >= 0 else float("nan")
 
@@ -196,6 +203,7 @@ def run(monkeypatch, bars, bar_secs=60, realtime_last=0, rerun=(), corrected=Non
     for k in range(n):
         ctx.bar_index = k
         live = k >= n - realtime_last
+        ctx._live_now = live
         if live or k in rerun:
             state = {id(v): copy.deepcopy(v.work) for v in ctx._vars}
             state["chart"] = copy.deepcopy(ctx.chart.on)
@@ -429,6 +437,7 @@ def test_a_support_above_a_resistance_drops_the_weaker_without_a_break(
     ctx, _, _ = run(monkeypatch, _bars("usdjpy_5m_2026-10-22.csv")[:60], bar_secs=300)
     i = ctx.bar_index
     ctx.data["close"][i] = close
+    ctx._hc.get()[-1] = close                       # the fitter reads its own kept candles
     ctx._on.set([True, True])
     ctx._slope.set([0.0, 0.0])
     ctx._icpt.set([100.0, 101.0])                  # the support sits a point ABOVE the resistance

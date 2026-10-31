@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SINGLE = ROOT / "exness" / "trendlines.py"
 MTF = ROOT / "exness" / "trendlines_mtf.py"
 FIT = ["_atr", "_zigzag", "_add_pivot", "_price", "_clear", "_rowsum", "_fit_side", "_better",
-       "_take", "_retire", "_publish"]
+       "_take", "_retire", "_publish", "_remember", "_t_ago"]
 CUT = [("_take", "                if self._seg_on.get()[s]:\n"
                  "                    self._place(s, self._seg_tip.get()[s])    # its whole span"
                  " moves with it\n"),
