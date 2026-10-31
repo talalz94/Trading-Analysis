@@ -4,7 +4,9 @@ source on the four questions that decide the headlines layer:
 
   SPEED        on every story two or more sources carried, how far each was behind the first
   COVERAGE     every sharp Gold / USDJPY / BTC move: which sources had a matching headline, and
-               how long before or after the move started
+               how long before or after the move started -- against CHANCE: the same matching on
+               random moments (the move's own day, and 1-3 h either side), because a busy source
+               "covers" moves by luck. Only a source beating both is credited
   NOISE        headlines a day, and how many the draft keyword rules would flag
   RELIABILITY  failed downloads, the longest silence, the printed time vs when we first saw it
 
@@ -63,6 +65,13 @@ MARKET_WORDS = {
 MOVE_FLOOR = {"Gold": 0.0025, "USDJPY": 0.0012, "BTC": 0.005}   # a 5-minute move at least this
 MOVE_K = 6.0                               # ... and K times the day's typical 5-minute move
 MOVE_WINDOW = (pd.Timedelta(minutes=-15), pd.Timedelta(minutes=20))
+# THE CHANCE BASELINE: a busy source "covers" moves by luck (Google News, 300-600 headlines a day,
+# matched BTC's biggest drop to a headline about Ukraine), so coverage counts only above what the
+# same matching gives RANDOM moments: on the move's own day (the project's within-day shuffle),
+# and 1-3 hours either side of it (keeps the hour: moves and headlines both crowd the US session)
+CHANCE_DRAWS = 500
+NEAR = (pd.Timedelta(hours=1), pd.Timedelta(hours=3))
+CREDIT_P = 0.05                            # credited only below this against BOTH baselines
 
 
 def load(db_path=DB):
@@ -204,9 +213,70 @@ def find_moves(bars: pd.DataFrame, market: str) -> pd.DataFrame:
     return pd.DataFrame(out, columns=["market", "start", "move_pct"])
 
 
-def coverage(moves: pd.DataFrame, d: pd.DataFrame, sources: List[str]):
+def _ns(times: pd.Series) -> np.ndarray:
+    """Timestamps as int64 nanoseconds, whatever resolution pandas parsed them at."""
+    return pd.to_datetime(times, utc=True).dt.as_unit("ns").astype("int64").to_numpy()
+
+
+def _covered(times: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """For each moment in `at` (ns): is one of the sorted `times` (ns) inside its window?"""
+    if not len(times):
+        return np.zeros(np.shape(at), bool)
+    i = np.searchsorted(times, at + MOVE_WINDOW[0].value, side="left")
+    return (i < len(times)) & (times[np.minimum(i, len(times) - 1)] <= at + MOVE_WINDOW[1].value)
+
+
+def chance(moves: pd.DataFrame, d: pd.DataFrame, sources: List[str], start, end,
+           draws: int = CHANCE_DRAWS, seed: int = 0) -> pd.DataFrame:
+    """Per source, the coverage RANDOM moments get with exactly the moves' matching rule (the
+    window, the market's words, the source), against two baselines:
+      day   a random moment on each move's own UTC day (the project's within-day shuffle)
+      near  a random moment 1-3 hours before or after the move (keeps the time of day)
+    each kept inside the recorded period so its whole window could hold headlines. p_* = the
+    share of draws covering at least as many moves as the real moves did (with the +1 that keeps
+    a p-value off zero). -> real_n, chance_day_pct, chance_near_pct, p_day, p_near per source."""
+    rng = np.random.default_rng(seed)
+    t0 = _ns(moves["start"])
+    lo = (pd.Timestamp(start) - MOVE_WINDOW[0]).value              # whole window recorded
+    hi = (pd.Timestamp(end) - MOVE_WINDOW[1]).value
+    day0 = _ns(moves["start"].dt.floor("D"))
+    a = np.clip(day0, lo, hi)
+    b = np.clip(day0 + pd.Timedelta(days=1).value, lo, hi)
+    b = np.where(b > a, b, a + 1)
+    day = a + rng.random((draws, len(t0))) * (b - a)
+    off = NEAR[0].value + rng.random((draws, len(t0))) * (NEAR[1] - NEAR[0]).value
+    sign = np.where(rng.random((draws, len(t0))) < 0.5, -1, 1)
+    near = t0 + sign * off
+    near = np.where((near < lo) | (near > hi), t0 - sign * off, near)   # the other side instead
+    near = np.clip(near, lo, hi)
+    rows = {}
+    for s in sources:
+        real = np.zeros(len(t0), bool)
+        dd = np.zeros((draws, len(t0)), bool)
+        nn = np.zeros((draws, len(t0)), bool)
+        for mk in moves["market"].unique():
+            cols = (moves["market"] == mk).to_numpy()
+            src = d[(d["source"] == s) & d["title"].str.contains(MARKET_WORDS[mk], case=False,
+                                                                 regex=True)]
+            times = np.sort(_ns(src["t"]))
+            real[cols] = _covered(times, t0[cols])
+            dd[:, cols] = _covered(times, day[:, cols])
+            nn[:, cols] = _covered(times, near[:, cols])
+        k = real.sum()
+        rows[s] = dict(real_n=int(k),
+                       chance_day_pct=round(100 * dd.mean(), 0),
+                       chance_near_pct=round(100 * nn.mean(), 0),
+                       p_day=round((1 + (dd.sum(axis=1) >= k).sum()) / (1 + draws), 3),
+                       p_near=round((1 + (nn.sum(axis=1) >= k).sum()) / (1 + draws), 3))
+    return pd.DataFrame(rows).T
+
+
+def coverage(moves: pd.DataFrame, d: pd.DataFrame, sources: List[str], start=None, end=None,
+             draws: int = CHANCE_DRAWS):
     """-> (per-move table of each source's first matching headline, minutes from the move's
-    start; per-source coverage share and median lag)."""
+    start; per-source coverage share and median lag). Given the recorded period (`start`,
+    `end`), each source's coverage also gets its CHANCE baselines (see chance()) and a verdict:
+    CREDIT only where it beats both with p < CREDIT_P."""
     rows = []
     for m in moves.itertuples():
         win = d[(d["t"] >= m.start + MOVE_WINDOW[0]) & (d["t"] <= m.start + MOVE_WINDOW[1])]
@@ -225,7 +295,17 @@ def coverage(moves: pd.DataFrame, d: pd.DataFrame, sources: List[str]):
     summ = pd.DataFrame({s: dict(covered_pct=round(100 * per_move[s].notna().mean(), 0),
                                  lag_med_min=round(per_move[s].dropna().median(), 1))
                          for s in sources}).T.sort_values("covered_pct", ascending=False)
-    return per_move, summ
+    if start is None or end is None:
+        return per_move, summ
+    c = chance(moves, d, sources, start, end, draws=draws)
+    summ = summ.join(c[["chance_day_pct", "chance_near_pct", "p_day", "p_near"]])
+    summ["above_chance"] = summ["covered_pct"] - summ[["chance_day_pct", "chance_near_pct"]].max(
+        axis=1)
+    ok = (summ["p_day"] < CREDIT_P) & (summ["p_near"] < CREDIT_P) & (summ["above_chance"] > 0)
+    summ["verdict"] = np.where(ok, "CREDIT", "chance")
+    cols = ["covered_pct", "chance_day_pct", "chance_near_pct", "above_chance", "p_day",
+            "p_near", "verdict", "lag_med_min"]
+    return per_move, summ[cols].sort_values("above_chance", ascending=False)
 
 
 def fetch_bars(start, end) -> Dict[str, pd.DataFrame]:
@@ -260,12 +340,19 @@ def report(db_path=DB, prices: bool = True, out=OUT) -> str:
              noise_table(d, days).to_string()]
     if prices:
         bars = fetch_bars(start, end)
-        found = [find_moves(b[b["open_time"] >= start], m) for m, b in bars.items()]
+        # moves are judged against the day BEFORE (fetch_bars reaches back one): find them on all
+        # the candles, then keep those inside the test -- cutting the candles first left the
+        # first 4 hours with no typical move to compare against, so none could be found there
+        found = [(lambda f: f[f["start"] >= start])(find_moves(b, m)) for m, b in bars.items()]
         moves = pd.concat(found, ignore_index=True) if found else find_moves(
             pd.DataFrame(columns=["open_time", "close"]), "Gold")
-        per_move, summ = coverage(moves.sort_values("start"), d, sources)
+        per_move, summ = coverage(moves.sort_values("start"), d, sources, start, end)
         parts += [f"\nCOVERAGE: {len(moves)} sharp moves -- minutes from the move's start to a "
                   "matching headline (negative = the headline came first)",
+                  f"  chance = the same matching on random moments: on the move's own day, and "
+                  f"1-3 h either side ({CHANCE_DRAWS} draws each). p = how often chance covered "
+                  f"as many moves.\n  CREDIT = beats both with p < {CREDIT_P}; a busy source "
+                  f"'covers' moves by luck, so covered_pct alone means nothing",
                   summ.to_string() if len(summ) else "no sharp moves",
                   "\nTHE BIGGEST MOVES",
                   (per_move.reindex(per_move["move_pct"].abs().sort_values(ascending=False).index)

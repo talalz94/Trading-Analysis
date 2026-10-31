@@ -2814,3 +2814,15 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   Gold 15m/1h, BTC 4h) was 769 (clear) / 979 (drawing). Both stand-ins now raise Exness's own
   error for a live read deeper than loading reached; test_exness_smoke goes live just before the
   run's deepest check, and the old code fails it ("offset=554 is out of size=550").
+
+### The headline report gets a chance baseline (2026-10-31)
+
+- Before the final report of the 8.5-day headline test: COVERAGE alone credited every busy
+  source (Google News, 300-600 a day, "matched" BTC's biggest drop to a headline about Ukraine).
+  Now each source's coverage is set against the same matching on random moments -- the move's own
+  day (the project's within-day shuffle) and 1-3 hours either side (moves and headlines both crowd
+  the US session, so the day alone flatters a session-busy source) -- 500 draws, a p-value each,
+  and CREDIT only where both are beaten at p < 0.05.
+- Found on the way: moves were looked for on candles cut at the test's start, though "sharp" is
+  judged against the day before and fetch_bars fetches that day for it -- so no move could be
+  found in the first 4 hours. Moves are now found on all candles, then kept from the start.

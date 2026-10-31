@@ -186,6 +186,76 @@ def test_coverage_says_which_source_had_a_matching_headline_and_how_late():
     assert "ORDERED DEPARTURE" in row["first_headline"]
 
 
+TIMES = [(2, 13), (5, 40), (9, 7), (12, 31), (14, 46), (17, 2), (19, 55), (22, 18)]
+MOVES = pd.DataFrame(dict(market="Gold", move_pct=-0.5, start=[
+    at(f"2026-10-{day} {h:02d}:{m:02d}") for day in (21, 22) for h, m in TIMES]))
+SPAN = (at("2026-10-21 00:00"), at("2026-10-22 23:59"))
+
+
+def _sources():
+    busy = pd.date_range(*SPAN, freq="10min")            # about gold every 10 minutes, all day
+    rows = [("busy", "Gold prices steady as traders wait", t, t) for t in busy]
+    rows += [("sharp", "Gold drops after missile strike", m - pd.Timedelta(minutes=2),
+              m - pd.Timedelta(minutes=2)) for m in MOVES["start"]]   # only just before a move
+    rows += [("offtopic", "Football results", m, m) for m in MOVES["start"]]
+    return hr.timed(_items(rows))
+
+
+def test_a_source_that_posts_all_the_time_covers_every_move_and_gets_no_credit():
+    # The trap the baseline exists for: Google News posts 300-600 headlines a day, so a "matching"
+    # headline sits next to almost ANY moment -- covered 100% is what random moments get too
+    _, summ = hr.coverage(MOVES, _sources(), ["busy", "sharp", "offtopic"], *SPAN, draws=200)
+    busy = summ.loc["busy"]
+    assert busy["covered_pct"] == 100 and busy["chance_day_pct"] >= 95
+    assert busy["p_day"] > 0.5 and busy["verdict"] == "chance" and busy["above_chance"] <= 5
+
+
+def test_a_source_that_posts_only_before_moves_beats_both_baselines():
+    _, summ = hr.coverage(MOVES, _sources(), ["busy", "sharp", "offtopic"], *SPAN, draws=200)
+    sharp = summ.loc["sharp"]
+    assert sharp["covered_pct"] == 100
+    assert sharp["chance_day_pct"] < 30 and sharp["chance_near_pct"] < 30
+    assert sharp["p_day"] < 0.05 and sharp["p_near"] < 0.05 and sharp["verdict"] == "CREDIT"
+    assert summ.index[0] == "sharp"                       # ranked by how far above chance
+    off = summ.loc["offtopic"]                            # right on time, wrong words: nothing
+    assert off["covered_pct"] == 0 and off["verdict"] == "chance"
+
+
+def test_the_baseline_uses_the_moves_own_matching_rule():
+    # at the moves themselves the baseline's rule gives exactly the real coverage; moved 45
+    # minutes later (headline 47 min before: outside -15/+20), nothing matches and p is 1
+    d = _sources()
+    c = hr.chance(MOVES, d, ["sharp"], *SPAN, draws=50)
+    assert c.loc["sharp", "real_n"] == len(MOVES)
+    late = MOVES.assign(start=MOVES["start"] + pd.Timedelta(minutes=45))
+    c = hr.chance(late, d, ["sharp"], *SPAN, draws=50)
+    assert c.loc["sharp", "real_n"] == 0 and c.loc["sharp", "p_day"] == 1.0
+    c = hr.chance(MOVES, d, ["offtopic"], *SPAN, draws=50)    # on time, but not about gold
+    assert c.loc["offtopic", "real_n"] == 0 and c.loc["offtopic", "chance_day_pct"] == 0
+
+
+def test_a_source_busy_only_in_the_us_session_is_not_credited_for_moves_there():
+    # Moves crowd the US session, and so do headlines. Against random moments of the WHOLE day
+    # such a source looks prescient (p_day tiny); against moments 1-3 hours away -- still the
+    # session -- it is not. That is why both baselines must be beaten
+    moves = pd.DataFrame(dict(market="Gold", move_pct=-0.5, start=[
+        at(f"2026-10-{day} {h}") for day in (21, 22) for h in ("14:10", "15:20", "16:30",
+                                                              "17:15", "17:50")]))
+    rows = []
+    for day in (21, 22):
+        for t in pd.date_range(f"2026-10-{day} 12:00", f"2026-10-{day} 19:55", freq="5min",
+                               tz="UTC"):
+            rows.append(("session", "Gold traders eye the dollar", t, t))
+    d = hr.timed(_items(rows))
+    _, summ = hr.coverage(moves, d, ["session"], *SPAN, draws=200)
+    row = summ.loc["session"]
+    assert row["covered_pct"] == 100 and row["p_day"] < 0.05     # fooled by the day alone ...
+    assert 60 <= row["chance_near_pct"] < 100 and row["p_near"] >= 0.05   # ... not by the hour
+    assert row["verdict"] == "chance"                             # a little above it is not enough
+    assert row["above_chance"] == row["covered_pct"] - max(row["chance_day_pct"],
+                                                            row["chance_near_pct"])
+
+
 def test_the_report_runs_end_to_end_on_a_recorded_database(tmp_path):
     later = RSS.replace(b"</channel>", b"<item><title>US missile strike on Houthi sites</title>"
                         b"<guid>g9</guid><pubDate>Wed, 21 Oct 2026 18:49:00 GMT</pubDate></item>"
@@ -202,3 +272,23 @@ def test_the_report_runs_end_to_end_on_a_recorded_database(tmp_path):
     assert "1 timed headlines" in text and "RELIABILITY" in text and "SPEED" in text
     assert "P1 security" in text                          # the missile strike is flagged
     assert (tmp_path / "r.txt").read_text(encoding="utf-8") == text
+
+
+def test_the_report_prints_coverage_against_chance(tmp_path, monkeypatch):
+    # the whole report with prices, the candle download replaced by a sharp Gold step at 18:45
+    later = RSS.replace(b"</channel>", b"<item><title>US missile strike on Houthi sites</title>"
+                        b"<guid>g9</guid><pubDate>Wed, 21 Oct 2026 18:44:00 GMT</pubDate></item>"
+                        b"</channel>")
+    clock = Clock("2026-10-21 18:00")
+    p, src = _probe(tmp_path, [RSS, later], clock)
+    p.meta("start", clock.t.isoformat())
+    p.poll(src)
+    clock.t = at("2026-10-21 18:50")
+    p.poll(src)
+    bars = _bars().assign(open=lambda b: b["close"], high=lambda b: b["close"],
+                          low=lambda b: b["close"])
+    monkeypatch.setattr(hr, "fetch_bars", lambda start, end: {"Gold": bars})
+    monkeypatch.setattr(hr, "CHANCE_DRAWS", 50)
+    text = hr.report(tmp_path / "p.sqlite", prices=True, out=tmp_path / "r.txt")
+    assert "COVERAGE: 1 sharp moves" in text and "chance_day_pct" in text
+    assert "chance_near_pct" in text and "verdict" in text and "CREDIT = beats both" in text
