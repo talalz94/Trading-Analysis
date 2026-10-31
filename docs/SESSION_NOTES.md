@@ -2806,3 +2806,11 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   candle (each timeframe brings ~1,000 candles of its own): none now. (3) levels: sessions on
   charts of 1h and less only (a 4h candle straddles a session), each period only on charts finer
   than it.
+- Exness, Gold 1m, 30 Oct: "Series offset=510 is out of size=506" from the trendlines. Indie's
+  docs say a series' size may grow only while the chart loads ("we cannot expand the size at
+  realtime"); a line checked live reached 510 back, deeper than any check while loading. Both
+  trendline files now keep their own last 2,000 candles in Vars (_remember / _t_ago) and the
+  fitter reads only those. The deepest read on six long histories (BTC/Gold 1m 60k, BTC 5m 50k,
+  Gold 15m/1h, BTC 4h) was 769 (clear) / 979 (drawing). Both stand-ins now raise Exness's own
+  error for a live read deeper than loading reached; test_exness_smoke goes live just before the
+  run's deepest check, and the old code fails it ("offset=554 is out of size=550").

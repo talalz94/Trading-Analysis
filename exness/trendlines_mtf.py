@@ -84,6 +84,7 @@ class Lines(SecContext):
             self._newer = prefer_newer
         self._lookback = 16
         self._min_span_bars = 40
+        self._bar_secs = float(self.time_frame.to_minutes()) * 60.0
         self._max_age = 500
         self._atr_len = 14
         a0 = 1.0 / float(self._atr_len)               # pandas' ewm(alpha=1/14, adjust=False),
@@ -123,6 +124,20 @@ class Lines(SecContext):
         self._sfirst = self.new_var([0, 0])
         self._level = self.new_var([nan, nan])
         self._brk = self.new_var([False, False])
+        # THE CANDLES THE FITTER READS, KEPT HERE. Exness lets a script read its own candles live
+        # only as far back as it read while the chart was loading ("Series offset=510 is out of
+        # size=506", 30 Oct 2026), and a line checked live can reach further back than any did
+        # while loading. 2,000 candles: the deepest any line needed on six long histories (1m to
+        # 4h, 6,000-60,000 candles each) was 769, and drawing one 979
+        self._keep = 2000
+        hc: list[float] = []
+        hh: list[float] = []
+        hl: list[float] = []
+        ht: list[float] = []
+        self._hc = self.new_var(hc)
+        self._hh = self.new_var(hh)
+        self._hl = self.new_var(hl)
+        self._ht = self.new_var(ht)
         out: list[float] = []
         for k in range(19):
             out.append(nan)
@@ -161,6 +176,7 @@ class Lines(SecContext):
     def calc(self):
         if self.is_closed_bar:
             self._once()
+            self._remember()
             i = self.bar_index
             a = self._atr()
             confirmed = self._zigzag(i, a)
@@ -191,9 +207,9 @@ class Lines(SecContext):
                 o[b + q] = nan
             if (on or brk) and born >= 0:
                 st = self._start.get()[s]
-                o[b + 3] = self.time[i - born]
+                o[b + 3] = self._t_ago(i - born)
                 o[b + 4] = float(st)
-                o[b + 5] = self.time[i - st]
+                o[b + 5] = self._t_ago(i - st)
                 o[b + 6] = self._slope.get()[s]
                 o[b + 7] = self._icpt.get()[s]
         o[16] = float(i)
@@ -357,12 +373,19 @@ class Lines(SecContext):
             k -= 1
 
     def _price(self, b: int) -> float:
-        return self.close[self.bar_index - b]
+        hc = self._hc.get()
+        return hc[len(hc) - 1 - (self.bar_index - b)]
 
     def _clear(self, slope: float, icpt: float, x0: int, kind: int, wick: float) -> bool:
         """No close beyond the line and no wick beyond it by more than `wick`, on every candle
         from x0 to the latest one."""
         i = self.bar_index
+        hc = self._hc.get()
+        hh = self._hh.get()
+        hl = self._hl.get()
+        n = len(hc)
+        if i - x0 >= n:
+            return False                       # older than the candles kept: cannot be proved
         # the research code's tolerance is 1e-9 x the largest |line price| on the span; a line's
         # largest is at one of its ends (rounding keeps slope x candle + intercept in order)
         big = max(1.0, max(abs(slope * float(x0) + icpt), abs(slope * float(i) + icpt)))
@@ -371,11 +394,11 @@ class Lines(SecContext):
         b = x0
         while ok and b <= i:
             y = slope * float(b) + icpt
-            k = i - b
+            q = n - 1 - (i - b)
             if kind < 0:
-                ok = self.close[k] >= y - eps and self.low[k] >= y - wick - eps
+                ok = hc[q] >= y - eps and hl[q] >= y - wick - eps
             else:
-                ok = self.close[k] <= y + eps and self.high[k] <= y + wick + eps
+                ok = hc[q] <= y + eps and hh[q] <= y + wick + eps
             b += 1
         return ok
 
@@ -596,6 +619,34 @@ class Lines(SecContext):
                         self._brk.get()[s] = True
                         self._retire(s)
                         self._finish(s, True)
+
+    def _remember(self) -> None:
+        """Keep this closed candle in the fitter's own history (the last `_keep` of them)."""
+        ht = self._ht.get()
+        n = len(ht)
+        if n > 0 and ht[n - 1] == self.time[0]:      # the same candle again: its final values
+            self._hc.get()[n - 1] = self.close[0]
+            self._hh.get()[n - 1] = self.high[0]
+            self._hl.get()[n - 1] = self.low[0]
+            return
+        ht.append(self.time[0])
+        self._hc.get().append(self.close[0])
+        self._hh.get().append(self.high[0])
+        self._hl.get().append(self.low[0])
+        if n + 1 > self._keep:
+            ht.pop(0)
+            self._hc.get().pop(0)
+            self._hh.get().pop(0)
+            self._hl.get().pop(0)
+
+    def _t_ago(self, k: int) -> float:
+        """The open time of the candle k back; one older than those kept is counted back in
+        candles (used only to draw where a line starts)."""
+        ht = self._ht.get()
+        n = len(ht)
+        if k < n:
+            return ht[n - 1 - k]
+        return ht[0] - float(k - (n - 1)) * self._bar_secs
 
 
 @indicator('Trendlines MTF (quant)', overlay_main_pane=True)

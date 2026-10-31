@@ -45,3 +45,28 @@ def test_every_indicator_on_every_chart(monkeypatch, name, minutes):
     # a panel (the probe's report, the bias lines) is drawn as soon as the chart is live, from
     # closed candles only; everything else waits for a close
     assert ctx.chart.forming == 0 or name in ("probe_timeframes", "bias")
+
+
+@pytest.mark.parametrize("name, cls", [("trendlines", "Main"), ("trendlines_mtf", "Lines")])
+def test_a_line_checked_live_deeper_than_anything_while_loading(monkeypatch, name, cls):
+    # Exness, Gold 1m, 30 Oct 2026: "Series offset=510 is out of size=506". A candle series
+    # grows to the depth read while the chart LOADS; live, a line check reaching further back
+    # than any did while loading failed. Go live just before the deepest check of the run --
+    # deeper than every one before it -- and the fitter must read its own kept candles instead
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")
+    mod = rt.load(ROOT / "exness" / f"{name}.py", monkeypatch)
+    plain = rt.run(mod, bars, bar_secs=300)
+    K = getattr(mod, cls)
+    clear, deep = K._clear, {}
+
+    def spy(self, slope, icpt, x0, kind, wick):
+        if self.time_frame.to_minutes() == 5:                 # the chart's own timeframe
+            deep[self.bar_index] = max(deep.get(self.bar_index, 0), self.bar_index - x0)
+        return clear(self, slope, icpt, x0, kind, wick)
+    monkeypatch.setattr(K, "_clear", spy)
+    rt.run(mod, bars, bar_secs=300)
+    monkeypatch.setattr(K, "_clear", clear)
+    k = max(deep, key=lambda b: (deep[b], -b))                # the first of the deepest
+    assert deep[k] > max(v for b, v in deep.items() if b < k) and deep[k] > 300
+    ctx = rt.run(mod, bars, bar_secs=300, realtime_last=len(bars) - k + 3)
+    assert rt.state(ctx)[1] == rt.state(plain)[1]
