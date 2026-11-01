@@ -971,7 +971,9 @@ experiments/             # INFERENCE layer — find best settings for an idea (S
 │                        #   releases + UNSCHEDULED, e.g. 21 Oct's Gulf ordered departure with a
 │                        #   -90 min window) the first post in seconds by Telegram's clock, against
 │                        #   CHANCE and FinancialJuice RSS from the test. CANDIDATES beyond the two
-│                        #   in the test are unverified names: the run says which exist. SERVER only
+│                        #   in the test are unverified names: the run says which exist, and prints
+│                        #   each channel's own title + subscribers (DB News TradFi from r/Daytrading
+│                        #   is only guessed: db_news, dbnewstradfi, db_tradfi, tier10k). SERVER only
 ├── instrument_scan.py   # NB21'S STRATEGY ON OTHER MARKETS (notebook 22): BTC, gold, WTI, EURUSD,
 │                        #   GBPUSD, USDJPY, EURJPY, GBPJPY, each with its own costs, 19 quarters.
 │                        #   Four runs: as set / zero cost / plain exits / METRONOME (hourly, same EMA
