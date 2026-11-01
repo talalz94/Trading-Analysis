@@ -434,6 +434,13 @@ def release_groups(events: pd.DataFrame) -> pd.DataFrame:
                                        "until"])
 
 
+def _since(g) -> pd.Timedelta:
+    """How long BEFORE its time a headline still counts for this release: CRIT_WINDOW's 30 s,
+    unless the row says otherwise (an unscheduled event, where an earlier warning is the point)."""
+    s = g.get("since") if hasattr(g, "get") else None
+    return s if isinstance(s, pd.Timedelta) and not pd.isna(s) else CRIT_WINDOW[0]
+
+
 def release_delivery(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str]) -> pd.DataFrame:
     """Per release and source, its first matching headline inside CRIT_WINDOW: seconds after the
     scheduled time by the source's clock (`delay_s`) and by ours (`seen_s`), and the seconds to its
@@ -442,7 +449,7 @@ def release_delivery(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str]) 
     for gi, g in groups.iterrows():
         if g["words"] is None:
             continue
-        lo, hi = g["t"] + CRIT_WINDOW[0], g["t"] + g["until"]
+        lo, hi = g["t"] + _since(g), g["t"] + g["until"]
         win = d[(d["t"] >= lo) & (d["t"] <= hi)]
         win = win[win["title"].str.contains(g["words"], case=False, regex=True)].sort_values("t")
         for s in sources:
@@ -472,10 +479,10 @@ def release_chance(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str], st
         tod = g["t"] - g["t"].floor("D")
         for day in days:
             at = day + tod
-            if at.floor("D") == g["t"].floor("D") or at + CRIT_WINDOW[0] < start \
+            if at.floor("D") == g["t"].floor("D") or at + _since(g) < start \
                     or at + g["until"] > end:
                 continue
-            win = d[(d["t"] >= at + CRIT_WINDOW[0]) & (d["t"] <= at + g["until"])]
+            win = d[(d["t"] >= at + _since(g)) & (d["t"] <= at + g["until"])]
             win = win[win["title"].str.contains(g["words"], case=False, regex=True)]
             have = set(win["source"])
             for s in sources:
