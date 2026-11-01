@@ -151,26 +151,26 @@ class Lines(SecContext):
         self._k_zz_i = self.new_var(self._zz_i.get())
         self._k_zz_hi = self.new_var(self._zz_hi.get())
         self._k_zz_lo = self.new_var(self._zz_lo.get())
-        self._k_pv_i = self.new_var(list(self._pv_i.get()))
-        self._k_pv_px = self.new_var(list(self._pv_px.get()))
-        self._k_pv_kind = self.new_var(list(self._pv_kind.get()))
-        self._k_ret_sig = self.new_var(list(self._ret_sig.get()))
-        self._k_ret_first = self.new_var(list(self._ret_first.get()))
-        self._k_ret_kind = self.new_var(list(self._ret_kind.get()))
-        self._k_on = self.new_var(list(self._on.get()))
-        self._k_slope = self.new_var(list(self._slope.get()))
-        self._k_icpt = self.new_var(list(self._icpt.get()))
-        self._k_touches = self.new_var(list(self._touches.get()))
-        self._k_start = self.new_var(list(self._start.get()))
-        self._k_born = self.new_var(list(self._born.get()))
-        self._k_end = self.new_var(list(self._end.get()))
-        self._k_beyond = self.new_var(list(self._beyond.get()))
-        self._k_last = self.new_var(list(self._last.get()))
-        self._k_sig = self.new_var(list(self._sig.get()))
-        self._k_sfirst = self.new_var(list(self._sfirst.get()))
-        self._k_level = self.new_var(list(self._level.get()))
-        self._k_brk = self.new_var(list(self._brk.get()))
-        self._k_out = self.new_var(list(self._out.get()))
+        self._k_pv_i = self.new_var(self._copy_i(self._pv_i.get()))
+        self._k_pv_px = self.new_var(self._copy_f(self._pv_px.get()))
+        self._k_pv_kind = self.new_var(self._copy_i(self._pv_kind.get()))
+        self._k_ret_sig = self.new_var(self._copy_s(self._ret_sig.get()))
+        self._k_ret_first = self.new_var(self._copy_i(self._ret_first.get()))
+        self._k_ret_kind = self.new_var(self._copy_i(self._ret_kind.get()))
+        self._k_on = self.new_var(self._copy_b(self._on.get()))
+        self._k_slope = self.new_var(self._copy_f(self._slope.get()))
+        self._k_icpt = self.new_var(self._copy_f(self._icpt.get()))
+        self._k_touches = self.new_var(self._copy_i(self._touches.get()))
+        self._k_start = self.new_var(self._copy_i(self._start.get()))
+        self._k_born = self.new_var(self._copy_i(self._born.get()))
+        self._k_end = self.new_var(self._copy_i(self._end.get()))
+        self._k_beyond = self.new_var(self._copy_i(self._beyond.get()))
+        self._k_last = self.new_var(self._copy_i(self._last.get()))
+        self._k_sig = self.new_var(self._copy_s(self._sig.get()))
+        self._k_sfirst = self.new_var(self._copy_i(self._sfirst.get()))
+        self._k_level = self.new_var(self._copy_f(self._level.get()))
+        self._k_brk = self.new_var(self._copy_b(self._brk.get()))
+        self._k_out = self.new_var(self._copy_f(self._out.get()))
         self._done_t = self.new_var(nan)        # the latest candle computed
 
     def calc(self):
@@ -216,6 +216,34 @@ class Lines(SecContext):
         o[17] = self.time[0]
         o[18] = self.close[0]
 
+    def _copy_b(self, src: list[bool]) -> list[bool]:
+        """A copy of a list (Exness's Indie has no list() constructor)."""
+        out: list[bool] = []
+        for q in range(len(src)):
+            out.append(src[q])
+        return out
+
+    def _copy_f(self, src: list[float]) -> list[float]:
+        """A copy of a list (Exness's Indie has no list() constructor)."""
+        out: list[float] = []
+        for q in range(len(src)):
+            out.append(src[q])
+        return out
+
+    def _copy_i(self, src: list[int]) -> list[int]:
+        """A copy of a list (Exness's Indie has no list() constructor)."""
+        out: list[int] = []
+        for q in range(len(src)):
+            out.append(src[q])
+        return out
+
+    def _copy_s(self, src: list[str]) -> list[str]:
+        """A copy of a list (Exness's Indie has no list() constructor)."""
+        out: list[str] = []
+        for q in range(len(src)):
+            out.append(src[q])
+        return out
+
     def _save(self) -> None:
         self._k_atr_w.set(self._atr_w.get())
         self._k_atr_n.set(self._atr_n.get())
@@ -225,26 +253,26 @@ class Lines(SecContext):
         self._k_zz_i.set(self._zz_i.get())
         self._k_zz_hi.set(self._zz_hi.get())
         self._k_zz_lo.set(self._zz_lo.get())
-        self._k_pv_i.set(list(self._pv_i.get()))
-        self._k_pv_px.set(list(self._pv_px.get()))
-        self._k_pv_kind.set(list(self._pv_kind.get()))
-        self._k_ret_sig.set(list(self._ret_sig.get()))
-        self._k_ret_first.set(list(self._ret_first.get()))
-        self._k_ret_kind.set(list(self._ret_kind.get()))
-        self._k_on.set(list(self._on.get()))
-        self._k_slope.set(list(self._slope.get()))
-        self._k_icpt.set(list(self._icpt.get()))
-        self._k_touches.set(list(self._touches.get()))
-        self._k_start.set(list(self._start.get()))
-        self._k_born.set(list(self._born.get()))
-        self._k_end.set(list(self._end.get()))
-        self._k_beyond.set(list(self._beyond.get()))
-        self._k_last.set(list(self._last.get()))
-        self._k_sig.set(list(self._sig.get()))
-        self._k_sfirst.set(list(self._sfirst.get()))
-        self._k_level.set(list(self._level.get()))
-        self._k_brk.set(list(self._brk.get()))
-        self._k_out.set(list(self._out.get()))
+        self._k_pv_i.set(self._copy_i(self._pv_i.get()))
+        self._k_pv_px.set(self._copy_f(self._pv_px.get()))
+        self._k_pv_kind.set(self._copy_i(self._pv_kind.get()))
+        self._k_ret_sig.set(self._copy_s(self._ret_sig.get()))
+        self._k_ret_first.set(self._copy_i(self._ret_first.get()))
+        self._k_ret_kind.set(self._copy_i(self._ret_kind.get()))
+        self._k_on.set(self._copy_b(self._on.get()))
+        self._k_slope.set(self._copy_f(self._slope.get()))
+        self._k_icpt.set(self._copy_f(self._icpt.get()))
+        self._k_touches.set(self._copy_i(self._touches.get()))
+        self._k_start.set(self._copy_i(self._start.get()))
+        self._k_born.set(self._copy_i(self._born.get()))
+        self._k_end.set(self._copy_i(self._end.get()))
+        self._k_beyond.set(self._copy_i(self._beyond.get()))
+        self._k_last.set(self._copy_i(self._last.get()))
+        self._k_sig.set(self._copy_s(self._sig.get()))
+        self._k_sfirst.set(self._copy_i(self._sfirst.get()))
+        self._k_level.set(self._copy_f(self._level.get()))
+        self._k_brk.set(self._copy_b(self._brk.get()))
+        self._k_out.set(self._copy_f(self._out.get()))
 
     def _load(self) -> None:
         self._atr_w.set(self._k_atr_w.get())
@@ -255,26 +283,26 @@ class Lines(SecContext):
         self._zz_i.set(self._k_zz_i.get())
         self._zz_hi.set(self._k_zz_hi.get())
         self._zz_lo.set(self._k_zz_lo.get())
-        self._pv_i.set(list(self._k_pv_i.get()))
-        self._pv_px.set(list(self._k_pv_px.get()))
-        self._pv_kind.set(list(self._k_pv_kind.get()))
-        self._ret_sig.set(list(self._k_ret_sig.get()))
-        self._ret_first.set(list(self._k_ret_first.get()))
-        self._ret_kind.set(list(self._k_ret_kind.get()))
-        self._on.set(list(self._k_on.get()))
-        self._slope.set(list(self._k_slope.get()))
-        self._icpt.set(list(self._k_icpt.get()))
-        self._touches.set(list(self._k_touches.get()))
-        self._start.set(list(self._k_start.get()))
-        self._born.set(list(self._k_born.get()))
-        self._end.set(list(self._k_end.get()))
-        self._beyond.set(list(self._k_beyond.get()))
-        self._last.set(list(self._k_last.get()))
-        self._sig.set(list(self._k_sig.get()))
-        self._sfirst.set(list(self._k_sfirst.get()))
-        self._level.set(list(self._k_level.get()))
-        self._brk.set(list(self._k_brk.get()))
-        self._out.set(list(self._k_out.get()))
+        self._pv_i.set(self._copy_i(self._k_pv_i.get()))
+        self._pv_px.set(self._copy_f(self._k_pv_px.get()))
+        self._pv_kind.set(self._copy_i(self._k_pv_kind.get()))
+        self._ret_sig.set(self._copy_s(self._k_ret_sig.get()))
+        self._ret_first.set(self._copy_i(self._k_ret_first.get()))
+        self._ret_kind.set(self._copy_i(self._k_ret_kind.get()))
+        self._on.set(self._copy_b(self._k_on.get()))
+        self._slope.set(self._copy_f(self._k_slope.get()))
+        self._icpt.set(self._copy_f(self._k_icpt.get()))
+        self._touches.set(self._copy_i(self._k_touches.get()))
+        self._start.set(self._copy_i(self._k_start.get()))
+        self._born.set(self._copy_i(self._k_born.get()))
+        self._end.set(self._copy_i(self._k_end.get()))
+        self._beyond.set(self._copy_i(self._k_beyond.get()))
+        self._last.set(self._copy_i(self._k_last.get()))
+        self._sig.set(self._copy_s(self._k_sig.get()))
+        self._sfirst.set(self._copy_i(self._k_sfirst.get()))
+        self._level.set(self._copy_f(self._k_level.get()))
+        self._brk.set(self._copy_b(self._k_brk.get()))
+        self._out.set(self._copy_f(self._k_out.get()))
 
     def _once(self) -> None:
         """Exness computes a timeframe's still-forming candle as if closed when a chart
@@ -724,8 +752,8 @@ class Main(MainContext):
         tags: list[LabelAbs] = []
         for k in range(8):
             segs.append(LineSegment(AbsolutePosition(0.0, 0.0), AbsolutePosition(0.0, 0.0)))
-            tags.append(LabelAbs('', AbsolutePosition(0.0, 0.0), bg_color=res_color(0.2),
-                                 text_color=res_color, font_size=10))
+            tags.append(LabelAbs('', AbsolutePosition(0.0, 0.0), bg_color=self._colors[k % 2](0.2),
+                                 text_color=self._colors[k % 2], font_size=10))
         self._seg = self.new_var(segs)
         self._seg_on = self.new_var([False, False, False, False, False, False, False, False])
         self._seg_drawn = self.new_var([False, False, False, False, False, False, False, False])
@@ -930,7 +958,6 @@ class Main(MainContext):
             tag.text = self._names[s] + word
             tag.position = AbsolutePosition(tip, self._y(k, xt))
             tag.bg_color = self._colors[side](0.2)
-            tag.text_color = self._colors[side]
             self._tag_dirty.get()[k] = True
 
     def _end_line(self, k: int, e: int, te: float, broke: bool) -> None:
