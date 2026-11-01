@@ -214,6 +214,18 @@ Learnt on the FVG indicator, and the reason each file looks the way it does:
   older than 2,000 candles would not be drawn rather than fail. The stand-in enforces the rule, and
   a test goes live just before the deepest check of a run: the old code fails it with the same
   error.
+- **No `list(...)`** (1 Nov 2026, Trendlines MTF: "class `list` does not have a public
+  constructor"). The current Indie docs list `list()` as a builtin, so this is the older Indie
+  again. A list is copied with a loop that appends each item.
+- **A variable lives only in the block that created it.** "In Indie, variable `res` will not exist
+  after the if..else statements" (Indie docs, Language differences with Python). Python keeps it,
+  so the stand-in could never catch one: levels.py had `z` set in both halves of an `if` and read
+  after it. It is now declared before the `if`.
+- **Only what has compiled on Exness.** Every file is checked, construct by construct, against
+  what has compiled there: fair_value_gaps.py, trendlines.py and the probe (v1 and v2). The
+  exceptions are a few names the docs' API list gives: `line_style.DASHED`, `ha.RIGHT`, NAVY and
+  YELLOW. So a new construct fails a test before it can fail on Exness. A label's `text_color` is
+  documented but had never compiled, so Trendlines MTF now sets it once, when the label is made.
 - **Run time is not published.**
 
 ## Tests
@@ -228,5 +240,10 @@ Learnt on the FVG indicator, and the reason each file looks the way it does:
 - **bias:** add_bias at every candle on every timeframe.
 - **trendlines_mtf:** each timeframe's lines and breaks, the drawn lines, and early marks equal to
   the alerts' rule.
+- **indie_rules (every file):** only constructs that compiled on Exness, no variable read outside
+  its block, and Indie's types. The type check runs mypy against stubs of the Indie API in
+  `tests/indie_stubs/`, with each `@param` typing its argument the way Indie does. The files that
+  compiled on Exness pass it with no error. It needs mypy (`pip install mypy`) and is skipped
+  without it.
 
 Each file's rules are mutation-checked: broken on purpose one at a time, and the tests must fail.

@@ -233,10 +233,9 @@ class Main(MainContext):
 
     def _start(self, p: int, key: int) -> float:
         """A period's first moment in UTC."""
+        z = key                       # declared out here: Indie scopes a variable to its block
         if p == 2:
             z = self._days(key // 12, key % 12 + 1, 1)
-        else:
-            z = key
         return self._utc(self._dzone, float(z) * 86400.0) - self._dshift
 
     def _end(self, p: int, key: int) -> float:

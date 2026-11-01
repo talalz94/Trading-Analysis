@@ -73,7 +73,7 @@ class Bias(SecContext):
         self._k_hi_state = self.new_var(self._hi_state.get())
         self._k_lo_state = self.new_var(self._lo_state.get())
         self._k_trend = self.new_var(self._trend.get())
-        self._k_out = self.new_var(list(self._out.get()))
+        self._k_out = self.new_var(self._copy_f(self._out.get()))
         self._done_t = self.new_var(nan)        # the latest candle computed
 
     def calc(self):
@@ -82,6 +82,13 @@ class Bias(SecContext):
             self._step()
         o = self._out.get()
         return o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7]
+
+    def _copy_f(self, src: list[float]) -> list[float]:
+        """A copy of a list (Exness's Indie has no list() constructor)."""
+        out: list[float] = []
+        for q in range(len(src)):
+            out.append(src[q])
+        return out
 
     def _save(self) -> None:
         self._k_atr_w.set(self._atr_w.get())
@@ -98,7 +105,7 @@ class Bias(SecContext):
         self._k_hi_state.set(self._hi_state.get())
         self._k_lo_state.set(self._lo_state.get())
         self._k_trend.set(self._trend.get())
-        self._k_out.set(list(self._out.get()))
+        self._k_out.set(self._copy_f(self._out.get()))
 
     def _load(self) -> None:
         self._atr_w.set(self._k_atr_w.get())
@@ -115,7 +122,7 @@ class Bias(SecContext):
         self._hi_state.set(self._k_hi_state.get())
         self._lo_state.set(self._k_lo_state.get())
         self._trend.set(self._k_trend.get())
-        self._out.set(list(self._k_out.get()))
+        self._out.set(self._copy_f(self._k_out.get()))
 
     def _once(self) -> None:
         """Exness computes a timeframe's still-forming candle as if closed when a chart
