@@ -35,6 +35,13 @@ def at(s):
     return pd.Timestamp(s, tz="UTC")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_calendar(monkeypatch, tmp_path):
+    """The report reads this PC's calendar and alerts database by default: not in a test."""
+    monkeypatch.setattr(hr, "CALENDARS", ())
+    monkeypatch.setattr(hr, "ALERTS_DB", tmp_path / "no_alerts.db")
+
+
 def test_rss_reads_bytes_with_a_byte_order_mark_and_refuses_a_made_up_time():
     # the Fed's feed starts with a BOM and declares no charset: decoded as text, line 1 failed
     a, b = parse_rss(RSS)
@@ -292,3 +299,128 @@ def test_the_report_prints_coverage_against_chance(tmp_path, monkeypatch):
     text = hr.report(tmp_path / "p.sqlite", prices=True, out=tmp_path / "r.txt")
     assert "COVERAGE: 1 sharp moves" in text and "chance_day_pct" in text
     assert "chance_near_pct" in text and "verdict" in text and "CREDIT = beats both" in text
+
+
+# ── CRITICAL RELEASES ─────────────────────────────────────────────────────────────────────────
+CRIT = pd.DataFrame([
+    dict(t=at("2026-10-28 18:00"), currency="USD", title="Federal Funds Rate", level="critical",
+         actual="4.00%", forecast="4.00%"),
+    dict(t=at("2026-10-28 18:00"), currency="USD", title="FOMC Statement", level="critical",
+         actual=None, forecast=None),
+    dict(t=at("2026-10-30 03:02"), currency="JPY", title="BOJ Policy Rate", level="critical",
+         actual=None, forecast="<1.25%"),          # Forex Factory's time is a guess for the BOJ
+])
+CRIT_NEWS = [
+    ("fj_rss", "FinancialJuice: FOMC decision due shortly",                     # a preview
+     "2026-10-28 17:58:00", "2026-10-28 17:58:40"),
+    ("fj_rss", "FinancialJuice: FED LEAVES RATES UNCHANGED AT 3.75%-4.00%",
+     "2026-10-28 18:00:04", "2026-10-28 18:00:40"),
+    ("walter_telegram", "*FED HOLDS RATES STEADY", "2026-10-28 18:00:09", "2026-10-28 18:00:20"),
+    ("walter_telegram", "*FED: VOTE 10-2", "2026-10-28 18:00:30", "2026-10-28 18:00:45"),
+    ("investinglive", "Fed leaves rates unchanged, as expected",
+     "2026-10-28 18:07:00", "2026-10-28 18:07:30"),
+    ("slow", "Fed holds rates", "2026-10-28 18:11:00", "2026-10-28 18:11:30"),   # too late
+    ("gnews_gold", "Gold steady ahead of central bank news - Reuters",          # not the Fed
+     "2026-10-28 18:00:30", "2026-10-28 18:01:00"),
+    ("fj_rss", "FinancialJuice: BOJ KEEPS RATES ON HOLD AT 1.00%",
+     "2026-10-30 03:41:00", "2026-10-30 03:41:30"),
+]
+CRIT_SOURCES = ["fj_rss", "walter_telegram", "investinglive", "slow", "gnews_gold"]
+
+
+def test_a_critical_release_gets_each_sources_first_headline_in_seconds():
+    g = hr.release_groups(CRIT)
+    assert list(g["titles"]) == ["Federal Funds Rate + FOMC Statement", "BOJ Policy Rate"]
+    assert g["numbers"].iat[0] == "Federal Funds Rate 4.00% (forecast 4.00%)"
+    r = hr.release_delivery(g, hr.timed(_items(CRIT_NEWS)), CRIT_SOURCES).set_index(
+        ["release", "source"])
+    fj, walter = r.loc[(0, "fj_rss")], r.loc[(0, "walter_telegram")]
+    assert (fj["delay_s"], fj["seen_s"], fj["number_s"]) == (4, 40, 4)   # not the 17:58 preview
+    assert walter["delay_s"] == 9 and walter["number_s"] == 30   # its first had no number
+    assert r.loc[(0, "investinglive"), "delay_s"] == 420
+    assert np.isnan(r.loc[(0, "investinglive"), "number_s"])
+    assert (0, "slow") not in r.index and (0, "gnews_gold") not in r.index
+    assert r.loc[(1, "fj_rss"), "delay_s"] == 39 * 60          # the BOJ has no set time
+
+
+def test_carrying_a_release_is_judged_against_the_same_window_on_other_days():
+    g = hr.release_groups(CRIT.iloc[:2])
+    busy = [("busy", f"Fed speaker number {k} on the outlook", f"2026-10-{day} 18:03:00",
+             f"2026-10-{day} 18:03:20") for k, day in enumerate(range(22, 31))]
+    d = hr.timed(_items(CRIT_NEWS + busy))
+    c = hr.release_chance(g, d, ["busy", "fj_rss"], at("2026-10-22 00:00"), at("2026-10-30 23:00"))
+    assert c["busy"] == 100 and c["fj_rss"] == 0       # busy "carries" 18:00 every day
+
+
+def test_our_result_email_is_read_from_the_alerts_database(tmp_path):
+    import sqlite3
+    from quant.alerts.store import SCHEMA
+    db = tmp_path / "alerts.db"
+    con = sqlite3.connect(db)
+    con.executescript(SCHEMA)
+    for i, (tf, sent) in enumerate([("result", "2026-10-28T18:01:05+00:00"),
+                                    ("T-15", "2026-10-28T17:45:20+00:00")], start=1):
+        con.execute("INSERT INTO outbox (id, sent_at) VALUES (?, ?)", (i, sent))
+        con.execute("INSERT INTO events (id, alert, tf, market, bar_time, outbox_id) VALUES "
+                    "(?, 'news', ?, 'USD', '2026-10-28T18:00:00+00:00', ?)", (f"e{i}", tf, i))
+    con.commit()
+    con.close()
+    e = hr.alert_emails(hr.release_groups(CRIT), db)
+    assert e.iat[0] == 65 and np.isnan(e.iat[1])       # the result, not the reminder; no BOJ
+    assert hr.alert_emails(hr.release_groups(CRIT), tmp_path / "none.db").isna().all()
+
+
+def test_a_release_move_is_measured_against_the_same_minute_on_other_days():
+    t = pd.date_range("2026-10-26 00:00", "2026-10-29 23:59", freq="1min", tz="UTC")
+    c = np.where(np.arange(len(t)) % 2 == 1, 4000.4, 4000.0)       # a wiggle every minute
+    i = int(np.flatnonzero(t == at("2026-10-28 18:00"))[0])
+    c[i:] = c[i:] * 0.99                                         # -1% at the release
+    bars = pd.DataFrame({"open_time": t, "close": c})
+    rx = hr.reaction(bars, at("2026-10-28 18:00"), t[0], t[-1])
+    move = 3960.0 / 4000.4 - 1
+    usual = 1 - 4000.0 / 4000.4
+    for h in (1, 5):
+        assert rx[h][0] == pytest.approx(100 * move)
+        assert rx[h][1] == pytest.approx(abs(move) / usual)
+    shut = hr.reaction(bars[bars["open_time"].dt.day != 28], at("2026-10-28 18:00"), t[0], t[-1])
+    assert np.isnan(shut[1][0])
+
+
+def test_the_report_leads_with_the_critical_releases(tmp_path, monkeypatch):
+    later = RSS.replace(b"</channel>", b"<item><title>US NON-FARM PAYROLLS 254K VS 150K "
+                        b"EXPECTED</title><guid>g9</guid><pubDate>Wed, 21 Oct 2026 18:30:05 GMT"
+                        b"</pubDate></item></channel>")
+    clock = Clock("2026-10-21 18:00")
+    p, src = _probe(tmp_path, [RSS, later], clock)
+    p.meta("start", clock.t.isoformat())
+    p.poll(src)
+    clock.t = at("2026-10-21 18:50")
+    p.poll(src)
+    nfp = pd.DataFrame([dict(t=at("2026-10-21 18:30"), currency="USD", level="critical",
+                             title="Non-Farm Employment Change", actual="254K", forecast="150K")])
+    seen = {}
+
+    def calendar(start, end, levels, roots):
+        seen.update(start=start, end=end, levels=levels)
+        return nfp, "test calendar"
+    monkeypatch.setattr(hr, "load_calendar", calendar)
+    text = hr.report(tmp_path / "p.sqlite", prices=False, out=tmp_path / "r.txt",
+                     critical_only=True)
+    assert "CRITICAL RELEASES: 1 in the test" in text and "254K (forecast 150K)" in text
+    assert "feed                      5 s" in text and "RELIABILITY" not in text
+    assert seen["end"] == at("2026-10-21 18:40") and seen["levels"] == ("critical",)
+    full = hr.report(tmp_path / "p.sqlite", prices=False, out=tmp_path / "r.txt")
+    assert full.index("CRITICAL RELEASES") < full.index("RELIABILITY")
+
+
+def test_a_broken_calendar_never_loses_the_rest_of_the_report(tmp_path, monkeypatch):
+    clock = Clock("2026-10-21 18:40")
+    p, src = _probe(tmp_path, [RSS], clock)
+    p.meta("start", clock.t.isoformat())
+    p.poll(src)
+
+    def broken(*a):
+        raise OSError("disk")
+    monkeypatch.setattr(hr, "load_calendar", broken)
+    text = hr.report(tmp_path / "p.sqlite", prices=False, out=tmp_path / "r.txt")
+    assert "the calendar could not be read (OSError: disk)" in text and "RELIABILITY" in text

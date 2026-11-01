@@ -1,7 +1,11 @@
 """
 HEADLINE REPORT -- what the headline probe (experiments/headline_probe.py) recorded, judged per
-source on the four questions that decide the headlines layer:
+source on the questions that decide the headlines layer:
 
+  CRITICAL     every CRITICAL release in the test (FOMC, CPI, payrolls, GDP, PCE, ECB, BOJ ...):
+               each source's first headline about it, in seconds after its scheduled time, with
+               the number or not, beside our own alert email -- and how far Gold / USDJPY / BTC
+               moved against the same minute on the other days
   SPEED        on every story two or more sources carried, how far each was behind the first
   COVERAGE     every sharp Gold / USDJPY / BTC move: which sources had a matching headline, and
                how long before or after the move started -- against CHANCE: the same matching on
@@ -17,7 +21,8 @@ Two clocks per headline, because they answer different questions:
            time far before we saw it (a Google News article dated hours earlier) is not trusted.
 
     python experiments/headline_report.py               summary on screen, all of it in report.txt
-    python experiments/headline_report.py --no-prices   skip the sharp moves (no candle download)
+    python experiments/headline_report.py --critical    only the critical releases
+    python experiments/headline_report.py --no-prices   skip the price moves (no candle download)
 """
 from __future__ import annotations
 
@@ -72,6 +77,51 @@ MOVE_WINDOW = (pd.Timedelta(minutes=-15), pd.Timedelta(minutes=20))
 CHANCE_DRAWS = 500
 NEAR = (pd.Timedelta(hours=1), pd.Timedelta(hours=3))
 CREDIT_P = 0.05                            # credited only below this against BOTH baselines
+
+# CRITICAL RELEASES -- the scheduled numbers that move everything (quant.news "critical": FOMC,
+# CPI, payrolls, GDP, PCE, ECB, BOJ ...). Per release: which source had it first and how many
+# SECONDS after its scheduled time, whether that headline carried the number, our own alert
+# email beside them, and how far Gold / USDJPY / BTC moved against the same minute on the test's
+# other days. A source carries a release with a matching headline from 30 s before (clocks
+# differ) to 10 min after. Words like "fed" turn up all day on a busy source, so its CHANCE is the
+# same window on the other days: carrying FOMC means little if it "carries" 18:00 every day.
+ALERTS_DB = HERE.parent / "alerts" / "state" / "alerts.db"
+CALENDARS = (HERE.parent / "alerts" / "state" / "news", HERE.parent / "data" / "news")
+CRIT_WINDOW = (pd.Timedelta(seconds=-30), pd.Timedelta(minutes=10))
+CRIT_HORIZONS = (1, 5, 15, 60)             # minutes after the release
+RELEASE_WORDS = [  # (currency, release title) -> the words a headline about it uses [, minutes]
+    ("USD", r"federal funds|fomc", r"\bfed\b|fomc|federal reserve|powell|warsh|fed funds|"
+                                   r"rates? (?:decision|unchanged)"),
+    ("USD", r"gdp", r"\bgdp\b"),
+    ("USD", r"pce", r"\bpce\b"),
+    ("USD", r"cpi", r"\bcpi\b"),
+    ("USD", r"claims", r"jobless|claims"),           # before payrolls: "Unemployment Claims"
+    ("USD", r"adp", r"\badp\b"),                     # before payrolls: "ADP Non-Farm ..."
+    ("USD", r"non-farm|unemployment|hourly", r"payroll|non-?farm|\bnfp\b|unemployment|"
+                                             r"hourly earnings"),
+    ("USD", r"ppi", r"\bppi\b"),
+    ("USD", r"retail sales", r"retail sales"),
+    ("USD", r"\bism\b", r"\bism\b"),
+    ("USD", r"pmi", r"\bpmi\b"),
+    ("USD", r"jolts", r"jolts|job openings"),
+    ("USD", r"confidence|sentiment", r"confidence|sentiment"),
+    ("USD", r"durable", r"durable"),
+    ("EUR", r"pmi", r"(?:euro ?zone|euro area|\bez\b|german|france|french).*\bpmi\b"),
+    ("GBP", r"pmi", r"\buk\b.*\bpmi\b"),
+    ("EUR", r"refinancing|monetary policy|ecb", r"\becb\b|lagarde|deposit (?:facility )?rate|"
+                                                r"refinancing"),
+    ("EUR", r"cpi", r"(?:euro ?zone|euro area|\bez\b).*(?:cpi|hicp|inflation)|\bhicp\b"),
+    ("GBP", r"bank rate|monetary policy", r"\bboe\b|bank of england|bailey"),
+    ("GBP", r"cpi", r"\buk\b.*(?:cpi|inflation)"),
+    ("GBP", r"budget", r"budget|reeves"),
+    ("JPY", r"boj|policy rate|monetary policy", r"\bboj\b|bank of japan|ueda", 120),  # no set time
+    ("CAD", r"overnight rate|boc", r"\bboc\b|bank of canada|macklem"),
+    ("CAD", r"cpi|employment", r"canad"),
+    ("AUD", r"cash rate|rba", r"\brba\b|reserve bank of australia|bullock"),
+    ("AUD", r"cpi|employment", r"australia|aussie|trimmed mean"),
+    ("NZD", r"cash rate|rbnz", r"\brbnz\b|reserve bank of new zealand|official cash rate|\bocr\b"),
+    ("CHF", r"snb", r"\bsnb\b|swiss national bank"),
+]
 
 
 def load(db_path=DB):
@@ -325,21 +375,267 @@ def fetch_bars(start, end) -> Dict[str, pd.DataFrame]:
     return got
 
 
-def report(db_path=DB, prices: bool = True, out=OUT) -> str:
+def release_words(currency: str, title: str) -> tuple:
+    """(the headline words for a release, how many minutes after its scheduled time a headline
+    still counts) from RELEASE_WORDS -- (None, 0) when no rule names it. The window is 10 minutes
+    unless the rule gives more: the BOJ announces when its meeting ends, not at a set time."""
+    for rule in RELEASE_WORDS:
+        if rule[0] == currency and re.search(rule[1], str(title), re.I):
+            return rule[2], (rule[3] if len(rule) > 3 else CRIT_WINDOW[1].total_seconds() / 60)
+    return None, 0             # reported as "no headline rule": a guess would only add noise
+
+
+def load_calendar(start, end, levels=("critical",), roots=CALENDARS) -> tuple:
+    """The calendar's releases at `levels` with a known time inside [start, end), from the first
+    store that has any -- the monitor's own (alerts/state/news) before the research one (a PC's
+    monitor store can be weeks old). Built in a COPY, so the running monitor's files are only
+    read. -> (events, which store)."""
+    import shutil
+    import tempfile
+    from quant.news.calendar import NewsStore, load_events
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir() or not any(root.glob("*.parquet")):
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in list(root.glob("*.parquet")) + list(root.glob("*.json")):
+                shutil.copy2(f, tmp)
+            ev = load_events(start, end, store=NewsStore(tmp), timed_only=True)
+        ev = ev[ev["level"].isin(levels)].reset_index(drop=True)
+        if len(ev):
+            return ev, str(root)
+    return (pd.DataFrame(columns=["t", "currency", "title", "level", "actual", "forecast"]),
+            "no store with releases in the window: " + ", ".join(str(r) for r in roots))
+
+
+def release_groups(events: pd.DataFrame) -> pd.DataFrame:
+    """One row per release MOMENT (the same currency at the same minute -- the Fed's rate and its
+    statement are one event): its titles, the number (actual vs forecast, where the calendar has
+    it) and the headline words of all its titles."""
+    rows = []
+    for (t, cur), g in events.sort_values("t").groupby(["t", "currency"], sort=True):
+        pats, minutes = [], 0.0
+        for title in g["title"]:
+            w, m = release_words(cur, title)
+            if w is not None and w not in pats:
+                pats.append(w)
+            minutes = max(minutes, m)
+        nums = []
+        for r in g.itertuples():
+            a = r.actual if isinstance(r.actual, str) and r.actual else None
+            f = r.forecast if isinstance(r.forecast, str) and r.forecast else None
+            if a or f:
+                nums.append(f"{r.title} {a or '(no number)'}" + (f" (forecast {f})" if f else ""))
+        rows.append(dict(t=pd.Timestamp(t), currency=cur, titles=" + ".join(g["title"]),
+                         level=g["level"].iat[0], numbers="; ".join(nums),
+                         words="|".join(pats) if pats else None,
+                         until=pd.Timedelta(minutes=minutes)))
+    return pd.DataFrame(rows, columns=["t", "currency", "titles", "level", "numbers", "words",
+                                       "until"])
+
+
+def release_delivery(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str]) -> pd.DataFrame:
+    """Per release and source, its first matching headline inside CRIT_WINDOW: seconds after the
+    scheduled time by the source's clock (`delay_s`) and by ours (`seen_s`), and the seconds to its
+    first headline WITH A NUMBER in it (`number_s`) -- "FOMC statement due" is not the result."""
+    rows = []
+    for gi, g in groups.iterrows():
+        if g["words"] is None:
+            continue
+        lo, hi = g["t"] + CRIT_WINDOW[0], g["t"] + g["until"]
+        win = d[(d["t"] >= lo) & (d["t"] <= hi)]
+        win = win[win["title"].str.contains(g["words"], case=False, regex=True)].sort_values("t")
+        for s in sources:
+            w = win[win["source"] == s]
+            if not len(w):
+                continue
+            num = w[w["title"].str.contains(r"\d", regex=True)]
+            rows.append(dict(release=gi, source=s,
+                             delay_s=(w["t"].iat[0] - g["t"]).total_seconds(),
+                             seen_s=(w["seen"].iat[0] - g["t"]).total_seconds(),
+                             number_s=((num["t"].iat[0] - g["t"]).total_seconds()
+                                       if len(num) else np.nan),
+                             headline=w["title"].iat[0]))
+    return pd.DataFrame(rows, columns=["release", "source", "delay_s", "seen_s", "number_s",
+                                       "headline"])
+
+
+def release_chance(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str], start,
+                   end) -> pd.Series:
+    """Per source, the share of the SAME windows on the test's other days (same clock time, same
+    words) holding a matching headline: what carrying a release is worth by luck."""
+    hits = {s: [0, 0] for s in sources}
+    days = pd.date_range(pd.Timestamp(start).floor("D"), pd.Timestamp(end).floor("D"), freq="D")
+    for _, g in groups.iterrows():
+        if g["words"] is None:
+            continue
+        tod = g["t"] - g["t"].floor("D")
+        for day in days:
+            at = day + tod
+            if at.floor("D") == g["t"].floor("D") or at + CRIT_WINDOW[0] < start \
+                    or at + g["until"] > end:
+                continue
+            win = d[(d["t"] >= at + CRIT_WINDOW[0]) & (d["t"] <= at + g["until"])]
+            win = win[win["title"].str.contains(g["words"], case=False, regex=True)]
+            have = set(win["source"])
+            for s in sources:
+                hits[s][0] += s in have
+                hits[s][1] += 1
+    return pd.Series({s: (round(100 * h / n, 0) if n else np.nan) for s, (h, n) in hits.items()})
+
+
+def alert_emails(groups: pd.DataFrame, db_path=ALERTS_DB) -> pd.Series:
+    """Per release, seconds from its scheduled time to the monitor's RESULT email (the number,
+    from the agencies for US releases) -- read-only from the alerts database; NaN where no result
+    email went (no number came: outside the US that needs JBlanked's paid credits)."""
+    out = pd.Series(np.nan, index=groups.index)
+    if not Path(db_path).is_file() or groups.empty:
+        return out
+    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        r = pd.read_sql("SELECT e.market, e.bar_time, o.sent_at FROM events e JOIN outbox o "
+                        "ON o.id = e.outbox_id WHERE e.alert = 'news' AND e.tf = 'result' "
+                        "AND o.sent_at IS NOT NULL", db)
+    finally:
+        db.close()
+    if r.empty:
+        return out
+    r["bar_time"] = pd.to_datetime(r["bar_time"], utc=True, format="ISO8601")
+    r["sent_at"] = pd.to_datetime(r["sent_at"], utc=True, format="ISO8601")
+    for gi, g in groups.iterrows():
+        m = r[(r["market"] == g["currency"]) & (r["bar_time"] == g["t"])]
+        if len(m):
+            out[gi] = (m["sent_at"].min() - g["t"]).total_seconds()
+    return out
+
+
+def reaction(bars: pd.DataFrame, at, start, end, horizons=CRIT_HORIZONS) -> Dict[int, tuple]:
+    """{minutes: (move %, times the usual)}: from the price at `at` (the close of the minute
+    before) to h minutes later, against the median absolute move from the same clock minute on the
+    other days of [start, end]. NaN where the market was shut."""
+    b = bars.sort_values("open_time")
+    close = pd.Series(b["close"].to_numpy(float), index=pd.DatetimeIndex(b["open_time"]))
+    close = close[~close.index.duplicated()]
+    one = pd.Timedelta(minutes=1)
+
+    def move(t, h):
+        p0, p1 = close.get(t - one), close.get(t + (h - 1) * one)
+        return p1 / p0 - 1 if p0 is not None and p1 is not None and p0 > 0 else np.nan
+
+    tod = at - at.floor("D")
+    days = [day for day in pd.date_range(pd.Timestamp(start).floor("D"),
+                                         pd.Timestamp(end).floor("D"), freq="D")
+            if day != at.floor("D")]
+    out = {}
+    for h in horizons:
+        usual = np.abs([move(day + tod, h) for day in days])
+        usual = usual[np.isfinite(usual)]
+        med = float(np.median(usual)) if len(usual) else np.nan
+        r = move(at, h)
+        out[h] = (100 * r, abs(r) / med if med > 0 else np.nan)
+    return out
+
+
+def critical_section(groups, d, sources, start, end, bars=None, alerts_db=ALERTS_DB,
+                     calendar="") -> str:
+    """The CRITICAL RELEASES part of the report: a block per release, then a table per source."""
+    if groups.empty:
+        return (f"\nCRITICAL RELEASES: none in the test window (calendar: {calendar})")
+    deliv = release_delivery(groups, d, sources)
+    email = alert_emails(groups, alerts_db)
+    lines = [f"\nCRITICAL RELEASES: {len(groups)} in the test -- seconds after the scheduled time "
+             f"to each source's first headline about it (its own clock; 'seen' = when we had it), "
+             f"from {int(-CRIT_WINDOW[0].total_seconds())} s before to "
+             f"{int(CRIT_WINDOW[1].total_seconds() / 60)} min after (longer for a release with no "
+             f"set time). Calendar: {calendar}"]
+    for gi, g in groups.iterrows():
+        lines.append(f"\n{g['t']:%a %d %b %H:%M} UTC  {g['currency']}  {g['titles']}  "
+                     f"[{g['level']}]")
+        lines.append(f"  the number: {g['numbers'] or '- (a statement or a press conference)'}")
+        lines.append("  our alert email      " + (f"{email[gi]:6.0f} s  (the result)"
+                                                 if np.isfinite(email[gi]) else
+                                                 "     -    no result email"))
+        rows = deliv[deliv["release"] == gi].sort_values("delay_s")
+        for r in rows.itertuples():
+            num = "" if np.isnan(r.number_s) else (
+                "" if r.number_s == r.delay_s else f"  number at {r.number_s:.0f} s")
+            if np.isnan(r.number_s):
+                num = "  no number"
+            lines.append(f"  {r.source:20s} {r.delay_s:6.0f} s  seen {r.seen_s:6.0f} s{num}  "
+                         f"| {' '.join(str(r.headline).split())[:95]}")   # one line, always
+        missing = [s for s in sources if s not in set(rows["source"])]
+        if g["words"] is None:
+            lines.append("  (no headline rule for this release)")
+        elif missing:
+            lines.append(f"  nothing within {int(g['until'].total_seconds() / 60)} min: "
+                         + ", ".join(missing))
+        for mk, b in (bars or {}).items():
+            rx = reaction(b, g["t"], start, end)
+            cells = [f"{h}m {v[0]:+.2f}% ({v[1]:.1f}x)" if np.isfinite(v[0]) else f"{h}m shut"
+                     for h, v in rx.items()]
+            lines.append(f"  moved {mk:7s} " + "   ".join(cells))
+    if bars:
+        lines.append("\n  moved = from the price at the release time; (Nx) = N times the usual "
+                     "move from that minute on the test's other days")
+    chance_ = release_chance(groups, d, sources, start, end)
+    n = int(groups["words"].notna().sum())
+    summ = {}
+    for s in sources:
+        r = deliv[deliv["source"] == s]
+        first = 0
+        for gi in r["release"]:
+            best = deliv[deliv["release"] == gi]["delay_s"].min()
+            first += int(r[r["release"] == gi]["delay_s"].iat[0] == best)
+        summ[s] = dict(carried=f"{len(r)}/{n}", first=first,
+                       delay_med_s=round(r["delay_s"].median(), 0) if len(r) else np.nan,
+                       seen_med_s=round(r["seen_s"].median(), 0) if len(r) else np.nan,
+                       with_number=f"{int(r['number_s'].notna().sum())}/{n}",
+                       number_med_s=round(r["number_s"].median(), 0) if len(r) else np.nan,
+                       chance_pct=chance_[s])
+    us = email.notna()
+    summ["our alert email"] = dict(carried=f"{int(us.sum())}/{n}", first=np.nan,
+                                   delay_med_s=round(email[us].median(), 0) if us.any() else np.nan,
+                                   seen_med_s=np.nan, with_number=f"{int(us.sum())}/{n}",
+                                   number_med_s=round(email[us].median(), 0) if us.any()
+                                   else np.nan, chance_pct=np.nan)
+    t = pd.DataFrame(summ).T.sort_values(["first", "delay_med_s"], ascending=[False, True])
+    lines += [f"\nCRITICAL RELEASES -- per source over the {n}: carried = had a headline about it, "
+              "first = had it before every other source, with_number = a headline carrying the "
+              "number,\n  chance_pct = how often the same words turn up in the same window on "
+              "the other days (a source that matches every day carries nothing)", t.to_string()]
+    return "\n".join(lines)
+
+
+def report(db_path=DB, prices: bool = True, out=OUT, critical_only: bool = False,
+           levels=("critical",), alerts_db=None, calendars=None) -> str:
+    alerts_db = ALERTS_DB if alerts_db is None else alerts_db
+    calendars = CALENDARS if calendars is None else calendars
     items, polls, start = load(db_path)
     end = polls["at"].max()
     days = max((end - start).total_seconds() / 86400, 1e-9)
     d = timed(items)
     sources = sorted(polls["source"].unique())
     parts = [f"HEADLINE PROBE {start:%d %b %H:%M} -> {end:%d %b %H:%M} UTC ({days:.1f} days): "
-             f"{len(d)} timed headlines from {len(sources)} sources",
-             "\nRELIABILITY", reliability_table(items, polls, start, end).to_string(),
-             "\nSPEED: seconds behind the first source, on stories 2+ sources carried",
-             speed_table(d).to_string(),
-             "\nNOISE: headlines a day the draft keyword rules flag",
-             noise_table(d, days).to_string()]
+             f"{len(d)} timed headlines from {len(sources)} sources"]
+    bars = fetch_bars(start, end) if prices else {}
+    try:                       # releases whose whole window was recorded
+        events, cal = load_calendar(start, end - CRIT_WINDOW[1], levels, calendars)
+        parts.append(critical_section(release_groups(events), d, sources, start, end, bars,
+                                      alerts_db, cal))
+    except Exception as e:     # the calendar is a bonus here: never lose the rest of the report
+        parts.append(f"\nCRITICAL RELEASES: the calendar could not be read ({type(e).__name__}: "
+                     f"{e})")
+    if critical_only:
+        text = "\n".join(parts)
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(text, encoding="utf-8")
+        return text
+    parts += ["\nRELIABILITY", reliability_table(items, polls, start, end).to_string(),
+              "\nSPEED: seconds behind the first source, on stories 2+ sources carried",
+              speed_table(d).to_string(),
+              "\nNOISE: headlines a day the draft keyword rules flag",
+              noise_table(d, days).to_string()]
     if prices:
-        bars = fetch_bars(start, end)
         # moves are judged against the day BEFORE (fetch_bars reaches back one): find them on all
         # the candles, then keep those inside the test -- cutting the candles first left the
         # first 4 hours with no typical move to compare against, so none could be found there
@@ -367,8 +663,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--db", default=str(DB))
     ap.add_argument("--no-prices", action="store_true", help="skip the sharp-move coverage")
+    ap.add_argument("--critical", action="store_true",
+                    help="only the critical releases (who had each one first, and the price)")
+    ap.add_argument("--levels", default="critical",
+                    help="calendar levels to include, e.g. critical,high (default critical)")
     a = ap.parse_args(argv)
-    print(report(a.db, prices=not a.no_prices))
+    print(report(a.db, prices=not a.no_prices, critical_only=a.critical,
+                 levels=tuple(x.strip() for x in a.levels.split(","))))
     print(f"\n(also written to {OUT})")
 
 

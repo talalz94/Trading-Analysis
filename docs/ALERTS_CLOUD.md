@@ -264,7 +264,8 @@ it on for every email (`sudo systemctl restart quant-alerts` once, so the monito
 ```bash
 bash scripts/install_headline_probe.sh                          # tests each source, then starts it
 .venv/bin/python experiments/headline_probe.py --status         # what it has recorded
-PYTHONPATH=. .venv/bin/python experiments/headline_report.py    # speed / coverage / noise / reliability
+PYTHONPATH=. .venv/bin/python experiments/headline_report.py    # critical releases / speed / coverage / noise / reliability
+PYTHONPATH=. .venv/bin/python experiments/headline_report.py --critical    # only the critical releases
 bash scripts/install_headline_probe.sh --uninstall              # stop and remove it
 ```
 
