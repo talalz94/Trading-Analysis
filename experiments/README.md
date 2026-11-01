@@ -33,6 +33,8 @@ python experiments/headline_probe.py --once   # every free headline source once 
                                               #   server: scripts/install_headline_probe.sh)
 PYTHONPATH=. python experiments/headline_report.py   # what the probe recorded: critical releases, speed, coverage, noise
 PYTHONPATH=. python experiments/headline_report.py --critical   # only who had each critical release first
+PYTHONPATH=. python experiments/telegram_check.py   # free Telegram channels judged on their HISTORY (server only:
+                                                    #   Telegram does not open from Pakistan)
 # any strategy file and its COMPARE arms, quarter by quarter: notebooks/evaluate.ipynb, or
 #   from experiments.evaluate import evaluate; evaluate(evaluate_config()).arms()
 ```

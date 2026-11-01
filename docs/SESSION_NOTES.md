@@ -2884,3 +2884,23 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   - 30 Oct: BOJ 03:02 (Forex Factory's guess: a 2 h window) and its press conference 06:30.
 - The calendar has no number for the RBNZ, BoC, ECB or BOJ: outside the US that needs JBlanked's
   paid credits. So for those the alerts send no result, and a headline would be the only fast one.
+
+### Telegram channels that post only the big news (2026-11-01)
+
+- The user asked whether a Telegram channel posting only critical news would beat filtering
+  FinancialJuice's ~258 a day. Two catches were known up front:
+  - every free channel copies the paid terminals, so none can beat the market;
+  - a channel that posts little can also miss, or post something false. Walter Bloomberg posted
+    the false "tariff pause" headline of 7 Apr 2025.
+- experiments/telegram_check.py judges channels on news that ALREADY happened. A public
+  channel's page t.me/s/<name> pages back with ?before=<id>, each post with Telegram's own time,
+  so there is no week of recording. It reports:
+  - posts a day, and how many the draft rules would flag;
+  - for each critical release and for 21 Oct's Gulf ordered departure (gold fell from 18:44
+    UTC; a 90-minute window before it, because an early warning is the point), the seconds to
+    each channel's first post;
+  - the same words on the other days, as chance;
+  - FinancialJuice RSS from the test, beside them.
+- Only WalterBloomberg and FinancialJuice were in the headline test. Neither this PC nor the
+  fetch tool could open Telegram to confirm the other candidate names, so the server run reports
+  which exist.
