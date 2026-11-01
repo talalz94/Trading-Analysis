@@ -59,6 +59,13 @@ CANDIDATES = [
     ("FaytuksNetwork", "geopolitics"),
     ("ClashReport", "conflict news"),
     ("IranIntl_En", "Iran International, English"),
+    # "DB News TradFi" was recommended on r/Daytrading ("x or telegram feeds ... db news tradfi,
+    # walter bloomberg"); its t.me name could not be found, so these are guesses -- the report
+    # prints each channel's own title to show which, if any, is it
+    ("db_news", "DB News? (guessed name)"),
+    ("dbnewstradfi", "DB News TradFi? (guessed name)"),
+    ("db_tradfi", "DB News TradFi? (guessed name)"),
+    ("tier10k", "DB's X name, on Telegram? (guessed name)"),
 ]
 
 # News with no calendar time: the moment the market moved, the words a post about it uses, and
@@ -72,6 +79,17 @@ UNSCHEDULED = [
 ]
 
 _POST_ID = re.compile(r'data-post="[^"/]+/(\d+)"')
+_TITLE = re.compile(r'<meta property="og:title" content="([^"]*)"')
+_SUBS = re.compile(r'counter_value">([^<]+)</span>\s*<span class="counter_type">subscribers')
+
+
+def channel_info(text: str) -> Dict[str, str]:
+    """The channel's own title and subscriber count from its page: what a guessed t.me name
+    turned out to be."""
+    import html
+    t, s = _TITLE.search(text), _SUBS.search(text)
+    return dict(title=html.unescape(t.group(1)).strip() if t else "",
+                subscribers=s.group(1).strip() if s else "")
 
 
 def _get(url: str, fetch: Callable, sleep: Callable, tries: int = 4):
@@ -93,9 +111,10 @@ def _get(url: str, fetch: Callable, sleep: Callable, tries: int = 4):
 
 
 def history(name: str, start=START, fetch: Callable = http_get, sleep: Callable = time.sleep,
-            pause: float = PAUSE_S, max_pages: int = MAX_PAGES):
+            pause: float = PAUSE_S, max_pages: int = MAX_PAGES, info: Dict = None):
     """A public channel's posts back to `start`, newest page first, each page asking for the
     posts before the oldest one seen (photo-only posts have no words but still count for paging).
+    `info`, if given, receives the channel's title and subscriber count from its first page.
     -> (DataFrame [id, t, title], what happened: ok | not a public channel | HTTP n | stopped)."""
     rows: List[dict] = []
     before = None
@@ -107,6 +126,8 @@ def history(name: str, start=START, fetch: Callable = http_get, sleep: Callable 
                 return _frame(rows), f"ok, stopped at HTTP {status}"
             return _frame(rows), f"HTTP {status}" if status else body.decode()[:80]
         text = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
+        if info is not None and page == 0:
+            info.update(channel_info(text))
         ids = [int(x) for x in _POST_ID.findall(text)]
         if not ids:
             return _frame(rows), "ok" if rows else "not a public channel"
@@ -142,10 +163,11 @@ def check(channels: List[str], start=START, end=END, fetch: Callable = http_get,
           out_dir=OUT_DIR, log: Callable = print) -> str:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    msgs, status = {}, {}
+    msgs, status, infos = {}, {}, {}
     for name in channels:
         log(f"reading {name} ...")
-        df, st = history(name, start, fetch=fetch, sleep=sleep)
+        infos[name] = {}
+        df, st = history(name, start, fetch=fetch, sleep=sleep, info=infos[name])
         msgs[name], status[name] = df[(df["t"] >= start) & (df["t"] < end)], st
         if len(df):
             df.to_csv(out_dir / f"{name}.csv", index=False)
@@ -178,7 +200,9 @@ def check(channels: List[str], start=START, end=END, fetch: Callable = http_get,
             flag |= hit
             if rule.startswith("P1"):
                 p1 |= hit
-        rows[name] = dict(status=status[name], posts=len(m),
+        rows[name] = dict(title=infos[name].get("title", "")[:28] or "-",
+                          subscribers=infos[name].get("subscribers", "") or "-",
+                          status=status[name], posts=len(m),
                           per_day=round(len(m) / span, 1) if len(m) else 0,
                           flagged_per_day=round(flag.sum() / span, 1) if len(m) else 0,
                           p1_per_day=round(p1.sum() / span, 1) if len(m) else 0,

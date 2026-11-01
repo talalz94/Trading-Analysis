@@ -2,6 +2,8 @@
 experiments/telegram_check.py -- reading a public Telegram channel's history back through its
 web pages, and timing each channel against the events. Hand-built pages, no network.
 """
+import re
+
 import pandas as pd
 
 from experiments import headline_report as hr
@@ -12,9 +14,16 @@ def at(s):
     return pd.Timestamp(s, tz="UTC")
 
 
-def _page(name, posts):
-    """A t.me/s page: posts = [(id, "2026-10-21 18:46:05", text or None for a photo)]."""
-    out = ["<html><body>"]
+def _page(name, posts, title=None, subs=None):
+    """A t.me/s page: posts = [(id, "2026-10-21 18:46:05", text or None for a photo)], with the
+    channel's header (its title and subscriber count) when given."""
+    out = ["<html><head>"]
+    if title:
+        out.append(f'<meta property="og:title" content="{title}">')
+    out.append("</head><body>")
+    if subs:
+        out.append(f'<div class="tgme_channel_info_counter"><span class="counter_value">{subs}'
+                   f'</span> <span class="counter_type">subscribers</span></div>')
     for i, when, text in posts:
         body = (f'<div class="tgme_widget_message_text js-message_text" dir="auto">{text}</div>'
                 if text else '<div class="tgme_widget_message_photo"></div>')
@@ -87,15 +96,18 @@ def test_each_channel_is_timed_against_the_events_and_its_chance(tmp_path, monke
     fast = _page("Fast", [(1, "2026-10-19 10:00", "a post from before the window"),
                           (2, "2026-10-21 17:52", "US Embassy security alert for Saudi Arabia"),
                           (3, "2026-10-21 18:47", "US ORDERED DEPARTURE FROM GULF EMBASSIES"),
-                          (4, "2026-10-28 18:00:04", "FED LEAVES RATES UNCHANGED AT 4.00%")])
+                          (4, "2026-10-28 18:00:04", "FED LEAVES RATES UNCHANGED AT 4.00%")],
+                 title="Fast News &amp; Co", subs="12.3K")
     chatty = _page("Chatty", [(k, f"2026-10-{d} 18:02", f"Fed speaker {k} on the outlook")
                               for k, d in enumerate(range(20, 31), start=1)])
     web = Web({"https://t.me/s/Fast": fast, "https://t.me/s/Chatty": chatty})
     text = tc.check(["Fast", "Chatty", "Nobody"], fetch=web, sleep=lambda s: None,
                     probe_db=None, calendars=(), out_dir=tmp_path, log=lambda *a: None)
     assert "Nobody" in text and "not a public channel" in text
-    top = {ln.split()[0]: ln.split() for ln in text[:text.index("\nEVENTS")].splitlines()[3:]}
-    assert top["Fast"][1:3] == ["ok", "3"]                       # the 19 Oct post is not counted
+    fast_row = [ln for ln in text[:text.index("\nEVENTS")].splitlines()
+                if ln.startswith("Fast ")][0]
+    assert "Fast News & Co" in fast_row and "12.3K" in fast_row  # what the name turned out to be
+    assert re.search(r"\bok\s+3\b", fast_row)                    # the 19 Oct post is not counted
     gulf = text[text.index("Gulf embassies"):text.index("Federal Funds Rate")]
     assert "Fast" in gulf and "-3120 s" in gulf                 # the warning, 52 min before
     fed = text[text.index("Federal Funds Rate"):text.index("PER CHANNEL")]

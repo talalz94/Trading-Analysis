@@ -2904,3 +2904,12 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
 - Only WalterBloomberg and FinancialJuice were in the headline test. Neither this PC nor the
   fetch tool could open Telegram to confirm the other candidate names, so the server run reports
   which exist.
+- Two Reddit threads the user found:
+  - r/Daytrading "best platform for fast/accurate news" named FinancialJuice, Walter
+    Bloomberg, "db news tradfi", X and BizToc. The first two were already in the test. DB News
+    TradFi's t.me name could not be found, so four guesses are in CANDIDATES and the report
+    prints each channel's own title to confirm them. Reading X automatically is paid. BizToc
+    has a feed, biztoc.com/feed according to a third-party directory. A feed shows only its
+    latest items, so BizToc can only be judged by recording it live.
+  - r/singaporefi "useful finance telegram channels" lists Singapore personal-finance creators
+    and tools, plus a daily gold-PRICE channel. None of them is a news source.
