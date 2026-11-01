@@ -31,7 +31,8 @@ python -m experiments.nq_open_reversion # JJ Simon's NY-open reversion on Nasdaq
 python -m experiments.nq_news_reversion # his A+ news-day reversion to the 8:29 price (needs quant.news) -- -0.09R, negative before costs
 python experiments/headline_probe.py --once   # every free headline source once (the 7-day test runs on the
                                               #   server: scripts/install_headline_probe.sh)
-PYTHONPATH=. python experiments/headline_report.py   # what the probe recorded: speed, coverage, noise
+PYTHONPATH=. python experiments/headline_report.py   # what the probe recorded: critical releases, speed, coverage, noise
+PYTHONPATH=. python experiments/headline_report.py --critical   # only who had each critical release first
 # any strategy file and its COMPARE arms, quarter by quarter: notebooks/evaluate.ipynb, or
 #   from experiments.evaluate import evaluate; evaluate(evaluate_config()).arms()
 ```

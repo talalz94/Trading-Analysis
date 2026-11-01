@@ -2847,3 +2847,40 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   event, FinancialJuice RSS is the feed (Walter's Telegram as backup) with rules tightened far below
   its ~41 flagged a day. Limits: 52 moves is small, keyword matching is crude, and the two misses
   that motivated the test (Gold 21 Oct, 23 Oct) predate it or were scheduled news.
+
+### Exness: "class `list` does not have a public constructor" (2026-11-01)
+
+- Trendlines MTF failed to compile on Exness (ETHUSD 1m). Each timeframe's `_once()` snapshot,
+  added on 28 Oct, copied its lists with `list(...)`, which Exness's older Indie refuses (the
+  current docs list it as a builtin). bias.py did the same. Both now copy with an append loop.
+- A file can pass every stand-in test and still not compile, because the stand-in is CPython. So
+  tests/test_exness_indie_rules.py checks every exness/*.py three ways:
+  - only constructs that have compiled on Exness (fair_value_gaps.py, trendlines.py, the probe);
+  - Indie's block scope: a variable created inside an `if` does not exist after it;
+  - Indie's static types, by mypy against stubs of the Indie API.
+- What it found beyond `list()`:
+  - levels.py `_start` set `z` in both halves of an if/else and read it after. That is the Indie
+    docs' own example of a compile error. Fixed.
+  - Trendlines MTF set a label's `text_color` after making it, which had never compiled on Exness.
+    It now gets its colour when it is made: the side never changes for a slot.
+- The code that compiled on Exness passes all three checks with no error, so the checks match
+  Exness on it. Seven bugs were put back into real files on purpose: the checks caught all seven.
+
+### Critical releases in the headline test (2026-11-01)
+
+- The sharp-move coverage asked whether ANY headline explains a move. The user's question is
+  narrower: when a CRITICAL release comes out (FOMC, CPI, payrolls, GDP, PCE, ECB, BOJ ...), which
+  source has the result first, in seconds, beside our own alert email.
+- headline_report.py now leads with CRITICAL RELEASES, one block per release. Each block gives
+  the calendar's number, our result email's delay (from alerts.db, read-only), and each source's
+  first headline about it. Every delay is in seconds, by the source's clock and by ours, plus the
+  delay to the first headline that carries the number.
+- Then Gold, USDJPY and BTC moves at 1/5/15/60 min, against the same minute on the test's other
+  days. A per-source table follows, with each source's CHANCE: the same words in the same window
+  on the other days. `--critical` prints only this section.
+- Nine critical moments fell in the 8.5-day test:
+  - 28 Oct: RBNZ 01:00, Bank of Canada 13:45, FOMC 18:00 and its press conference 18:30;
+  - 29 Oct: US GDP + Core PCE 12:30, ECB 13:15 and its press conference 13:45;
+  - 30 Oct: BOJ 03:02 (Forex Factory's guess: a 2 h window) and its press conference 06:30.
+- The calendar has no number for the RBNZ, BoC, ECB or BOJ: outside the US that needs JBlanked's
+  paid credits. So for those the alerts send no result, and a headline would be the only fast one.
