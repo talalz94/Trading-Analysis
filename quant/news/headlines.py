@@ -73,8 +73,11 @@ RELEASE_WORDS = [  # (currency, release title) -> the words a headline about it 
     ("USD", r"cpi", r"\bcpi\b"),
     ("USD", r"claims", r"jobless|claims"),           # before payrolls: "Unemployment Claims"
     ("USD", r"adp", r"\badp\b"),                     # before payrolls: "ADP Non-Farm ..."
-    ("USD", r"non-farm|unemployment|hourly", r"payroll|non-?farm|\bnfp\b|unemployment|"
-                                             r"hourly earnings"),
+    # the jobs report's three numbers each get THEIR words, so the official payrolls figure is
+    # checked against the payrolls line and not the unemployment rate typed a second earlier
+    ("USD", r"non-farm", r"payroll|non-?farm|\bnfp\b"),
+    ("USD", r"unemployment", r"unemployment"),
+    ("USD", r"hourly", r"hourly earnings|average earnings"),
     ("USD", r"ppi", r"\bppi\b"),
     ("USD", r"retail sales", r"retail sales"),
     ("USD", r"\bism\b", r"\bism\b"),
@@ -255,18 +258,40 @@ def headline_number(text: str) -> Optional[float]:
     return None if v != v else v                          # NaN -> None
 
 
+_CUES = (("core", r"\bcore\b"), ("price", r"\bprices?\b"))
+
+
+def _about(title: str, text: str) -> bool:
+    """Is a line about THIS title rather than its neighbour typed beside it? A core title wants
+    "core" and a headline one refuses it (CPI m/m is not Core CPI m/m); likewise "price" (GDP is
+    not the GDP price index); m/m wants a monthly line, y/y a yearly one."""
+    t = title.lower()
+    for word, rx in _CUES:
+        if bool(re.search(rx, text, re.I)) != (word in t):
+            return False
+    if "m/m" in t and not re.search(r"\bm/?o/?m\b|\bm/m\b|month", text, re.I):
+        return False
+    if "y/y" in t and not re.search(r"\by/?o/?y\b|\by/y\b|year|annual", text, re.I):
+        return False
+    return True
+
+
 def agrees(actual, currency: str, title: str, lines: List[dict]) -> Optional[bool]:
-    """Did a headline about THIS title print the official `actual`? True; False (the first one
-    about it with a number printed another); None (none about it printed a number -- on GDP day
-    a line about PCE says nothing about GDP)."""
+    """Did a headline about THIS title print the official `actual`? True (one of the lines about it
+    gives that number as its result); False (they give others); None (no line about it gives a
+    number: on GDP day the PCE line says nothing about GDP). "About it" = its words, and its
+    neighbours' lines left out (_about) -- one release day prints several numbers in a row."""
     words, _ = release_words(currency, title)
     want = parse_value(actual) if actual is not None else float("nan")
     if words is None or want != want:
         return None
+    got = []
     for x in lines:
-        if not re.search(words, x.get("text") or x.get("title") or "", re.I):
-            continue
-        got = headline_number(x.get("text") or x.get("title") or "")
-        if got is not None:
-            return abs(got - want) <= 1e-9 * max(1.0, abs(want))
-    return None
+        text = x.get("text") or x.get("title") or ""
+        if re.search(words, text, re.I) and _about(title, text):
+            n = headline_number(text)
+            if n is not None:
+                got.append(n)
+    if not got:
+        return None
+    return any(abs(n - want) <= 1e-9 * max(1.0, abs(want)) for n in got)

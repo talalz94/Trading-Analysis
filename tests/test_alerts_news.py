@@ -601,8 +601,8 @@ def test_only_a_covered_release_in_its_window_with_words_is_asked_about(tmp_path
 
 
 @pytest.mark.parametrize("said, mailed, note", [
-    ("US CPI Actual 0.5% (Forecast 0.3%)", False, None),
-    ("US CPI Actual 0.4% (Forecast 0.3%)", True, "the first headline printed another"),
+    ("US CPI MoM Actual 0.5% (Forecast 0.3%)", False, None),
+    ("US CPI MoM Actual 0.4% (Forecast 0.3%)", True, "it differs from the headline"),
     ("US CPI hotter than expected, core sticky", True, "(the official number)"),
 ])
 def test_the_official_number_is_mailed_only_when_the_headline_did_not_print_it(

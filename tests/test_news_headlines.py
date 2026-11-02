@@ -90,11 +90,45 @@ def test_the_official_number_is_checked_against_the_lines_about_its_own_title():
     lines = [dict(text=H.clean(x["title"])) for x in GDP_DAY[1:3]]
     assert H.agrees("3.4%", "USD", "Advance GDP q/q", lines) is True
     assert H.agrees("3.5%", "USD", "Advance GDP q/q", lines) is False
-    assert H.agrees("2.5%", "USD", "Core PCE Price Index m/m", lines) is True
+    # the GDP report's quarterly "Core PCE Prices" is not the monthly Core PCE Price Index m/m
+    assert H.agrees("2.5%", "USD", "Core PCE Price Index m/m", lines) is None
     assert H.agrees("3.4%", "USD", "Advance GDP q/q", lines[:1]) is None   # only the PCE line
     assert H.agrees("4.00%", "USD", "Federal Funds Rate",
                     [dict(text="US Interest Rate Decision Actual 4% (Forecast 4%)")]) is True
     assert H.agrees(None, "USD", "Advance GDP q/q", lines) is None
+
+
+JOBS_DAY = [dict(text=s) for s in (           # three numbers typed within seconds of each other
+    "US Unemployment Rate Actual 4.2% (Forecast 4.2%, Previous 4.2%)",
+    "US Non-Farm Payrolls Actual 64K (Forecast 63K, Previous 29K)",
+    "US Average Hourly Earnings MoM Actual 0.3% (Forecast 0.3%, Previous 0.1%)",
+    "US Average Hourly Earnings YoY Actual 3.8% (Forecast 3.7%, Previous 3.7%)")]
+CPI_DAY = [dict(text=s) for s in (
+    "US CPI MoM Actual 0.3% (Forecast 0.3%)", "US CPI YoY Actual 3.1% (Forecast 3.0%)",
+    "US Core CPI MoM Actual 0.4% (Forecast 0.3%)", "US Core CPI YoY Actual 3.0% (Forecast 3.0%)")]
+
+
+@pytest.mark.parametrize("lines, title, actual, want", [
+    (JOBS_DAY, "Non-Farm Employment Change", "64K", True),     # not the 4.2 typed first
+    (JOBS_DAY, "Non-Farm Employment Change", "65K", False),
+    (JOBS_DAY, "Unemployment Rate", "4.2%", True),
+    (JOBS_DAY, "Average Hourly Earnings m/m", "0.3%", True),
+    (JOBS_DAY, "Average Hourly Earnings m/m", "3.8%", False),   # that is the yearly line
+    (CPI_DAY, "CPI m/m", "0.3%", True),
+    (CPI_DAY, "CPI m/m", "0.4%", False),                        # 0.4 is CORE's
+    (CPI_DAY, "Core CPI m/m", "0.4%", True),
+    (CPI_DAY, "CPI y/y", "3.1%", True),
+    (CPI_DAY, "CPI y/y", "0.3%", False),                        # 0.3 is the MONTHLY line's
+    (CPI_DAY, "Core CPI y/y", "3.0%", True),
+    ([dict(text="US GDP Price Index Advance Actual 2.9%")], "Advance GDP q/q", "3.4%", None),
+    (JOBS_DAY[:1], "Non-Farm Employment Change", "64K", None),  # only the jobless RATE typed
+    ([dict(text="US Private Non-Farm Payrolls Actual 50K"),       # two lines about payrolls:
+      dict(text="US Non-Farm Payrolls Actual 64K")],              # either may be the number
+     "Non-Farm Employment Change", "64K", True),
+])
+def test_on_a_day_of_several_numbers_each_is_checked_against_its_own_line(lines, title, actual,
+                                                                          want):
+    assert H.agrees(actual, "USD", title, lines) is want
 
 
 RSS = (b"\xef\xbb\xbf<?xml version='1.0'?><rss><channel>"
