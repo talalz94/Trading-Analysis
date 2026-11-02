@@ -2944,3 +2944,33 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   never help a chart that is slow.
 - The type check caught a compile error on its first day. Structure's new list reused a name
   (`o1`) already declared as list[int]. Python rebinds it; Indie refuses it.
+
+### Critical releases: who had the number first, and a wrong GDP result (2026-11-02)
+
+- The --critical report ran on the server: 9 critical release moments in the 8.5-day test.
+- FinancialJuice RSS had all 9 and was first on 7. Its median was 8 s after the scheduled time by
+  its own clock, 38 s by ours, and every headline carried the actual and the forecast ("BoC Rate
+  Decision Actual 2.5% (Forecast 2.5%, Previous 2.25%)" at +0 s, seen +36 s). Its chance, the same
+  words in the same window on other days, was 10%.
+- The other sources:
+  - its Telegram copy: ~45 s behind it;
+  - Walter Bloomberg: 5 of 9, ~20 s, missed the RBNZ and BOJ;
+  - investingLive: minutes late;
+  - Google News: 2-20+ minutes late;
+  - the Fed's feed: posted the statement link at 0 s with no number, seen 4 min later;
+  - State Dept and White House: nothing.
+- Our result emails: 2 of 9, the US ones only. FOMC came at 140 s; GDP + PCE at 1,040 s, and WRONG.
+  No number reached the user for the RBNZ, BoC, ECB or BOJ, since JBlanked's credits are not bought.
+- **The GDP bug.** The server's history update ran at 12:47 New York. GDP's release days come from
+  FRED's release CALENDAR, so 29 Oct was already listed, and "GDP as of 29 Oct" was still Q2's final
+  2.2%. That was stored as Q3's advance (really 3.4%) and mailed: a miss reported where there was a
+  beat. The stored number then stopped the live poll, and the history never revisits a day.
+  - Fix: a GDP day is read by the history only once it is over; the day itself is the live poll's,
+    which checks that the quarter moved on.
+  - Repair: a stored stage whose quarter did not move on is dropped and read again, which mends the
+    server's 29 Oct row on its own.
+- What moved the user's markets: the FOMC decision (Gold -0.16% in 5 min, 4.2x the usual), its
+  press conference (Gold +0.45% in 15 min, 5.8x; USDJPY -0.20%, 10.7x) and the BOJ decision (USDJPY
+  -0.12% in 5 min, 7.7x). The RBNZ, BoC, ECB decision and GDP/PCE barely moved Gold or USDJPY.
+- Next step, pending the user's go-ahead: FinancialJuice RSS as the result source for critical
+  releases in every currency, which would be ~40 s after the release instead of 2-17 min or never.

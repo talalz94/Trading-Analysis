@@ -498,3 +498,53 @@ def test_the_stored_history_matches_forex_factory_s_printed_numbers():
     fed = v.loc["Federal Funds Rate"]
     assert fed["match"] >= 0.95                     # FF printed "<0.25%" in January 2022
     assert (v.drop(index="Federal Funds Rate")["match"] == 1.0).all(), v[v["match"] < 1]
+
+
+GDP = "A191RL1Q225SBEA"
+GDP_DAYS = [("2026-07-30", "Advance GDP q/q"), ("2026-08-26", "Prelim GDP q/q"),
+            ("2026-09-30", "Final GDP q/q"), ("2026-10-29", "Advance GDP q/q")]
+
+
+def _gdp_store(tmp_path, monkeypatch, vint):
+    fake = FakeFred({GDP: vint})
+    monkeypatch.setattr(O, "_fred", fake)
+    monkeypatch.setattr(O, "SPECS", [BY["Advance GDP q/q"]])
+    st = NewsStore(tmp_path)
+    st.write("fred", pd.DataFrame([dict(t=ny(f"{d} 08:30"), title=ti) for d, ti in GDP_DAYS]))
+    return st, fake
+
+
+def _advance(st):
+    o = st.read("official")
+    a = o[o["title"] == "Advance GDP q/q"].sort_values("t")
+    return list(zip(a["actual"], pd.to_datetime(a["period"])))
+
+
+def test_a_gdp_release_day_is_left_to_the_live_poll_until_it_is_over(tmp_path, monkeypatch):
+    # 29 Oct 2026: the history ran at 12:47 New York, before FRED had the third quarter, read "GDP
+    # as of 29 Oct" -- the second quarter's FINAL 2.2% -- and stored it as Q3's advance (3.4%).
+    # It went out as the result, the opposite of what happened
+    st, fake = _gdp_store(tmp_path, monkeypatch, {"2026-07-30": {"2026-04-01": 1.5},
+                                                  "2026-09-30": {"2026-04-01": 2.2}})
+    U.update_official(st, "k", ny("2026-10-29 12:47"), force=True)
+    assert _advance(st) == [("1.5%", ts("2026-04-01"))]          # 29 Oct not recorded yet
+    fake.add(GDP, "2026-10-29", {"2026-07-01": 3.4})              # FRED posts the quarter
+    U.update_official(st, "k", ny("2026-10-30 09:00"), force=True)
+    assert _advance(st) == [("1.5%", ts("2026-04-01")), ("3.4%", ts("2026-07-01"))]
+
+
+def test_a_stale_gdp_estimate_already_stored_is_fetched_again(tmp_path, monkeypatch):
+    # the server stored the 2.2% before this fix, and the history never goes back over a day it
+    # has: a stage whose quarter did not move on is dropped, so that day is read again
+    st, fake = _gdp_store(tmp_path, monkeypatch, {"2026-07-30": {"2026-04-01": 1.5},
+                                                  "2026-09-30": {"2026-04-01": 2.2},
+                                                  "2026-10-29": {"2026-07-01": 3.4}})
+    row = dict(time_q="official", currency="USD", title="Advance GDP q/q", impact="high",
+               forecast=None, previous=None, source="official", series=GDP)
+    U._merge_official(st, pd.DataFrame([
+        dict(row, t=ny("2026-07-30 08:30"), actual="1.5%", period=ts("2026-04-01")),
+        dict(row, t=ny("2026-10-29 08:30"), actual="2.2%", period=ts("2026-04-01"))]), "history")
+    U.update_official(st, "k", ny("2026-10-31 09:00"), force=True)
+    assert _advance(st) == [("1.5%", ts("2026-04-01")), ("3.4%", ts("2026-07-01"))]
+    o = st.read("official")                                       # the other stages, untouched
+    assert list(o.loc[o["title"] == "Final GDP q/q", "actual"]) == ["2.2%"]
