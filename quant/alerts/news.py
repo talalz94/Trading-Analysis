@@ -12,6 +12,14 @@ What it sends (each switchable in the NEWS block of alerts/alerts_config.py):
   results       the actual against the forecast, the surprise and what it means for the currency,
                 once JBlanked has the number (needs JBLANKED_API_KEY; polled every 5 minutes, and
                 only while a covered release is waiting for its number).
+  headlines     the result as the squawk feeds TYPE it, seconds after the release
+                (quant/news/headlines.py): FinancialJuice's feed first, its Telegram channel and
+                Walter Bloomberg's when the feed fails or has nothing yet, the first lines quoted
+                word for word with their source. Asked every tick inside the release's window
+                (10 min; 2 h for the BOJ), once per release. A US number from the agencies that
+                the headline already printed is not mailed again; one that differs is.
+  instant       reminders, results and moves go the moment they are due, not at the next
+                DELIVERY boundary.
   moved         a covered high/critical release that changed its time or left the calendar.
   feed          the calendar has not updated for 6 hours -- reminders may be out of date.
   warn_alerts   a CANDLE alert closing within N minutes of a high release says so in its note.
@@ -36,6 +44,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from quant.logging_utils import redact
 from quant.news.catalog import LEVELS, RANK, parse_coverage
 
 ALERT = "news"                       # the alert name every notice is stored under (reserved)
@@ -55,6 +64,8 @@ RESULT_WINDOW = pd.Timedelta(hours=3)   # how long a missing number is asked for
 RESULT_FRESH = pd.Timedelta(minutes=60)  # a number older than this goes out only if THIS monitor
                                          # was already waiting for it -- never after an outage
 RESULT_SETTLE = pd.Timedelta(minutes=20)  # send a partial result after this if the rest never come
+HEADLINE_LINES = 3                       # lines quoted per release: the first is not always THE
+                                         # number (on GDP day FinancialJuice led with PCE)
 
 
 # ══ CONFIG ═══════════════════════════════════════════════════════════════════════════════════
@@ -68,6 +79,8 @@ class NewsConfig:
     remind_before: Dict[str, Tuple[int, ...]] = field(default_factory=dict)
     results: Optional[str] = "high"
     warn_alerts: int = 30
+    headlines: Tuple[str, ...] = ()                # quant.news.headlines sources, first = main
+    instant: bool = False
 
 
 SETTINGS = {
@@ -80,6 +93,10 @@ SETTINGS = {
     "remind_before": "{level: minutes before}, e.g. {'critical': (60, 15), 'high': (15,)}",
     "results": "lowest level whose actual-vs-forecast is emailed (needs JBLANKED_API_KEY); None = off",
     "warn_alerts": "a candle alert within this many minutes of high news says so; 0 = off",
+    "headlines": "the result from news headlines, in order of trust: ('financialjuice', "
+                 "'financialjuice_telegram', 'walterbloomberg') -- the next is asked when one "
+                 "fails or has nothing yet; None = off",
+    "instant": "True = reminders, results and moves go at once, not at the next email boundary",
 }
 
 
@@ -134,8 +151,19 @@ def parse_news(d: Optional[dict]) -> NewsConfig:
     warn = d.get("warn_alerts", 30)
     if not isinstance(warn, int) or warn < 0:
         raise NewsConfigError(f"NEWS warn_alerts: whole minutes >= 0, got {warn!r}")
+    from quant.news.headlines import SOURCES
+    hl = d.get("headlines") or ()
+    hl = (hl,) if isinstance(hl, str) else tuple(hl)
+    bad = [h for h in hl if h not in SOURCES]
+    if bad or len(set(hl)) != len(hl):
+        raise NewsConfigError(f"NEWS headlines: each of {sorted(SOURCES)} at most once, in order of "
+                              f"trust, or None; got {d.get('headlines')!r}")
+    inst = d.get("instant", False)
+    if not isinstance(inst, bool):
+        raise NewsConfigError(f"NEWS instant: True or False, got {inst!r}")
     return NewsConfig(on=bool(d.get("on", True)), currencies=cov, timezone=tz, week_ahead=wa,
-                      day_ahead=da, remind_before=rem, results=res, warn_alerts=warn)
+                      day_ahead=da, remind_before=rem, results=res, warn_alerts=warn,
+                      headlines=hl, instant=inst)
 
 
 # ══ THE CALENDAR THE MONITOR READS ═══════════════════════════════════════════════════════════
@@ -162,7 +190,7 @@ class LiveNews:
             update.update_feed(self.store, now)
             self.fresh = self.store.meta().get("feed_ok") != before
         except Exception as e:
-            errors["news feed"] = f"{type(e).__name__}: {e}"
+            errors["news feed"] = redact(f"{type(e).__name__}: {e}")
             self.store.set_meta(feed_error=f"{now.isoformat()} {e}")
         return errors
 
@@ -173,18 +201,18 @@ class LiveNews:
         try:
             update.update_fomc(self.store, now)
         except Exception as e:
-            errors["news fomc"] = f"{type(e).__name__}: {e}"
+            errors["news fomc"] = redact(f"{type(e).__name__}: {e}")
         key = update.keys()["fred"]
         if key:
             try:
                 update.update_fred(self.store, key, now)
             except Exception as e:
-                errors["news fred"] = f"{type(e).__name__}: {e}"
+                errors["news fred"] = redact(f"{type(e).__name__}: {e}")
             try:                           # the recent history: baselines + charts' actuals
                 update.update_official(self.store, key, now,
                                        start=(now - pd.Timedelta(days=150)).date())
             except Exception as e:
-                errors["news official"] = f"{type(e).__name__}: {e}"
+                errors["news official"] = redact(f"{type(e).__name__}: {e}")
         return errors
 
     def poll_results(self, now, pending=None) -> Dict[str, str]:
@@ -195,13 +223,25 @@ class LiveNews:
             try:
                 update.poll_official(self.store, k["fred"], pending, now)
             except Exception as e:
-                errors["news official"] = f"{type(e).__name__}: {e}"
+                errors["news official"] = redact(f"{type(e).__name__}: {e}")
         if k["jblanked"] and update.jb_has_credits(self.store, now):
             try:
                 update.update_jb(self.store, k["jblanked"], now, kind="week")
             except Exception as e:
-                errors["news results"] = f"{type(e).__name__}: {e}"
+                errors["news results"] = redact(f"{type(e).__name__}: {e}")
         return errors
+
+    def headlines(self, name: str) -> List[dict]:
+        """One headline source's latest lines (quant.news.headlines), through the monitor's
+        shared connections -- one certificate store per process, which matters on the server.
+        Raises when the source fails, so the next one is asked."""
+        from quant.news import headlines as H
+        from .feeds import session
+
+        def get(url, headers, timeout):
+            r = session().get(url, headers=headers, timeout=timeout)
+            return r.status_code, r.content
+        return H.fetch(name, get)
 
     def results_available(self) -> bool:
         """US numbers need the FRED key (it holds the history the live numbers are checked
@@ -238,8 +278,10 @@ class FakeNews:
     """A calendar for tests: fixed events, a fixed coverage end, and a record of every poll."""
 
     def __init__(self, events: pd.DataFrame, covered_until=None, results=True, fresh=True,
-                 age=pd.Timedelta(0), unresolvable=()):
+                 age=pd.Timedelta(0), unresolvable=(), lines=None):
         self.ev = events
+        self.lines = dict(lines or {})     # headline source -> its lines, or an Exception to raise
+        self.asked = []                    # every headline source asked, in order
         self.unresolvable = set(unresolvable)
         self.pending = []
         self.until = None if covered_until is None else pd.Timestamp(covered_until, tz="UTC")
@@ -259,6 +301,13 @@ class FakeNews:
         self.polls.append(now)
         self.pending.append(pending)
         return {}
+
+    def headlines(self, name):
+        self.asked.append(name)
+        v = self.lines.get(name, [])
+        if isinstance(v, Exception):
+            raise v
+        return v
 
     def results_available(self):
         return self.results
@@ -355,10 +404,28 @@ def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
             mood = (f" -> {i['sentiment']} for {cur}" if i["sentiment"] else "")
             z = f", {i['z']:+.1f} sigma" if i.get("z") is not None and i["sentiment"] else ""
             lines.append(f"    {i['title']}: {_nums(i)}{mood}{z}")
+        if kw.get("note"):
+            lines.append(f"    ({kw['note']})")
         moods = {i["sentiment"] for i in items if i["sentiment"]}
         subject = (f"{cur} {first['title']}: {first.get('actual') or '?'} vs "
                    f"{first.get('forecast') or '?'}"
                    + (f" ({moods.pop()})" if len(moods) == 1 else ""))
+    elif kind == "headline":
+        t = pd.Timestamp(first["t"])
+        lines = [f"{cur} released {_local(t, tz)} {zone} -- the first headlines:"]
+        lines += [f"    {x['after_s']:+.0f} s  {x['source']}: {x['text']}" for x in kw["lines"]]
+        fc = [f"{i['title']} {i['forecast']}" for i in items if i.get("forecast")]
+        if fc:
+            lines.append("    calendar forecast: " + ", ".join(fc))
+        lines.append("    (as the source typed it -- not the official number)")
+        # the subject names the group's FIRST title (its most important), so it quotes the line
+        # about THAT one: on 29 Oct the first line was PCE's and GDP's came 2 s later
+        from quant.news.headlines import release_words
+        words, _ = release_words(cur, first["title"])
+        top = next((x for x in kw["lines"] if words and re.search(words, x["text"], re.I)),
+                   kw["lines"][0])
+        subject = f"{cur} {first['title']}: {top['text']}"
+        subject = subject if len(subject) <= 140 else subject[:137] + "..."
     elif kind in ("day", "week"):
         label = kw["label"]
         subject = label + f" -- {len(items)} release{'s' * (len(items) != 1)}"
@@ -387,7 +454,10 @@ def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
     body = "<br>".join(esc(x).replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;") for x in lines)
     colour = LEVEL_COLOUR.get(first["level"] if first else "none", "#111827")
     html = f'<div style="border-left:3px solid {colour};padding:2px 8px;margin:4px 0;">{body}</div>'
-    return dict(kind=kind, subject=subject, text=lines, html=html, items=items)
+    out = dict(kind=kind, subject=subject, text=lines, html=html, items=items)
+    if kind == "headline":
+        out["lines"] = kw["lines"]                 # what the official number is checked against
+    return out
 
 
 # ══ THE STEP ═════════════════════════════════════════════════════════════════════════════════
@@ -417,6 +487,69 @@ def _groups(ev: pd.DataFrame):
     return [(t, cur, g) for (t, cur), g in ev.groupby(["t", "currency"], sort=True)]
 
 
+def _headline_results(nc, state, news, now, report, timed, pri):
+    """Queue the headline result of every covered release inside its window that has none yet
+    (quant.news.headlines). The sources are asked by tick() AFTER the candle emails of this tick
+    are out, in order of trust: each next one only for the releases the last could not answer --
+    it failed, or has no line about them yet. A release's first lines go at once, and once."""
+    from quant.news import headlines as H
+    frame = timed[(timed["level"].map(RANK) >= RANK[nc.results]) & (timed["t"] <= now)]
+    due = []
+    for t, cur, g in _groups(frame):
+        w = H.window(cur, g["title"])
+        if w is None or now > t + w[2] + pd.Timedelta(minutes=1):
+            continue                       # no rule names it, or its window is over
+        if (state.find_event(ALERT, cur, "headline", t, "result")
+                or state.find_event(ALERT, cur, "result", t, "result")):
+            continue                       # its headline went -- or the official number did first
+        due.append((t, cur, g, w))
+    if not due:
+        return
+
+    def ask_then_send():
+        # the official results run between the queueing and this: one that went this very tick
+        # leaves nothing for a headline to add
+        left = [d for d in due if not state.find_event(ALERT, d[1], "result", d[0], "result")]
+        for name in nc.headlines:
+            if not left:
+                break
+            try:
+                got = news.headlines(name)
+            except Exception as e:                  # the next source is asked instead
+                report.errors[f"news headlines {name}"] = f"{type(e).__name__}: {e}"
+                continue
+            label, rest = H.SOURCES[name].label, []
+            for t, cur, g, (words, since, until) in left:
+                m = H.matching(got, t, words, since, until)
+                if not m:
+                    rest.append((t, cur, g, (words, since, until)))
+                    continue
+                quoted = [dict(source=label, text=H.clean(x["title"])[:240], id=x["id"],
+                               after_s=(x["at"] - t).total_seconds()) for x in m[:HEADLINE_LINES]]
+                items = [_item(e) for e in g.to_dict("records")]
+                report.events += _add(state, tf="headline", market=cur, bar_time=t,
+                                      what="result", priority=pri, now=now,
+                                      notice=_render("headline", items, nc.timezone, now,
+                                                     lines=quoted))
+            left = rest
+    report.after.append(ask_then_send)
+
+
+def _against_headline(state, cur, t, items) -> Tuple[str, Optional[str]]:
+    """(status, note) for the official result of a release whose headline result already went:
+    skipped when the headline printed every number, else sent with a word on why."""
+    from quant.news.headlines import agrees
+    hl = state.find_event(ALERT, cur, "headline", t, "result")
+    if hl is None:
+        return "new", None
+    lines = notice_of(hl).get("lines") or []
+    said = [agrees(i["actual"], cur, i["title"], lines) for i in items]
+    if said and all(v is True for v in said):
+        return "skipped", None             # nothing new: the headline already printed it
+    return "new", ("the official number -- the first headline printed another"
+                   if False in said else "the official number")
+
+
 def news_step(cfg, state, news, now, report) -> Optional[Callable]:
     """One tick of news. Returns `note(close_time) -> str` for candle alerts (warn_alerts), or
     None when that is off."""
@@ -428,6 +561,7 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
     ev = select(horizon, nc.currencies) if len(horizon) else horizon
     timed = ev[ev["time_q"].isin(["exact", "official", "typical"])] if len(ev) else ev
     sent = 0
+    pri = "instant" if nc.instant else "urgent"    # instant: never waits for the email clock
 
     # ── reminders ─────────────────────────────────────────────────────────────────────────
     if nc.remind_before and len(timed):
@@ -450,9 +584,13 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
             items = [_item(e) for e in g.to_dict("records")]
             for k in due:
                 new = _add(state, tf=f"T-{k}", market=cur, bar_time=t, what="reminder",
-                           priority="urgent", now=now, notice=_render("remind", items, tz, now),
+                           priority=pri, now=now, notice=_render("remind", items, tz, now),
                            status="new" if k == keep else "skipped")
                 sent += new and k == keep
+
+    # ── results from headlines ────────────────────────────────────────────────────────────
+    if nc.results and nc.headlines and len(timed):
+        _headline_results(nc, state, news, now, report, timed, pri)
 
     # ── results ───────────────────────────────────────────────────────────────────────────
     if nc.results and len(timed) and news.results_available():
@@ -477,10 +615,13 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
                     items = [_item(e) for e in g[have].to_dict("records")]
                     worse = sum(i["sentiment"] == "worse" for i in items)
                     better = sum(i["sentiment"] == "better" for i in items)
-                    sent += _add(state, tf="result", market=cur, bar_time=t, what="result",
-                                 priority="urgent", now=now,
-                                 side="bull" if better > worse else "bear" if worse > better else "",
-                                 notice=_render("result", items, tz, now))
+                    status, note = (_against_headline(state, cur, t, items) if nc.headlines
+                                    else ("new", None))
+                    new = _add(state, tf="result", market=cur, bar_time=t, what="result",
+                               priority=pri, now=now, status=status,
+                               side="bull" if better > worse else "bear" if worse > better else "",
+                               notice=_render("result", items, tz, now, note=note))
+                    sent += new and status == "new"
                 if not done:
                     waiting = True
                     pending.append(g[~have & can])
@@ -572,7 +713,7 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
                 r = all_map[k]
                 if pd.Timestamp(r["t"]) != ot:
                     sent += _add(state, tf="moved", market=r["currency"], bar_time=r["t"], what=k,
-                                 priority="urgent" if r["level"] == "critical" else "normal",
+                                 priority=pri if r["level"] == "critical" else "normal",
                                  now=now, notice=_render("moved", [_item(r)], tz, now, old=ot))
                 continue
             twin = [r for kk, r in all_map.items() if kk not in old
@@ -581,7 +722,7 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
             if twin:
                 r = twin[0]
                 sent += _add(state, tf="moved", market=r["currency"], bar_time=r["t"], what=k,
-                             priority="urgent" if r["level"] == "critical" else "normal",
+                             priority=pri if r["level"] == "critical" else "normal",
                              now=now, notice=_render("moved", [_item(r)], tz, now, old=ot))
             elif ot < now + pd.Timedelta(hours=72):
                 gone = dict(o, t=ot)

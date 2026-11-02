@@ -495,6 +495,14 @@ python -m quant.alerts news         # the covered calendar and when each reminde
   If both refuse, use Dukascopy's `BTC/USD`, which trades 24/7 and sits within ~0.03% of Binance's
   price. Its candle-pattern alerts do not always match Binance's chart: 60 of 108 hourly alerts
   matched over 20 days.
+- **`feed_error ... IndexError: list index out of range` in `status`** is a bug in the Dukascopy
+  library: `fetch()` reads the first row of a page before checking the page is empty, so an empty
+  later page raises after 8 retries. That market is skipped for one look and caught up at the
+  next, so a signal is at most a minute late. It happened 4 times in 12 days on the server.
+  `status` keeps showing the last error of each feed.
+- **No key is written to a log or state file.** A failed FRED download's error carries its URL,
+  key and all; every such message is written with `api_key=***` (`quant.logging_utils.redact`),
+  and a value stored before that rule is scrubbed at the next write.
 
 ## 11. News
 
@@ -534,6 +542,13 @@ NEWS = dict(
   durable goods, JOLTS and the regional surveys come when FRED posts them, usually within the
   hour, and the Fed's rate from its statement at 14:00. Results for other currencies need
   JBlanked's paid credits. Without either key the rest still works.
+- **Headline results** (`headlines=(...)`) need no key and cover every currency. The first lines
+  FinancialJuice types about a release, seconds after it, are quoted word for word with their
+  source; its Telegram channel and Walter Bloomberg are asked when the feed fails or has nothing
+  yet. A US number the headline already printed is not mailed again. Measurements and rules:
+  [NEWS.md](NEWS.md), "Headline results".
+- **`instant=True`**: reminders, results and moves go the moment they are found, not with the
+  next 5-minute email.
 - **A late result goes only if it was awaited.** A number is asked for for 3 hours. One that lands
   more than an hour after its release is mailed only if the monitor was already waiting for it,
   never after the PC was off.

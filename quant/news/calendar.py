@@ -40,6 +40,8 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
+from quant.logging_utils import redact
+
 from . import catalog
 from .catalog import HOME_TZ, RANK, criticality, parse_coverage
 from .sources import JB_RAW_COLS, NY7, ROW_COLS, TIME_Q, jb_rows, localize_wall
@@ -104,6 +106,9 @@ class NewsStore:
         self.root.mkdir(parents=True, exist_ok=True)
         m = self.meta()
         m.update(kv)
+        # a stored error can carry a URL with a key in it: blanked on EVERY write, so one written
+        # before this rule existed goes at the next one
+        m = {k: redact(v) if isinstance(v, str) else v for k, v in m.items()}
         p = self.root / "meta.json"
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(m, indent=1, default=str), encoding="utf-8")

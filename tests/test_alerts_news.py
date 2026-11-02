@@ -119,6 +119,9 @@ class Rig:
     (dict(remind_before={"high": (0,)}), "1..2880"),
     (dict(remind_before={"none": (15,)}), "level"),
     (dict(results="red"), "results"),
+    (dict(headlines=("reuters",)), "headlines"),
+    (dict(headlines=("financialjuice", "financialjuice")), "headlines"),
+    (dict(instant="yes"), "instant"),
 ])
 def test_a_news_setting_mistake_is_refused_by_name(bad, says):
     with pytest.raises(NewsConfigError, match=says):
@@ -525,3 +528,156 @@ def test_a_news_reminder_is_tiered_by_level_currency_and_nearness(tmp_path, cur,
     (row,) = r.rows(what="reminder")
     assert tier(row) == want
     assert r.subjects()[0].startswith(f"[Alerts] {TIER_TAG[want]} · {cur} {title} in ")
+
+
+# ── results from headlines (quant/news/headlines.py) ───────────────────────────────────────
+HL = dict(remind_before={}, headlines=("financialjuice", "financialjuice_telegram",
+                                       "walterbloomberg"), instant=True)
+
+
+def hl(t, text):
+    return dict(id=f"{t}|{text[:12]}", title=text, link="", published=at(t).isoformat())
+
+
+CPI_LINE = hl("2026-10-14 12:30:51", "FinancialJuice: US CPI Actual 0.5% (Forecast 0.3%, "
+                                     "Previous 0.2%)")
+
+
+@pytest.mark.parametrize("instant, sent_at", [(True, "2026-10-14 12:31:20"),
+                                              (False, "2026-10-14 12:32:20")])
+def test_a_headline_result_goes_at_once_when_instant_and_asks_the_next_source_only_if_needed(
+        tmp_path, instant, sent_at):
+    # CPI at 12:30, FinancialJuice types it 51 s later: the 12:30:20 look finds nothing and asks
+    # the backups too; the 12:31:20 look finds it and asks no further. Instant, it goes then;
+    # otherwise it rides the 12:30 boundary's email, which waits for the bars (settle 90 s)
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")), news_cfg=dict(HL, instant=instant),
+            delivery=dict(every_minutes=5))
+    r.tick("2026-10-14 12:00")
+    r.tick("2026-10-14 12:30:20")
+    assert r.news.asked == ["financialjuice", "financialjuice_telegram", "walterbloomberg"]
+    r.news.lines = {"financialjuice": [CPI_LINE]}
+    sent = []
+    for t in ("2026-10-14 12:31:20", "2026-10-14 12:32:20", "2026-10-14 12:35:20"):
+        n = len(r.mail.sent)
+        r.tick(t)
+        sent += [t] * (len(r.mail.sent) - n)
+    assert sent == [sent_at]
+    assert r.news.asked[3:] == ["financialjuice"]           # found: no backup, and never again
+    subject, text, _ = r.mail.sent[0]
+    assert "USD CPI m/m: US CPI Actual 0.5% (Forecast 0.3%, Previous 0.2%)" in subject
+    assert "+51 s  FinancialJuice: US CPI Actual 0.5%" in text
+    assert "calendar forecast: CPI m/m 0.3%" in text and "not the official number" in text
+    (row,) = r.rows(tf="headline")
+    assert row["priority"] == ("instant" if instant else "urgent") and row["status"] == "sent"
+
+
+def test_a_failing_source_hands_over_to_the_next_and_a_release_goes_once(tmp_path):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")), news_cfg=HL,
+            lines={"financialjuice": IOError("FinancialJuice: HTTP 503"),
+                   "financialjuice_telegram": [hl("2026-10-14 12:31:02", "‼ BREAKING: US CPI "
+                                                  "ACTUAL 0.5% (FORECAST 0.3%) $MACRO|FJ")]})
+    r.tick("2026-10-14 12:00")
+    rep = r.tick("2026-10-14 12:31:20")
+    assert r.news.asked == ["financialjuice", "financialjuice_telegram"]
+    assert "HTTP 503" in rep.errors["news headlines financialjuice"]
+    (subject, text, _), = r.mail.sent
+    assert "+62 s  FinancialJuice (Telegram): US CPI ACTUAL 0.5% (FORECAST 0.3%)" in text
+    r.tick("2026-10-14 12:32:20")
+    assert len(r.news.asked) == 2 and len(r.mail.sent) == 1
+
+
+def test_only_a_covered_release_in_its_window_with_words_is_asked_about(tmp_path):
+    ev = calendar(rel("2026-10-14 12:30", "German Ifo Business Climate", cur="EUR"),  # no words
+                  rel("2026-10-14 12:30", "Cash Rate", cur="AUD"),                    # not covered
+                  rel("2026-10-14 12:30", "CPI m/m", impact="low"),                   # below results
+                  rel("2026-10-14 13:00"))                                            # not yet out
+    r = Rig(tmp_path, events=ev, news_cfg=HL)
+    r.tick("2026-10-14 12:31")
+    assert r.news.asked == []
+    r2 = Rig(tmp_path / "b", events=calendar(rel("2026-10-14 12:30")), news_cfg=HL)
+    r2.tick("2026-10-14 12:41")                             # inside 10 min (+1 for the last look)
+    r2.tick("2026-10-14 12:42")                             # past it
+    assert r2.news.asked == ["financialjuice", "financialjuice_telegram", "walterbloomberg"]
+
+
+@pytest.mark.parametrize("said, mailed, note", [
+    ("US CPI Actual 0.5% (Forecast 0.3%)", False, None),
+    ("US CPI Actual 0.4% (Forecast 0.3%)", True, "the first headline printed another"),
+    ("US CPI hotter than expected, core sticky", True, "(the official number)"),
+])
+def test_the_official_number_is_mailed_only_when_the_headline_did_not_print_it(
+        tmp_path, said, mailed, note):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")), news_cfg=HL,
+            delivery=dict(every_minutes=5),
+            lines={"financialjuice": [hl("2026-10-14 12:30:04", "FinancialJuice: " + said)]})
+    r.tick("2026-10-14 12:00")
+    r.tick("2026-10-14 12:30:20")
+    assert len(r.mail.sent) == 1 and said in r.mail.sent[0][1]
+    r.news.ev = calendar(rel("2026-10-14 12:30", actual="0.5%"))     # the agencies' number lands
+    r.tick("2026-10-14 12:33:20")                                    # off the clock: instant
+    (official,) = r.rows(tf="result")
+    assert official["status"] == ("sent" if mailed else "skipped")
+    assert len(r.mail.sent) == 1 + mailed
+    if mailed:
+        assert "0.5% vs 0.3%" in r.mail.sent[1][0] and note in r.mail.sent[1][1]
+
+
+def test_an_official_number_that_came_first_leaves_no_headline_to_send(tmp_path):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30", actual="0.5%")), news_cfg=HL,
+            lines={"financialjuice": [CPI_LINE]})
+    r.tick("2026-10-14 12:00")
+    r.tick("2026-10-14 12:31:20")
+    assert [x["tf"] for x in r.rows(what="result")] == ["result"] and r.news.asked == []
+    assert len(r.mail.sent) == 1
+
+
+def test_instant_news_reminders_carry_the_instant_priority(tmp_path):
+    r = Rig(tmp_path, events=calendar(rel("2026-10-14 12:30")),
+            news_cfg=dict(HL, remind_before={"high": (15,)}))
+    r.tick("2026-10-14 12:15")
+    (row,) = r.rows(what="reminder")
+    assert row["priority"] == "instant" and len(r.mail.sent) == 1
+
+
+def test_the_monitor_reads_a_headline_source_through_its_shared_connections(tmp_path, monkeypatch):
+    from quant.alerts import feeds
+    from quant.alerts.news import LiveNews
+    from quant.news import headlines as H
+    calls = []
+
+    class Resp:
+        status_code = 200
+        content = (b"<rss><channel><item><title>US CPI Actual 0.5%</title><guid>9</guid>"
+                   b"<pubDate>Wed, 14 Oct 2026 12:30:04 GMT</pubDate></item></channel></rss>")
+
+    class Session:
+        def get(self, url, headers=None, timeout=None):
+            calls.append((url, timeout))
+            return Resp()
+    monkeypatch.setattr(feeds, "session", lambda: Session())
+    got = LiveNews(tmp_path / "news").headlines("financialjuice")
+    assert got[0]["title"] == "US CPI Actual 0.5%" and got[0]["id"] == "9"
+    assert calls == [(H.SOURCES["financialjuice"].url, H.TIMEOUT)]
+
+
+def test_the_trendlines_config_takes_headline_results_instantly():
+    from pathlib import Path
+    from quant.news.headlines import DEFAULT_ORDER
+    cfg = load_config(Path(__file__).resolve().parents[1] / "alerts" / "alerts_config_trendlines.py")
+    assert cfg.news.headlines == DEFAULT_ORDER and cfg.news.instant is True
+
+
+def test_a_headline_subject_quotes_the_line_about_its_most_important_release(tmp_path):
+    # claims (high) and GDP (critical) at 12:30: FinancialJuice types claims first, but the
+    # subject leads with GDP, the group's most important title, and quotes GDP's own line
+    ev = calendar(rel("2026-10-14 12:30", "Unemployment Claims", forecast="225K"),
+                  rel("2026-10-14 12:30", "Advance GDP q/q", forecast="3.2%"))
+    r = Rig(tmp_path, events=ev, news_cfg=HL, lines={"financialjuice": [
+        hl("2026-10-14 12:30:03", "FinancialJuice: US Initial Jobless Claims Actual 220K "
+                                  "(Forecast 225K)"),
+        hl("2026-10-14 12:30:05", "FinancialJuice: US GDP Advance Actual 3.4% (Forecast 3.2%)")]})
+    r.tick("2026-10-14 12:00")
+    r.tick("2026-10-14 12:30:20")
+    (subject, text, _), = r.mail.sent
+    assert "USD Advance GDP q/q: US GDP Advance Actual 3.4% (Forecast 3.2%)" in subject
+    assert text.index("Jobless Claims") < text.index("US GDP Advance")    # lines keep their order

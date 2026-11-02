@@ -128,6 +128,12 @@ class State:
              iso(created), int(late), status))
         return cur.rowcount == 1
 
+    def find_event(self, alert, market, tf, bar_time, what) -> Optional[dict]:
+        """The event recorded under exactly these, sent, waiting or skipped -- or None."""
+        r = self.db.execute("SELECT * FROM events WHERE id=?",
+                            (event_id(alert, market, tf, bar_time, what),)).fetchone()
+        return dict(r) if r else None
+
     def last_event_bar(self, alert, market, tf) -> Optional[pd.Timestamp]:
         r = self.db.execute("SELECT MAX(bar_time) FROM events WHERE alert=? AND market=? AND tf=?",
                             (alert, market, tf)).fetchone()

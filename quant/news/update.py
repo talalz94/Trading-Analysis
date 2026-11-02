@@ -20,6 +20,8 @@ from typing import Dict, Optional
 
 import pandas as pd
 
+from quant.logging_utils import redact
+
 from . import sources
 from .calendar import NewsStore, build_events
 
@@ -345,7 +347,7 @@ def update_all(store: Optional[NewsStore] = None, now=None, *, rebuild: bool = T
         try:
             out.append(fn())
         except Exception as e:                       # report, keep going
-            out.append(f"{name}: FAILED {type(e).__name__}: {e}")
+            out.append(redact(f"{name}: FAILED {type(e).__name__}: {e}"))
             store.set_meta(**{f"{name}_error": f"{pd.Timestamp.now(tz='UTC').isoformat()} {e}"})
     if rebuild:
         ev = build_events(store)

@@ -62,9 +62,13 @@ def setup_logging(state_dir: Path, *, console: bool = False):
     h = RotatingFileHandler(state_dir / "alerts.log", maxBytes=1_000_000, backupCount=3,
                             encoding="utf-8")
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    from quant.logging_utils import RedactFilter
+    h.addFilter(RedactFilter())                  # a FRED error's URL carries the key
     log.addHandler(h)
     if console:
-        log.addHandler(logging.StreamHandler())
+        c = logging.StreamHandler()
+        c.addFilter(RedactFilter())
+        log.addHandler(c)
     log.setLevel(logging.INFO)
 
 

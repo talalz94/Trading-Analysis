@@ -87,41 +87,10 @@ CREDIT_P = 0.05                            # credited only below this against BO
 # same window on the other days: carrying FOMC means little if it "carries" 18:00 every day.
 ALERTS_DB = HERE.parent / "alerts" / "state" / "alerts.db"
 CALENDARS = (HERE.parent / "alerts" / "state" / "news", HERE.parent / "data" / "news")
-CRIT_WINDOW = (pd.Timedelta(seconds=-30), pd.Timedelta(minutes=10))
+from quant.news.headlines import WINDOW as CRIT_WINDOW  # noqa: E402
 CRIT_HORIZONS = (1, 5, 15, 60)             # minutes after the release
-RELEASE_WORDS = [  # (currency, release title) -> the words a headline about it uses [, minutes]
-    ("USD", r"federal funds|fomc", r"\bfed\b|fomc|federal reserve|powell|warsh|fed funds|"
-                                   r"rates? (?:decision|unchanged)"),
-    ("USD", r"gdp", r"\bgdp\b"),
-    ("USD", r"pce", r"\bpce\b"),
-    ("USD", r"cpi", r"\bcpi\b"),
-    ("USD", r"claims", r"jobless|claims"),           # before payrolls: "Unemployment Claims"
-    ("USD", r"adp", r"\badp\b"),                     # before payrolls: "ADP Non-Farm ..."
-    ("USD", r"non-farm|unemployment|hourly", r"payroll|non-?farm|\bnfp\b|unemployment|"
-                                             r"hourly earnings"),
-    ("USD", r"ppi", r"\bppi\b"),
-    ("USD", r"retail sales", r"retail sales"),
-    ("USD", r"\bism\b", r"\bism\b"),
-    ("USD", r"pmi", r"\bpmi\b"),
-    ("USD", r"jolts", r"jolts|job openings"),
-    ("USD", r"confidence|sentiment", r"confidence|sentiment"),
-    ("USD", r"durable", r"durable"),
-    ("EUR", r"pmi", r"(?:euro ?zone|euro area|\bez\b|german|france|french).*\bpmi\b"),
-    ("GBP", r"pmi", r"\buk\b.*\bpmi\b"),
-    ("EUR", r"refinancing|monetary policy|ecb", r"\becb\b|lagarde|deposit (?:facility )?rate|"
-                                                r"refinancing"),
-    ("EUR", r"cpi", r"(?:euro ?zone|euro area|\bez\b).*(?:cpi|hicp|inflation)|\bhicp\b"),
-    ("GBP", r"bank rate|monetary policy", r"\bboe\b|bank of england|bailey"),
-    ("GBP", r"cpi", r"\buk\b.*(?:cpi|inflation)"),
-    ("GBP", r"budget", r"budget|reeves"),
-    ("JPY", r"boj|policy rate|monetary policy", r"\bboj\b|bank of japan|ueda", 120),  # no set time
-    ("CAD", r"overnight rate|boc", r"\bboc\b|bank of canada|macklem"),
-    ("CAD", r"cpi|employment", r"canad"),
-    ("AUD", r"cash rate|rba", r"\brba\b|reserve bank of australia|bullock"),
-    ("AUD", r"cpi|employment", r"australia|aussie|trimmed mean"),
-    ("NZD", r"cash rate|rbnz", r"\brbnz\b|reserve bank of new zealand|official cash rate|\bocr\b"),
-    ("CHF", r"snb", r"\bsnb\b|swiss national bank"),
-]
+# the words and the window live in quant/news/headlines.py, which the alerts use too
+from quant.news.headlines import RELEASE_WORDS, release_words  # noqa: E402,F401
 
 
 def load(db_path=DB):
@@ -375,16 +344,6 @@ def fetch_bars(start, end) -> Dict[str, pd.DataFrame]:
     return got
 
 
-def release_words(currency: str, title: str) -> tuple:
-    """(the headline words for a release, how many minutes after its scheduled time a headline
-    still counts) from RELEASE_WORDS -- (None, 0) when no rule names it. The window is 10 minutes
-    unless the rule gives more: the BOJ announces when its meeting ends, not at a set time."""
-    for rule in RELEASE_WORDS:
-        if rule[0] == currency and re.search(rule[1], str(title), re.I):
-            return rule[2], (rule[3] if len(rule) > 3 else CRIT_WINDOW[1].total_seconds() / 60)
-    return None, 0             # reported as "no headline rule": a guess would only add noise
-
-
 def load_calendar(start, end, levels=("critical",), roots=CALENDARS) -> tuple:
     """The calendar's releases at `levels` with a known time inside [start, end), from the first
     store that has any -- the monitor's own (alerts/state/news) before the research one (a PC's
@@ -492,16 +451,17 @@ def release_chance(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str], st
 
 
 def alert_emails(groups: pd.DataFrame, db_path=ALERTS_DB) -> pd.Series:
-    """Per release, seconds from its scheduled time to the monitor's RESULT email (the number,
-    from the agencies for US releases) -- read-only from the alerts database; NaN where no result
-    email went (no number came: outside the US that needs JBlanked's paid credits)."""
+    """Per release, seconds from its scheduled time to the monitor's first RESULT email -- the
+    headline result (from 2 Nov 2026) or the agencies' number, whichever went first -- read-only
+    from the alerts database; NaN where none went."""
     out = pd.Series(np.nan, index=groups.index)
     if not Path(db_path).is_file() or groups.empty:
         return out
     db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         r = pd.read_sql("SELECT e.market, e.bar_time, o.sent_at FROM events e JOIN outbox o "
-                        "ON o.id = e.outbox_id WHERE e.alert = 'news' AND e.tf = 'result' "
+                        "ON o.id = e.outbox_id WHERE e.alert = 'news' "
+                        "AND e.tf IN ('result', 'headline') "     # headline results from 2 Nov
                         "AND o.sent_at IS NOT NULL", db)
     finally:
         db.close()

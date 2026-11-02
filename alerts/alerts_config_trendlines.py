@@ -232,6 +232,8 @@ DELIVERY = dict(
 #   Driven by the economic calendar, not by candles. See what it covers right now:
 #       python -m quant.alerts news
 #   Results need JBLANKED_API_KEY in .env for non-US releases; US ones come from the agencies.
+#   Headlines give every covered release's result seconds after it is out, from the squawk
+#   feeds (measured 22 Oct - 1 Nov 2026: docs/NEWS.md, "Headline results").
 
 NEWS = dict(
     on=True,
@@ -248,5 +250,12 @@ NEWS = dict(
                                                             #   medium (currencies above): 23 Oct's
                                                             #   13:45 flash PMIs broke Gold's line
     results="high",                    # actual vs forecast, and what it means for the currency
+    headlines=("financialjuice", "financialjuice_telegram", "walterbloomberg"),
+    #   the result as the squawk feeds TYPE it, quoted word for word: FinancialJuice's feed first,
+    #   then its Telegram channel, then Walter Bloomberg -- each asked only when the one before
+    #   failed or has nothing yet. A US number the headline already printed is not mailed again.
+    #   None = off (the official numbers only)
+    instant=True,                      # reminders, results and moves go at once, not at the next
+                                       #   5-minute email
     warn_alerts=30,                    # an alert within 30 min of high news says so
 )                                      #   (None turns week_ahead / day_ahead / results off)
