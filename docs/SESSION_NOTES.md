@@ -3020,3 +3020,6 @@ instant").
   - A title is checked only against lines about it: core vs headline, m/m vs y/y, the GDP price
     index apart.
   - Any of those lines may carry the number.
+- **Running on the server, 2 Nov 11:40 UTC, at cd6d313.** Its 29 Oct GDP row now reads 3.4%: the
+  stale-estimate repair (38ec778) dropped the 2.2% and read the day again by itself. The first
+  live headline results to check: BoE Thu 5 Nov 12:00 UTC and US jobs Fri 6 Nov 13:30 UTC.
