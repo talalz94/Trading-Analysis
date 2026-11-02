@@ -149,8 +149,31 @@ def _official_days(store: NewsStore, now):
     gdp = {}
     if fred is not None and len(fred):
         g = fred[fred["title"].str.endswith("GDP q/q")]
-        gdp = {d: ti for d, ti in zip(_ny_day(g["t"]), g["title"]) if d <= today}
+        # a GDP release day only once it is OVER: these days come from FRED's release CALENDAR,
+        # which lists the day before FRED has the number, and "GDP as of that day" is then the
+        # previous estimate. 29 Oct 2026: Q2's final 2.2% was stored as Q3's advance (3.4%) and
+        # mailed as the result. The day itself is the live poll's, which checks the quarter moved
+        gdp = {d: ti for d, ti in zip(_ny_day(g["t"]), g["title"]) if d < today}
     return [d for d in fdays if d <= today], gdp
+
+
+def _drop_stale_gdp(store: NewsStore) -> int:
+    """A stored GDP estimate whose quarter is not LATER than the same stage's previous one is the
+    old number recorded before FRED had the new one (the 29 Oct 2026 row above). Dropped, so the
+    history -- which resumes from its last stored day -- fetches that day again."""
+    old = store.read("official")
+    if old is None or not len(old) or "period" not in old.columns:
+        return 0
+    bad = pd.Series(False, index=old.index)
+    gdp = old[old["title"].astype(str).str.endswith("GDP q/q")]
+    for _, g in gdp.groupby("title"):
+        g = g.sort_values("t")
+        per = pd.to_datetime(g["period"])
+        prev = per.cummax().shift(1)
+        bad.loc[g.index[(per <= prev).to_numpy()]] = True
+    if bad.any():
+        store.write("official", old[~bad].reset_index(drop=True))
+    return int(bad.sum())
 
 
 def _merge_official(store: NewsStore, rows: pd.DataFrame, via: str) -> int:
@@ -203,6 +226,7 @@ def update_official(store: NewsStore, key: str, now=None, *, start="2022-01-01",
         return "official: backing off after a failed fetch"
     full_ago = _ago(meta, "official_full", now)
     full = force or full_ago is None or full_ago >= OFFICIAL_FULL_INTERVAL
+    _drop_stale_gdp(store)
     old = store.read("official")
     after = {}
     # refetch: ignore what is stored and read everything since `start` again -- the way to reach
