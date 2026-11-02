@@ -1,7 +1,7 @@
 # indie:lang_version = 5
 # TRENDLINES, MULTI-TIMEFRAME -- the email alerts' strict trendlines for the chart's own timeframe
-# AND 15m, 1h and 4h on one chart, with a mark where a chart candle first closes through a higher
-# timeframe's line (the alerts' EARLY BREAK). For the Exness web terminal: Indicators -> Create ->
+# AND 5m, 15m, 1h and 4h on one chart, with a mark where a chart candle first closes through
+# a higher timeframe's line (the alerts' EARLY BREAK). For the Exness web terminal: Indicators -> Create ->
 # paste -> Save -> Add to chart. Paste exness/probe_timeframes.py first: it says whether Exness lets
 # an indicator read other timeframes. Without that, exness/trendlines.py still draws the chart's own.
 #
@@ -46,12 +46,24 @@ from indie.drawings import LineSegment, LabelAbs, AbsolutePosition
 @param_ref('hold')
 @param_ref('span')
 @param_ref('prefer_newer')
+@param_ref('show_chart')
+@param_ref('show_5m')
+@param_ref('show_15m')
+@param_ref('show_1h')
+@param_ref('show_4h')
 class Lines(SecContext):
     """exness/trendlines.py's fitter on this context's own candles. After each closed candle it
     returns, per side (resistance, support): on, born, broke this candle, born candle's time, first
     touch, its time, slope, intercept -- and the candle's index, open time and close."""
     def __init__(self, preset, swing_size, min_touches, touch_tol, wick_tol, max_distance, hold,
-                 span, prefer_newer):
+                 span, prefer_newer, show_chart, show_5m, show_15m, show_1h, show_4h):
+        # a timeframe switched off does no work at all, so unticking one LIGHTENS the indicator
+        # (before, it only hid the lines). Its own setting decides: on a 5m chart, `5m lines`
+        # also covers the chart's own lines
+        tfm = self.time_frame.to_minutes()
+        self._idle = ((tfm == 5 and not show_5m) or (tfm == 15 and not show_15m)
+                      or (tfm == 60 and not show_1h) or (tfm == 240 and not show_4h)
+                      or (tfm != 5 and tfm != 15 and tfm != 60 and tfm != 240 and not show_chart))
         mode = preset
         if mode == 'auto':
             if self.time_frame.to_minutes() == 1:
@@ -172,8 +184,12 @@ class Lines(SecContext):
         self._k_brk = self.new_var(self._copy_b(self._brk.get()))
         self._k_out = self.new_var(self._copy_f(self._out.get()))
         self._done_t = self.new_var(nan)        # the latest candle computed
+        self._k_t = self.new_var(nan)           # the candle the copy was taken before
 
     def calc(self):
+        if self._idle:
+            return (nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan, nan,
+                    nan, nan, nan)
         if self.is_closed_bar:
             self._once()
             self._remember()
@@ -307,12 +323,17 @@ class Lines(SecContext):
     def _once(self) -> None:
         """Exness computes a timeframe's still-forming candle as if closed when a chart
         loads. If that candle is computed again when it really closes, start it from the
-        state before its first time, so it counts once, with its final values."""
-        if self.time[0] == self._done_t.get():
-            self._load()
-        else:
+        state before its first time, so it counts once, with its final values. Only the LAST
+        candle can come again, so only it is copied: a copy before every candle of history
+        made the whole indicator time out on Exness (1 Nov 2026)."""
+        t = self.time[0]
+        if t == self._done_t.get():
+            if t == self._k_t.get():
+                self._load()
+        elif self.is_last_bar:
             self._save()
-        self._done_t.set(self.time[0])
+            self._k_t.set(t)
+        self._done_t.set(t)
 
     def _finish(self, s: int, broke: bool) -> None:
         self._on.get()[s] = False
@@ -688,10 +709,11 @@ class Lines(SecContext):
 @param.float('span', default=0.5, min=0.05, max=1.0, step=0.05, title='custom: Span (share of the swings stretch)')
 @param.bool('prefer_newer', default=False, title='custom: Prefer newer line on a tie')
 @param.bool('show_chart', default=True, title="This chart's timeframe")
+@param.bool('show_5m', default=True, title='5m lines')
 @param.bool('show_15m', default=True, title='15m lines')
 @param.bool('show_1h', default=True, title='1h lines')
 @param.bool('show_4h', default=True, title='4h lines')
-@param.bool('early', default=True, title='Mark early breaks of 15m / 1h / 4h lines')
+@param.bool('early', default=True, title='Mark early breaks of 5m / 15m / 1h / 4h lines')
 @param.bool('keep_old', default=True, title='Keep broken and dropped lines')
 @param.int('max_kept', default=30, min=1, max=500, title='Old lines kept (each timeframe)')
 @param.int('marks_kept', default=60, min=1, max=500, title='Early marks kept')
@@ -701,14 +723,14 @@ class Lines(SecContext):
 @param.color('old_color', default=rgba(128, 128, 128, 1.0), title='Dropped line colour')
 class Main(MainContext):
     def __init__(self, preset, swing_size, min_touches, touch_tol, wick_tol, max_distance, hold,
-                 span, prefer_newer, show_chart, show_15m, show_1h, show_4h, early, keep_old,
-                 max_kept, marks_kept, reach, res_color, sup_color, old_color):
+                 span, prefer_newer, show_chart, show_5m, show_15m, show_1h, show_4h, early,
+                 keep_old, max_kept, marks_kept, reach, res_color, sup_color, old_color):
         self._chart_m = self.time_frame.to_minutes()
         self._secs = float(self._chart_m) * 60.0
-        self._mins = [self._chart_m, 15, 60, 240]       # slot 0 = the chart's own timeframe
-        self._names = ['', '15m', '1h', '4h']
-        self._on = [show_chart, show_15m and self._chart_m < 15, show_1h and self._chart_m < 60,
-                    show_4h and self._chart_m < 240]
+        self._mins = [self._chart_m, 5, 15, 60, 240]    # slot 0 = the chart's own timeframe
+        self._names = ['', '5m', '15m', '1h', '4h']
+        self._on = [show_chart, show_5m and self._chart_m < 5, show_15m and self._chart_m < 15,
+                    show_1h and self._chart_m < 60, show_4h and self._chart_m < 240]
         self._early = early
         self._keep_old = keep_old
         self._max_kept = max_kept
@@ -721,13 +743,16 @@ class Main(MainContext):
          self._a16, self._a17, self._a18) = self.calc_on(Lines, time_frame=self.time_frame)
         (self._b0, self._b1, self._b2, self._b3, self._b4, self._b5, self._b6, self._b7,
          self._b8, self._b9, self._b10, self._b11, self._b12, self._b13, self._b14, self._b15,
-         self._b16, self._b17, self._b18) = self.calc_on(Lines, time_frame=self._tf('15m'))
+         self._b16, self._b17, self._b18) = self.calc_on(Lines, time_frame=self._tf('5m'))
         (self._c0, self._c1, self._c2, self._c3, self._c4, self._c5, self._c6, self._c7,
          self._c8, self._c9, self._c10, self._c11, self._c12, self._c13, self._c14, self._c15,
-         self._c16, self._c17, self._c18) = self.calc_on(Lines, time_frame=self._tf('1h'))
+         self._c16, self._c17, self._c18) = self.calc_on(Lines, time_frame=self._tf('15m'))
         (self._d0, self._d1, self._d2, self._d3, self._d4, self._d5, self._d6, self._d7,
          self._d8, self._d9, self._d10, self._d11, self._d12, self._d13, self._d14, self._d15,
-         self._d16, self._d17, self._d18) = self.calc_on(Lines, time_frame=self._tf('4h'))
+         self._d16, self._d17, self._d18) = self.calc_on(Lines, time_frame=self._tf('1h'))
+        (self._e0, self._e1, self._e2, self._e3, self._e4, self._e5, self._e6, self._e7,
+         self._e8, self._e9, self._e10, self._e11, self._e12, self._e13, self._e14, self._e15,
+         self._e16, self._e17, self._e18) = self.calc_on(Lines, time_frame=self._tf('4h'))
         self._atr_len = 14
         a0 = 1.0 / float(self._atr_len)
         com = (1.0 - a0) / a0
@@ -738,30 +763,34 @@ class Main(MainContext):
         self._prev_close = self.new_var(0.0)
         self._prev_t = self.new_var(nan)                # the previous chart candle's open
         # per timeframe: the latest state taken (its candle's index and open time)
-        self._lj = self.new_var([-1, -1, -1, -1])
-        self._ltj = self.new_var([nan, nan, nan, nan])
+        self._lj = self.new_var([-1, -1, -1, -1, -1])
+        self._ltj = self.new_var([nan, nan, nan, nan, nan])
+        # per timeframe: the chart's first candle its lines can be drawn from, and the line
+        # coordinate there -- a line starting earlier is drawn from it
+        self._t0s = self.new_var([nan, nan, nan, nan, nan])
+        self._x0 = self.new_var([nan, nan, nan, nan, nan])
         # per line slot k = timeframe * 2 + side: the line drawn there and its geometry
-        self._cur = self.new_var([-1, -1, -1, -1, -1, -1, -1, -1])
-        self._g_start = self.new_var([0, 0, 0, 0, 0, 0, 0, 0])
-        self._g_tstart = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self._g_slope = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self._g_icpt = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self._g_seen = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self._done = self.new_var([False, False, False, False, False, False, False, False])
+        self._cur = self.new_var([-1, -1, -1, -1, -1, -1, -1, -1, -1, -1])
+        self._g_start = self.new_var([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        self._g_tstart = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self._g_slope = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self._g_icpt = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self._g_seen = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self._done = self.new_var([False, False, False, False, False, False, False, False, False, False])
         segs: list[LineSegment] = []
         tags: list[LabelAbs] = []
-        for k in range(8):
+        for k in range(10):
             segs.append(LineSegment(AbsolutePosition(0.0, 0.0), AbsolutePosition(0.0, 0.0)))
             tags.append(LabelAbs('', AbsolutePosition(0.0, 0.0), bg_color=self._colors[k % 2](0.2),
                                  text_color=self._colors[k % 2], font_size=10))
         self._seg = self.new_var(segs)
-        self._seg_on = self.new_var([False, False, False, False, False, False, False, False])
-        self._seg_drawn = self.new_var([False, False, False, False, False, False, False, False])
-        self._seg_dirty = self.new_var([False, False, False, False, False, False, False, False])
-        self._seg_tip = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self._seg_on = self.new_var([False, False, False, False, False, False, False, False, False, False])
+        self._seg_drawn = self.new_var([False, False, False, False, False, False, False, False, False, False])
+        self._seg_dirty = self.new_var([False, False, False, False, False, False, False, False, False, False])
+        self._seg_tip = self.new_var([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self._tag = self.new_var(tags)
-        self._tag_drawn = self.new_var([False, False, False, False, False, False, False, False])
-        self._tag_dirty = self.new_var([False, False, False, False, False, False, False, False])
+        self._tag_drawn = self.new_var([False, False, False, False, False, False, False, False, False, False])
+        self._tag_dirty = self.new_var([False, False, False, False, False, False, False, False, False, False])
         old: list[LineSegment] = []
         f1: list[bool] = []
         f2: list[bool] = []
@@ -809,10 +838,40 @@ class Main(MainContext):
                     self._c6[0], self._c7[0], self._c8[0], self._c9[0], self._c10[0],
                     self._c11[0], self._c12[0], self._c13[0], self._c14[0], self._c15[0],
                     self._c16[0], self._c17[0], self._c18[0]]
-        return [self._d0[0], self._d1[0], self._d2[0], self._d3[0], self._d4[0], self._d5[0],
-                self._d6[0], self._d7[0], self._d8[0], self._d9[0], self._d10[0], self._d11[0],
-                self._d12[0], self._d13[0], self._d14[0], self._d15[0], self._d16[0],
-                self._d17[0], self._d18[0]]
+        if s == 3:
+            return [self._d0[0], self._d1[0], self._d2[0], self._d3[0], self._d4[0], self._d5[0],
+                    self._d6[0], self._d7[0], self._d8[0], self._d9[0], self._d10[0],
+                    self._d11[0], self._d12[0], self._d13[0], self._d14[0], self._d15[0],
+                    self._d16[0], self._d17[0], self._d18[0]]
+        return [self._e0[0], self._e1[0], self._e2[0], self._e3[0], self._e4[0], self._e5[0],
+                self._e6[0], self._e7[0], self._e8[0], self._e9[0], self._e10[0], self._e11[0],
+                self._e12[0], self._e13[0], self._e14[0], self._e15[0], self._e16[0],
+                self._e17[0], self._e18[0]]
+
+    def _tj(self, s: int) -> float:
+        """Timeframe s's latest candle open time: read on every chart candle, so its other
+        values are read only when it changed."""
+        if s == 0:
+            return self._a17[0]
+        if s == 1:
+            return self._b17[0]
+        if s == 2:
+            return self._c17[0]
+        if s == 3:
+            return self._d17[0]
+        return self._e17[0]
+
+    def _cl(self, s: int) -> float:
+        """Timeframe s's latest candle close."""
+        if s == 0:
+            return self._a18[0]
+        if s == 1:
+            return self._b18[0]
+        if s == 2:
+            return self._c18[0]
+        if s == 3:
+            return self._d18[0]
+        return self._e18[0]
 
     def calc(self):
         if not self.is_closed_bar:
@@ -820,18 +879,17 @@ class Main(MainContext):
         a = self._chart_atr()
         t = self.time[0]
         close_t = t + self._secs
-        for s in range(4):
+        for s in range(5):
             if self._on[s]:
-                v = self._vals(s)
                 m = float(self._mins[s]) * 60.0
-                tj = v[17]
+                tj = self._tj(s)
                 # a state is taken once its candle has CLOSED by this candle's close -- and at
                 # that very close only if its close is this candle's close (the same market at
                 # the same instant): otherwise it may not be final yet, and it is taken a
                 # chart candle later
-                done = tj + m < close_t or (tj + m == close_t and v[18] == self.close[0])
+                done = tj + m < close_t or (tj + m == close_t and self._cl(s) == self.close[0])
                 if not isnan(tj) and done and tj != self._ltj.get()[s]:
-                    self._take_state(s, v)
+                    self._take_state(s, self._vals(s))
                 for side in range(2):
                     k = s * 2 + side
                     if self._cur.get()[k] >= 0:
@@ -871,6 +929,11 @@ class Main(MainContext):
         ptj = self._ltj.get()[s]
         self._lj.get()[s] = j
         self._ltj.get()[s] = tj
+        if isnan(self._t0s.get()[s]):                  # the first chart candle that can map it
+            x0 = self._x(s, self.time[0] + self._secs)
+            if not isnan(x0):
+                self._x0.get()[s] = x0
+                self._t0s.get()[s] = self.time[0]
         for side in range(2):
             k = s * 2 + side
             b = side * 8
@@ -938,8 +1001,15 @@ class Main(MainContext):
         s = k // 2
         m = float(self._mins[s]) * 60.0
         seg = self._seg.get()[k]
-        x0 = float(self._g_start.get()[k])
-        seg.point_a = AbsolutePosition(self._g_tstart.get()[k] + m - self._secs, self._y(k, x0))
+        xa = float(self._g_start.get()[k])
+        ta = self._g_tstart.get()[k] + m - self._secs
+        t0 = self._t0s.get()[s]
+        if not isnan(t0) and ta < t0:
+            # it starts before the chart's first candle, where there is no candle to stand on:
+            # drawn from that candle (1 Nov 2026: a 15m line's tag showed and the line did not)
+            ta = t0
+            xa = self._x0.get()[s]
+        seg.point_a = AbsolutePosition(ta, self._y(k, xa))
         now = self.time[0]
         x = self._x(s, now + self._secs)
         if isnan(x):
@@ -975,7 +1045,16 @@ class Main(MainContext):
         if not self._seg_on.get()[k]:
             return
         seg = self._seg.get()[k]
-        seg.point_b = AbsolutePosition(te + m - self._secs, self._y(k, float(e)))
+        tb = te + m - self._secs
+        t0 = self._t0s.get()[s]
+        if not isnan(t0) and tb < t0:                  # it ended before the chart's first candle
+            if self._seg_drawn.get()[k]:
+                self._trash.get().append(seg)
+            self._seg_on.get()[k] = False
+            self._seg_drawn.get()[k] = False
+            self._seg_dirty.get()[k] = False
+            return
+        seg.point_b = AbsolutePosition(tb, self._y(k, float(e)))
         seg.line_width = 1
         if broke:
             seg.color = self._colors[side](0.55)
@@ -1074,7 +1153,7 @@ class Main(MainContext):
                 self._mk_dirty.get()[q] = False
                 self._mk_drawn.get()[q] = True
                 left -= 1
-        for k in range(8):
+        for k in range(10):
             if left > 0 and self._seg_on.get()[k] and self._seg_dirty.get()[k]:
                 self.chart.draw(self._seg.get()[k])
                 self._seg_dirty.get()[k] = False

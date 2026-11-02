@@ -2913,3 +2913,34 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
     latest items, so BizToc can only be judged by recording it live.
   - r/singaporefi "useful finance telegram channels" lists Singapore personal-finance creators
     and tools, plus a daily gold-PRICE channel. None of them is a news source.
+
+### Exness on a live chart: time-out, a missing 15m line, the bias panel, labels (2026-11-01)
+
+- The user added the indicators to ETHUSD 1m. Five things came back:
+  - **Trendlines MTF: "Execution timed out".** The cause was the 28 Oct guard. Every timeframe
+    copied its whole state before every candle, so that a candle computed twice counts once. Since
+    `list()` had to go, each copy was an item-by-item loop on every candle of every timeframe. The
+    profile put it at most of the run time. Only the LAST candle can come again (Exness's seam), so
+    the copy is now taken only then: `is_last_bar`, with `_k_t` naming the candle the copy belongs
+    to. On what Exness hands the indicator (2,000 1m candles and 1,000 of each timeframe), the
+    stand-in takes 0.5-0.7 s with five timeframes. The four-timeframe version that timed out took
+    1.0-2.1 s, and the single-timeframe trendlines, which run on Exness, take 0.2-0.4 s. Each
+    timeframe's 19 values are now read only when that timeframe has a new candle.
+  - **A 15m tag without its line.** Every timeframe arrives with ~1,000 of its own candles, so its
+    line can start days before the chart's first candle. A line is now drawn from that candle, at
+    the line's own price there; one that ended before it is not drawn. A test with the timeframes'
+    candles reaching weeks before the chart checks it on every live line.
+  - **Bias showed only "1m", "5m" ... at the right edge.** Exness draws a label to the right of its
+    point, the anchor notwithstanding. The panel now sits top-left, where the probe's panel showed
+    fine, with "Panel from the top / left" settings.
+  - **Structure labels piled up.** Each timeframe placed its label at its own ATR distance, so two
+    labels on one candle could coincide. They now stack: the first 0.8 ATR out, then each next one
+    1.4 ATR beyond the outermost, measured in the larger of the two ATRs.
+  - **5m** was added to Trendlines MTF and Structure. Bias already had it.
+- Lines vanishing and coming back after a scroll is Exness re-running the indicator from its first
+  candle once older candles load. A faster script means a shorter gap.
+- Unticking a timeframe in Trendlines MTF now stops its work entirely: each timeframe reads its own
+  show_* setting and returns nothing when off. Before, unticking only hid the lines, so it could
+  never help a chart that is slow.
+- The type check caught a compile error on its first day. Structure's new list reused a name
+  (`o1`) already declared as list[int]. Python rebinds it; Indie refuses it.
