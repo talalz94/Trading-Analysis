@@ -115,9 +115,17 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
 - **The lines** are the email alerts' (`quant.indicators.add_trendlines`, strict), fitted on each
   timeframe's own candles with the alerts' own settings for it (`Settings: auto`). The fitting is
   `trendlines.py`'s own code, copied unchanged.
+- **Timeframes:** the chart's own, 5m, 15m, 1h and 4h, each with its own on/off setting. 5m was
+  added on 1 Nov 2026. Unticking a timeframe stops its work entirely, so it also lightens the
+  indicator; before, it only hid the lines. On a 5m chart, `5m lines` also covers the chart's own.
 - **Colour** is the direction: red for resistance, green for support. **Thickness** is the
   timeframe: the chart's own lines are thinnest, 4h thickest. A higher timeframe's live line has a
   tag at its tip (`1h R`, `4h S`).
+- **A line that starts before the chart's first candle** is drawn from that candle, on the line.
+  Each timeframe arrives with ~1,000 of its own candles, so a 15m or 1h line can start days before
+  the chart does, where there is no candle to stand on. On 1 Nov 2026 a 15m line's tag showed and
+  the line did not. A line that ended before the chart's first candle is not drawn at all.
+  (A line can also simply be above or below the prices on screen: scroll the price scale.)
 - **Broken** lines stay, faded. **Dropped** lines stay, grey and dotted (`Old lines kept` per
   timeframe).
 - **Early marks** (`1h early down`) go on the first chart candle that **closes** through a live
@@ -133,8 +141,17 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
   in 920 15m candles, none in 230 1h candles and none in 62 4h candles (BTC: 2, 0, 0). The alerts fit
   a 4h line on about 505 4h candles. So the 1h and 4h lines appear only if Exness gives the
   indicator months of those candles; the probe's report says how many it gets.
-- **Cost:** on 14,000–18,000 1m candles, 5–6 s in plain Python on the stand-in (about the single
-  timeframe port's cost), at most 4 drawing changes in any update.
+- **Cost, and the time-out of 1 Nov 2026** ("Execution timed out" on ETHUSD 1m). Each timeframe
+  kept a copy of its state from before every candle, so that a candle computed twice counts once.
+  Only the LAST candle can come twice, though. Since `list()` had to go, every copy was an
+  item-by-item loop on every candle of every timeframe, and that was most of the run time. Now the
+  copy is taken only before the last candle. On what Exness hands the indicator (2,000 chart
+  candles and 1,000 of each other timeframe), the stand-in now takes 0.5–0.7 s with five
+  timeframes, against 1.0–2.1 s for the four-timeframe version that timed out. The single-timeframe
+  `trendlines.py`, which runs on Exness, takes 0.2–0.4 s.
+- **Why lines vanish and come back when you scroll:** scrolling back loads older candles, and
+  Exness then runs every indicator again from its first candle. The lines return when that run
+  ends; a faster script means a shorter gap.
 
 ## structure.py: HH / HL / LH / LL
 
@@ -148,9 +165,14 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
   of the 1h candle that confirms it). It is **drawn** at the swing itself (for a 1h swing, at the
   chart candle that made that 1h candle's high or low). So it sits where the swing was but appears
   later, as it does in the alerts. It never moves or disappears afterwards.
+- **Timeframes:** the chart's own, 5m (added 1 Nov 2026), 15m, 1h and 4h.
 - **Telling them apart:** green for HH and HL, red for LH and LL. A higher timeframe's label names
-  its timeframe (`1h HH`), is larger, and sits further from the candle, so labels at the same high
-  stack instead of overlapping.
+  its timeframe (`1h HH`) and is a little larger.
+- **No pile-ups:** labels on the same candle stack outward. The first sits 0.8 ATR clear of the
+  candle, and each next one 1.4 ATR beyond the outermost already there, measured in the larger of
+  the two ATRs. They used to be placed at their own timeframe's distance and landed on top of each
+  other. A 15m swing is confirmed hours after the chart's, often in a quieter market, so its own
+  ATR alone would put it right back on the first label.
 
 ## bias.py: one line per timeframe
 
@@ -168,6 +190,10 @@ filter, an EMA bias and HH/HL structure added nothing (`docs/WHAT_WORKS.md`).
 
 Timeframes below the chart's (1m on a 5m chart) need Indie 5.14 (`Also lower timeframes`). The
 probe says whether you have it.
+
+**Where:** the top LEFT, moved with `Panel from the top` and `Panel from the left`. Exness draws a
+label to the right of its point whatever its anchor says. The first version sat at the right edge,
+so the panel went under the price scale and showed only `1m`, `5m` and so on (1 Nov 2026).
 
 ## levels.py: day, week, month and sessions
 

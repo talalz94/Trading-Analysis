@@ -1,5 +1,5 @@
 # indie:lang_version = 5
-# STRUCTURE -- HH / HL / LH / LL swing labels for the chart's own timeframe AND 15m, 1h and 4h, on
+# STRUCTURE -- HH / HL / LH / LL swing labels for the chart's own timeframe AND 5m, 15m, 1h and 4h, on
 # one chart, for the Exness web terminal: Indicators -> Create -> paste -> Save -> Add to chart.
 # Paste exness/probe_timeframes.py first: it says whether Exness lets an indicator read other
 # timeframes (this one needs it).
@@ -19,8 +19,9 @@
 # the swing is confirmed -- exactly as in the email alerts.
 #
 # DISTINGUISHABLE: green = HH / HL (rising), red = LH / LL (falling); a higher timeframe's label
-# says its timeframe ('1h HH'), is larger, and sits further from the candle, so a 4h HH and a 15m
-# HH at the same high stack instead of overlapping.
+# says its timeframe ('1h HH') and is a little larger. Labels on the same candle STACK outward --
+# the first 0.8 ATR clear of the candle, each next one 1.4 ATR further -- so a 4h HH and a 15m HH
+# at the same high no longer land on top of each other.
 from math import isnan, nan
 from indie import indicator, param, param_ref, color, MainContext, SecContext, TimeFrame
 from indie.drawings import LabelAbs, AbsolutePosition
@@ -231,6 +232,7 @@ class Swings(SecContext):
 @indicator('Structure (quant)', overlay_main_pane=True)
 @param.float('swing_size', default=3.5, min=0.5, max=20.0, step=0.1, title='Swing size (ATR)')
 @param.bool('show_chart', default=True, title="This chart's timeframe")
+@param.bool('show_5m', default=True, title='5m')
 @param.bool('show_15m', default=True, title='15m')
 @param.bool('show_1h', default=True, title='1h')
 @param.bool('show_4h', default=True, title='4h')
@@ -238,25 +240,27 @@ class Swings(SecContext):
 @param.color('up_color', default=color.GREEN, title='HH / HL colour')
 @param.color('down_color', default=color.RED, title='LH / LL colour')
 class Main(MainContext):
-    def __init__(self, swing_size, show_chart, show_15m, show_1h, show_4h, labels_kept, up_color,
-                 down_color):
+    def __init__(self, swing_size, show_chart, show_5m, show_15m, show_1h, show_4h, labels_kept,
+                 up_color, down_color):
         self._chart_m = self.time_frame.to_minutes()
         self._secs = float(self._chart_m) * 60.0
-        self._mins = [self._chart_m, 15, 60, 240]
-        self._names = ['', '15m ', '1h ', '4h ']
-        self._on = [show_chart, show_15m and self._chart_m < 15, show_1h and self._chart_m < 60,
-                    show_4h and self._chart_m < 240]
+        self._mins = [self._chart_m, 5, 15, 60, 240]
+        self._names = ['', '5m ', '15m ', '1h ', '4h ']
+        self._on = [show_chart, show_5m and self._chart_m < 5, show_15m and self._chart_m < 15,
+                    show_1h and self._chart_m < 60, show_4h and self._chart_m < 240]
         self._kept = labels_kept
         self._up = up_color
         self._down = down_color
         (self._a0, self._a1, self._a2, self._a3, self._a4, self._a5, self._a6,
          self._a7) = self.calc_on(Swings, time_frame=self.time_frame)
         (self._b0, self._b1, self._b2, self._b3, self._b4, self._b5, self._b6,
-         self._b7) = self.calc_on(Swings, time_frame=self._tf('15m'))
+         self._b7) = self.calc_on(Swings, time_frame=self._tf('5m'))
         (self._c0, self._c1, self._c2, self._c3, self._c4, self._c5, self._c6,
-         self._c7) = self.calc_on(Swings, time_frame=self._tf('1h'))
+         self._c7) = self.calc_on(Swings, time_frame=self._tf('15m'))
         (self._d0, self._d1, self._d2, self._d3, self._d4, self._d5, self._d6,
-         self._d7) = self.calc_on(Swings, time_frame=self._tf('4h'))
+         self._d7) = self.calc_on(Swings, time_frame=self._tf('1h'))
+        (self._e0, self._e1, self._e2, self._e3, self._e4, self._e5, self._e6,
+         self._e7) = self.calc_on(Swings, time_frame=self._tf('4h'))
         self._atr_len = 14
         a0 = 1.0 / float(self._atr_len)
         com = (1.0 - a0) / a0
@@ -265,7 +269,7 @@ class Main(MainContext):
         self._atr_w = self.new_var(0.0)
         self._atr_n = self.new_var(0)
         self._prev_close = self.new_var(0.0)
-        self._seen = self.new_var([0, 0, 0, 0])       # swings already labelled, per timeframe
+        self._seen = self.new_var([0, 0, 0, 0, 0])    # swings already labelled, per timeframe
         self._t0 = self.new_var(nan)                  # the chart's first candle
         # each higher timeframe's recent candles as the chart saw them: open time, and the chart
         # candle that made its high and its low -- where a swing of that timeframe is drawn
@@ -295,6 +299,12 @@ class Main(MainContext):
         self._code = self.new_var(c1)                 # per label: the swing it names --
         self._px = self.new_var(p1)                   # 2 HH 1 LH -1 HL -2 LL, its price, and
         self._pt = self.new_var(t1)                   # its candle's open time
+        lx1: list[float] = []
+        lo1: list[float] = []
+        lu1: list[float] = []
+        self._lx = self.new_var(lx1)                  # the chart candle it is drawn on, its
+        self._loff = self.new_var(lo1)                # distance from the swing price, and the
+        self._lunit = self.new_var(lu1)               # ATR that distance was measured in
         trash: list[LabelAbs] = []
         self._trash = self.new_var(trash)
 
@@ -314,8 +324,11 @@ class Main(MainContext):
         if s == 2:
             return [self._c0[0], self._c1[0], self._c2[0], self._c3[0], self._c4[0], self._c5[0],
                     self._c6[0], self._c7[0]]
-        return [self._d0[0], self._d1[0], self._d2[0], self._d3[0], self._d4[0], self._d5[0],
-                self._d6[0], self._d7[0]]
+        if s == 3:
+            return [self._d0[0], self._d1[0], self._d2[0], self._d3[0], self._d4[0], self._d5[0],
+                    self._d6[0], self._d7[0]]
+        return [self._e0[0], self._e1[0], self._e2[0], self._e3[0], self._e4[0], self._e5[0],
+                self._e6[0], self._e7[0]]
 
     def calc(self):
         if not self.is_closed_bar:
@@ -325,10 +338,10 @@ class Main(MainContext):
         close_t = t + self._secs
         if isnan(self._t0.get()):
             self._t0.set(t)
-        for s in range(1, 4):
+        for s in range(1, 5):
             if self._on[s]:
                 self._bucket(s, t)
-        for s in range(4):
+        for s in range(5):
             if self._on[s]:
                 v = self._vals(s)
                 m = float(self._mins[s]) * 60.0
@@ -378,7 +391,7 @@ class Main(MainContext):
             self._bk_hp.get().append(self.high[0])
             self._bk_lt.get().append(t)
             self._bk_lp.get().append(self.low[0])
-            if len(self._bk_t.get()) > 3 * 400:        # ~400 candles of each timeframe
+            if len(self._bk_t.get()) > 4 * 400:        # ~400 candles of each timeframe
                 self._bk_t.get().pop(0)
                 self._bk_s.get().pop(0)
                 self._bk_ht.get().pop(0)
@@ -419,15 +432,29 @@ class Main(MainContext):
         col = self._down
         if code == 2 or code == -1:
             col = self._up
-        off = 0.0
+        # labels on the same chart candle (one per timeframe that has its swing there) are
+        # STACKED outward: the first 0.8 ATR clear of the candle, each next one 1.4 ATR beyond
+        # the outermost already there -- in the larger of today's ATR and theirs, since a 15m
+        # swing is confirmed hours after the chart's, often in a quieter market. Drawn at their
+        # own timeframe's distance they landed on top of each other
+        unit = 0.0
         if not isnan(a):
-            off = a * (0.5 + 0.9 * float(s))           # higher timeframes further out
+            unit = a
+        outer = -1.0
+        for q in range(len(self._lx.get())):
+            if self._lx.get()[q] == x and (self._code.get()[q] > 0) == high:
+                if self._loff.get()[q] > outer:
+                    outer = self._loff.get()[q]
+                unit = max(unit, self._lunit.get()[q])
+        off = 0.8 * unit
+        if outer >= 0.0:
+            off = outer + 1.4 * unit
         y = px - off
         if high:
             y = px + off
         lab = LabelAbs(self._names[s] + word, AbsolutePosition(x, y),
-                       bg_color=col(0.15 + 0.1 * float(s)), text_color=col,
-                       font_size=9 + 2 * s)
+                       bg_color=col(0.15 + 0.08 * float(s)), text_color=col,
+                       font_size=9 + s)
         self._labs.get().append(lab)
         self._drawn.get().append(False)
         self._dirty.get().append(True)
@@ -435,6 +462,9 @@ class Main(MainContext):
         self._code.get().append(code)
         self._px.get().append(px)
         self._pt.get().append(pt)
+        self._lx.get().append(x)
+        self._loff.get().append(off)
+        self._lunit.get().append(unit)
         n = 0
         for k in range(len(self._slot.get())):
             if self._slot.get()[k] == s:
@@ -452,6 +482,9 @@ class Main(MainContext):
             self._code.get().pop(k)
             self._px.get().pop(k)
             self._pt.get().pop(k)
+            self._lx.get().pop(k)
+            self._loff.get().pop(k)
+            self._lunit.get().pop(k)
 
     def _sync(self) -> None:
         """At most 90 drawing changes per update (Exness allows 100); the rest wait."""

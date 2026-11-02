@@ -53,9 +53,9 @@ def test_every_label_on_every_timeframe_is_the_research_swing(monkeypatch, name,
     cm = secs // 60
     seen = []
     ctx = rt.run(rt.load(STRUCT, monkeypatch), bars, bar_secs=secs, labels_kept=10_000,
-                 spy=lambda c: seen.append([c._seen.get()[s] for s in range(4)]))
+                 spy=lambda c: seen.append([c._seen.get()[s] for s in range(5)]))
     close = (bars["open_time"].astype("int64") // 10**9).to_numpy(float) + secs
-    for s, minutes in enumerate([cm, 15, 60, 240]):
+    for s, minutes in enumerate([cm, 5, 15, 60, 240]):
         if s and minutes <= cm:
             continue
         want = _research(bars, minutes, cm)
@@ -66,7 +66,7 @@ def test_every_label_on_every_timeframe_is_the_research_swing(monkeypatch, name,
         np.testing.assert_array_equal([row[s] for row in seen], count)
     assert len(_labels(ctx, 0)) >= 10
     if name.startswith("usdjpy"):                       # a month: every timeframe has swings
-        assert all(len(_labels(ctx, s)) >= 2 for s in range(4))
+        assert all(len(_labels(ctx, s)) >= 2 for s in (0, 2, 3, 4))   # 5m is the chart here
 
 
 def test_labels_sit_on_their_swing_candle_name_their_timeframe_and_stack(monkeypatch):
@@ -77,19 +77,31 @@ def test_labels_sit_on_their_swing_candle_name_their_timeframe_and_stack(monkeyp
     words = {2: "HH", 1: "LH", -1: "HL", -2: "LL"}
     for lab, s, code, px, pt in zip(ctx._labs.get(), ctx._slot.get(), ctx._code.get(),
                                     ctx._px.get(), ctx._pt.get()):
-        assert lab.text == ["", "15m ", "1h ", "4h "][s] + words[code]
+        assert lab.text == ["", "5m ", "15m ", "1h ", "4h "][s] + words[code]
         x = lab.position.time
         if s == 0:
             assert x == pt
         else:                                     # the chart candle that made that extreme
-            m = [15, 60, 240][s - 1] * 60
+            m = [5, 15, 60, 240][s - 1] * 60
             inside = (t >= pt) & (t < pt + m)
             col = bars["high"] if code > 0 else bars["low"]
             ext = col[inside].max() if code > 0 else col[inside].min()
             assert x == t[inside][col[inside].to_numpy() == ext][-1]
         k = int(np.searchsorted(t, x))
         assert (lab.position.price > px) == (code > 0)              # above highs, below lows
-        assert lab.font_size == 9 + 2 * s and lab.text_color.name == ("green" if code in (2, -1)
+    # labels on the same candle and side STACK: the first 0.8 ATR out, each next one at least
+    # 1.4 ATR (of the earlier label's time) beyond the one before -- a later label in a quieter
+    # market used to land on top of the first
+    spots = {}
+    for lab, code, px, off, unit in zip(ctx._labs.get(), ctx._code.get(), ctx._px.get(),
+                                        ctx._loff.get(), ctx._lunit.get()):
+        assert abs(lab.position.price - px) == pytest.approx(off)
+        spots.setdefault((lab.position.time, code > 0), []).append((off, unit))
+    assert [d for d in spots.values() if len(d) > 1]            # the case arises on this month
+    for d in spots.values():
+        assert d[0][0] == pytest.approx(0.8 * d[0][1])
+        assert all(d[i + 1][0] - d[i][0] >= 1.4 * d[i][1] * 0.999 for i in range(len(d) - 1))
+        assert lab.font_size == 9 + s and lab.text_color.name == ("green" if code in (2, -1)
                                                                        else "red")
 
 
@@ -132,15 +144,15 @@ def test_settings_switch_timeframes_and_keep_labels_bounded(monkeypatch):
     mod = rt.load(STRUCT, monkeypatch)
     full = rt.run(mod, bars, bar_secs=300, labels_kept=10_000)
     ctx = rt.run(mod, bars, bar_secs=300, labels_kept=5)
-    have = [full._slot.get().count(s) for s in range(4)]
-    assert [ctx._slot.get().count(s) for s in range(4)] == [min(5, h) for h in have]
+    have = [full._slot.get().count(s) for s in range(5)]
+    assert [ctx._slot.get().count(s) for s in range(5)] == [min(5, h) for h in have]
     assert len(ctx.chart.items(rt.LabelAbs)) == sum(min(5, h) for h in have)
     assert ctx._pt.get()[-3:] == full._pt.get()[-3:]          # the newest are the ones kept
     ctx = rt.run(mod, bars, bar_secs=300, show_chart=False, show_1h=False)
-    assert set(ctx._slot.get()) == {1, 3}
+    assert set(ctx._slot.get()) == {2, 4}
     one_h = rt.htf_bars(bars, 60)                      # on a 1h chart only 4h is above it
     ctx = rt.run(mod, one_h, bar_secs=3600, labels_kept=10_000)
-    assert set(ctx._slot.get()) == {0, 3}
+    assert set(ctx._slot.get()) == {0, 4}
     ctx = rt.run(mod, bars, bar_secs=300, swing_size=6.0, labels_kept=10_000)
     want = _research(bars, 5, 5, swing=6.0)
     assert _labels(ctx, 0) == [(r["code"], r["px"], r["pt"]) for r in want]
@@ -173,8 +185,8 @@ def test_no_label_for_a_swing_from_before_the_chart(monkeypatch):
     ctx = rt.run(mod, chart, bar_secs=300, labels_kept=10_000, frames=hist)
     t0 = chart["open_time"].iloc[0].timestamp()
     assert ctx._labs.get() and all(lab.position.time >= t0 for lab in ctx._labs.get())
-    for s in (1, 2):                                           # yet every swing was counted
-        want = _research(bars, [15, 60][s - 1], 5)
+    for s in (2, 3):                                           # yet every swing was counted
+        want = _research(bars, [15, 60][s - 2], 5)
         assert ctx._seen.get()[s] == len(want)
 
 

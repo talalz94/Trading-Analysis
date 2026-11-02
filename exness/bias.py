@@ -1,5 +1,5 @@
 # indie:lang_version = 5
-# BIAS -- one line per timeframe (1m 5m 15m 1h 4h 1D) in the chart's top-right corner: strongly
+# BIAS -- one line per timeframe (1m 5m 15m 1h 4h 1D) in the chart's top-left corner: strongly
 # bullish, bullish, neutral, bearish or strongly bearish, and why. For the Exness web terminal:
 # Indicators -> Create -> paste -> Save -> Add to chart. Paste exness/probe_timeframes.py first: it
 # says whether Exness lets an indicator read other timeframes (this one needs it).
@@ -16,6 +16,10 @@
 #
 # WHAT IT IS NOT: a signal. It says what the market looks like on each timeframe. Tested as a
 # trade filter in the research, an EMA bias and HH/HL structure added nothing (docs/WHAT_WORKS.md).
+#
+# WHERE: top LEFT, moved with `Panel from the top / left`. Exness draws a label to the RIGHT of its
+# point whatever the anchor says, so a panel at the right edge went under the price scale and showed
+# only '1m', '5m' ... (1 Nov 2026).
 #
 # Timeframes BELOW the chart's (1m on a 5m chart) need Indie 5.14; `Also lower timeframes` asks for
 # them, and an older Indie refuses with an error -- the probe says which you have.
@@ -245,9 +249,10 @@ class Bias(SecContext):
 @param.int('slow', default=200, min=3, max=1000, title='Slow EMA')
 @param.bool('try_lower', default=False, title='Also lower timeframes than the chart (needs Indie 5.14)')
 @param.bool('show_1d', default=True, title='Show 1D')
-@param.float('top', default=0.05, min=0.0, max=0.9, step=0.01, title='Panel position from the top')
+@param.float('top', default=0.15, min=0.0, max=0.9, step=0.01, title='Panel from the top')
+@param.float('left', default=0.01, min=0.0, max=0.95, step=0.01, title='Panel from the left')
 class Main(MainContext):
-    def __init__(self, swing_size, fast, slow, try_lower, show_1d, top):
+    def __init__(self, swing_size, fast, slow, try_lower, show_1d, top, left):
         self._chart_m = self.time_frame.to_minutes()
         self._names = ['1m', '5m', '15m', '1h', '4h', '1D']
         self._mins = [1, 5, 15, 60, 240, 1440]
@@ -279,7 +284,7 @@ class Main(MainContext):
         self._last = self.new_var(blank)
         rows: list[LabelRel] = []
         for r in range(6):
-            rows.append(LabelRel('', RelativePosition(va.TOP, ha.RIGHT, top + 0.045 * float(r), 0.99),
+            rows.append(LabelRel('', RelativePosition(va.TOP, ha.LEFT, top + 0.045 * float(r), left),
                                  bg_color=rgba(128, 128, 128, 0.3),
                                  text_color=rgba(255, 255, 255, 1.0), font_size=12))
         self._rows = self.new_var(rows)

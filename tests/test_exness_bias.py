@@ -201,3 +201,20 @@ def test_a_candle_loaded_half_way_never_shows_its_unfinished_bias(monkeypatch):
         for s in range(6):
             row = got[k][s * 8:s * 8 + 8]
             assert row in (want[k][s * 8:s * 8 + 8], want[k - 1][s * 8:s * 8 + 8]), (k, MINS[s])
+
+
+def test_the_panel_sits_where_exness_shows_it(monkeypatch):
+    # Exness draws a label to the RIGHT of its point whatever its anchor says: anchored at the
+    # right edge the panel went under the price scale and showed only "1m", "5m" ... (1 Nov 2026).
+    # It sits top-left, as the probe's panel did, moved by its two settings
+    bars = rt.read_bars(DATA / "usdjpy_5m_2026-10-22.csv")[:300]
+    mod = rt.load(ROOT / "exness" / "bias.py", monkeypatch)
+    ctx = rt.run(mod, bars, bar_secs=300)
+    pos = [lab.position for lab in ctx._rows.get()]
+    assert all(p.ha == "left" and p.va == "top" and p.left_right_ratio == 0.01 for p in pos)
+    assert [round(p.top_bottom_ratio, 6) for p in pos] == [round(0.15 + 0.045 * r, 6)
+                                                            for r in range(6)]
+    ctx = rt.run(mod, bars, bar_secs=300, top=0.3, left=0.7)
+    assert {(round(p.top_bottom_ratio, 6), p.left_right_ratio)
+            for p in (lab.position for lab in ctx._rows.get())} == {
+        (round(0.3 + 0.045 * r, 6), 0.7) for r in range(6)}
