@@ -20,15 +20,11 @@ small downloads a minute, conditional (ETag / Last-Modified) where the site supp
 from __future__ import annotations
 
 import argparse
-import html
-import re
 import sqlite3
 import time
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 from urllib.parse import quote
 
 import pandas as pd
@@ -92,66 +88,9 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
-def iso(t: pd.Timestamp) -> str:
-    return pd.Timestamp(t).tz_convert("UTC").isoformat()
-
-
-def _when(s: Optional[str]) -> Optional[str]:
-    """An RSS date -> UTC ISO, or None. A date with no time of day (travel.state.gov prints
-    "Wed, 21 Oct 2026") is None: midnight would be a made-up time, and timing is the point."""
-    if not s or not re.search(r"\d{1,2}:\d{2}", s):
-        return None
-    try:
-        return iso(pd.Timestamp(parsedate_to_datetime(s.strip())))
-    except (TypeError, ValueError):
-        try:
-            return iso(pd.Timestamp(s.strip()))
-        except (TypeError, ValueError):
-            return None
-
-
-def parse_rss(body) -> List[dict]:
-    """RSS 2.0 -> [{id, title, link, published}]; the id is the guid, else the link. Takes the
-    raw BYTES: the Fed's feed starts with a byte-order mark and declares no charset, so decoding
-    it as text first turned the mark into "ï»¿" and the parse failed on line 1."""
-    root = ET.fromstring(body if isinstance(body, bytes) else body.encode("utf-8"))
-    out = []
-    for it in root.iter("item"):
-        title = html.unescape(" ".join((it.findtext("title") or "").split()))
-        link = (it.findtext("link") or "").strip()
-        gid = (it.findtext("guid") or "").strip() or link or title
-        date = it.findtext("pubDate") or it.findtext("{http://purl.org/dc/elements/1.1/}date")
-        if title:
-            out.append(dict(id=gid, title=title, link=link, published=_when(date)))
-    return out
-
-
-_TG_POST = re.compile(r'data-post="([^"]+)"')
-_TG_TEXT = re.compile(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S)
-_TG_TIME = re.compile(r'<time[^>]*datetime="([^"]+)"')
-
-
-def parse_telegram(body) -> List[dict]:
-    """A public channel's web page (t.me/s/<channel>) -> [{id, title, link, published}]. Each
-    message carries the time TELEGRAM received it, so polling once a minute does not blur it."""
-    text = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
-    out = []
-    marks = list(_TG_POST.finditer(text))
-    for k, m in enumerate(marks):
-        chunk = text[m.start(): marks[k + 1].start() if k + 1 < len(marks) else len(text)]
-        body, when = _TG_TEXT.search(chunk), _TG_TIME.search(chunk)
-        if not body:
-            continue                                     # a photo or a sticker with no words
-        words = re.sub(r"<br\s*/?>", " ", body.group(1))
-        words = html.unescape(re.sub(r"<[^>]+>", "", words))
-        words = " ".join(words.split())
-        if words:
-            out.append(dict(id=m.group(1), title=words, link=f"https://t.me/{m.group(1)}",
-                            published=iso(pd.Timestamp(when.group(1))) if when else None))
-    return out
-
-
-PARSERS = {"rss": parse_rss, "telegram": parse_telegram}
+# the readers live in quant/news/headlines.py -- the alerts quote a release's first headlines
+# with them, so there is ONE copy and the readers this test measured are the ones in use
+from quant.news.headlines import PARSERS, _when, iso, parse_rss, parse_telegram  # noqa: E402,F401
 
 
 _SESSION = None

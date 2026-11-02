@@ -2975,3 +2975,39 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   -0.12% in 5 min, 7.7x). The RBNZ, BoC, ECB decision and GDP/PCE barely moved Gold or USDJPY.
 - Next step, pending the user's go-ahead: FinancialJuice RSS as the result source for critical
   releases in every currency, which would be ~40 s after the release instead of 2-17 min or never.
+
+### Headline results: FinancialJuice first, two backups, instant news (2026-11-02)
+
+The user approved it ("a back source as well if something fails. and news alert should be
+instant").
+- **Telegram check first** (experiments/telegram_check.py on the server; 20 candidates; 11 events,
+  the 9 critical releases plus UK CPI and the Gulf story):
+  - no channel beat FinancialJuice's RSS;
+  - its own channel had 11/11 but ~48 s later (a copy);
+  - Walter Bloomberg had 6/11, fast on US and Europe, missing New Zealand, Japan and the UK;
+  - the rest were 4-15 min late, private, or silent;
+  - "DB News TradFi" (Reddit) is public only as a "(Delayed)" channel with 0 posts in 12 days.
+- **Gulf story, 21 Oct:** gold fell from 18:44. FinancialJuice RSS had "ordered departure" at
+  18:47:50 and a related embassy warning at 18:34. Walter and ClashReport had it ~18:52.
+- **Built:**
+  - quant/news/headlines.py: the probe's readers and the report's word lists, moved so there is
+    one copy.
+  - The alerts' NEWS block: `headlines=` (sources in order of trust) and `instant=`.
+  - The next source is asked only for the releases the last one could not answer.
+  - The first 3 lines are quoted, a printed "Actual" first.
+  - The official US number is skipped when the headline printed it.
+  - Both are ON in alerts_config_trendlines.py.
+- **Timing:** the monitor looks at :20 past each minute. A release typed within 8 s goes at about
+  +21 s. Without instant it would ride the boundary email: the 12:30 one goes at 12:32:20
+  (settle_seconds 90).
+- **Found on the way:** a failed FRED download's error carried its URL with api_key. It sat in
+  data/news/meta.json and update.log on the PC (11 lines), and very likely in the server's state and
+  alerts.log.
+  - Now blanked: `quant.logging_utils.redact` in update_all, a scrub of every string at each
+    NewsStore.set_meta, LiveNews's errors, and a RedactFilter on the monitor's log handler
+    (tracebacks included).
+  - The PC's two files were scrubbed by hand.
+  - The user postponed getting a new FRED key, since FRED works.
+- **`feed_error ... IndexError` in status** is dukascopy_python's `fetch()`: it reads
+  `lastUpdates[0]` before checking the page is empty. It is harmless (one market skipped for one
+  look); 4 times in 12 days.

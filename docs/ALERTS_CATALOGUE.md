@@ -367,6 +367,8 @@ Economic-calendar notices, driven by the clock rather than by candles: the week 
 | `remind_before` | {level: minutes before}, e.g. {'critical': (60, 15), 'high': (15,)} |
 | `results` | lowest level whose actual-vs-forecast is emailed (needs JBLANKED_API_KEY); None = off |
 | `warn_alerts` | a candle alert within this many minutes of high news says so; 0 = off |
+| `headlines` | the result from news headlines, in order of trust: ('financialjuice', 'financialjuice_telegram', 'walterbloomberg') -- the next is asked when one fails or has nothing yet; None = off |
+| `instant` | True = reminders, results and moves go at once, not at the next email boundary |
 
 ### Currencies
 

@@ -275,9 +275,49 @@ news` for what it currently covers and when each reminder will go.
 | day ahead | every evening (20:00); tomorrow's covered releases; no email when there are none | normal |
 | reminders | 60 and 15 min before critical, 15 before high; same-minute releases share one | urgent |
 | results | the actual vs the forecast, the surprise and its meaning: about a minute after 8:30 for BLS releases, when FRED posts for the rest, 14:00-ish for the Fed (needs the FRED key) | urgent |
+| headline result | `headlines=`: the first lines the squawk feeds typed, seconds after the release, word for word (below) | urgent |
 | moved / removed | a covered high+ release that changed time or left the calendar | urgent if critical |
 | calendar stale | the feed has not updated for 6 h; once a day | normal |
 | on candle alerts | an alert closing within 30 min of high news says "news: USD CPI m/m in 12 min" | — |
+
+`instant=True` makes every "urgent" above **instant**: it goes the moment it is found instead of
+riding the next `DELIVERY every_minutes` email (90 s after each 5-minute boundary).
+
+### Headline results
+
+`headlines=("financialjuice", "financialjuice_telegram", "walterbloomberg")` -- a release's result
+as the squawk desks type it, in `quant/news/headlines.py`. Chosen on the server's own record of
+20 Oct - 1 Nov 2026 (9 critical releases, UK CPI and the 21 Oct Gulf story):
+
+| source | had | how soon (its own clock) | notes |
+|---|---|---|---|
+| FinancialJuice RSS feed | 9 of 9 | 0-8 s (51 s once: New Zealand) | the number in every decision headline; 99.1% of polls answered, longest outage 7 min; not cached by Cloudflare |
+| FinancialJuice's Telegram channel | 11 of 11 | ~48 s | the same desk on Telegram's servers: the backup when the feed fails |
+| Walter Bloomberg's channel | 6 of 11 | 9-20 s on US/Europe | an independent desk; none on New Zealand, Japan or the UK |
+| the agencies (our official US numbers) | 2 of 9 emailed | 2 min 20 s and 17 min | FRED copies a release minutes to an hour after the agency |
+
+How it works:
+- **Which releases:** every covered one at the `results` level whose title has a rule in
+  `RELEASE_WORDS` (all the critical ones of USD, EUR, GBP and JPY have one). A release no rule
+  names gets no headline: a guess would only add noise.
+- **When:** every tick from the release's time until 10 minutes after (2 hours for the BOJ, which
+  announces when its meeting ends). A line printed up to 30 s before the time counts; a preview
+  from earlier does not.
+- **Which source:** asked after the candle emails are out, in order. The next source is asked only
+  for the releases the last one could not answer -- it failed, returned nothing, or has no line
+  about them yet.
+- **What is sent:** the first three matching lines, a printed result ("Actual 2.5% (Forecast
+  2.4%...)") first, each with its seconds after the release and its source, plus the calendar's
+  forecast. Three, because the first is not always the number asked for: on 29 Oct FinancialJuice
+  led with the PCE line, and the GDP line came two seconds later.
+- **Once per release.** A later line about it is not mailed.
+- **The official US number is a check.** It is not mailed when the headline already printed it,
+  read in its units ("Actual 245K" = 245,000; "Q3" is not a number). It is mailed when the
+  headline printed another, or did not print it at all, and says so. An official number that
+  came first leaves no headline to send.
+- **Timing in practice:** the monitor looks once a minute, 20 s past it. A release at :00 typed
+  within 8 s goes at ~:21 with `instant=True`; one typed later goes a minute after.
+- **These are lines people typed, not official numbers.** The email says so.
 
 How it behaves:
 - **Each notice goes once**, even across a restart. Its id is a hash of what it is about.
