@@ -3011,3 +3011,12 @@ instant").
 - **`feed_error ... IndexError` in status** is dukascopy_python's `fetch()`: it reads
   `lastUpdates[0]` before checking the page is empty. It is harmless (one market skipped for one
   look); 4 times in 12 days.
+- **Deployed the same day** (f25bd2c): all three sources answered from the server (100 / 20 / 20
+  lines) and no key was left in its log or state.
+- **Fixed after deploying**, before the first jobs report: the official-number check used the
+  FIRST line with the release's words. On a jobs day payrolls, the jobless rate and earnings share
+  those words, so payrolls would have been "checked" against 4.2% and mailed again as "differs".
+  - Now the jobs report's three numbers have their own words.
+  - A title is checked only against lines about it: core vs headline, m/m vs y/y, the GDP price
+    index apart.
+  - Any of those lines may carry the number.

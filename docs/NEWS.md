@@ -312,7 +312,11 @@ How it works:
   led with the PCE line, and the GDP line came two seconds later.
 - **Once per release.** A later line about it is not mailed.
 - **The official US number is a check.** It is not mailed when the headline already printed it,
-  read in its units ("Actual 245K" = 245,000; "Q3" is not a number). It is mailed when the
+  read in its units ("Actual 245K" = 245,000; "Q3" is not a number). Each official number is
+  checked against the lines about ITS title only: a jobs report prints payrolls, the jobless rate
+  and earnings within seconds, and a CPI day four numbers, so a core title wants "core" and a
+  headline one refuses it, m/m wants a monthly line and y/y a yearly one, and the GDP price index
+  is kept apart from GDP. It is mailed when the
   headline printed another, or did not print it at all, and says so. An official number that
   came first leaves no headline to send.
 - **Timing in practice:** the monitor looks once a minute, 20 s past it. A release at :00 typed

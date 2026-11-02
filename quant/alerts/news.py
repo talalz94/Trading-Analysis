@@ -546,7 +546,7 @@ def _against_headline(state, cur, t, items) -> Tuple[str, Optional[str]]:
     said = [agrees(i["actual"], cur, i["title"], lines) for i in items]
     if said and all(v is True for v in said):
         return "skipped", None             # nothing new: the headline already printed it
-    return "new", ("the official number -- the first headline printed another"
+    return "new", ("the official number -- it differs from the headline"
                    if False in said else "the official number")
 
 
