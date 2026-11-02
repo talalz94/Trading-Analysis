@@ -2961,10 +2961,11 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   - State Dept and White House: nothing.
 - Our result emails: 2 of 9, the US ones only. FOMC came at 140 s; GDP + PCE at 1,040 s, and WRONG.
   No number reached the user for the RBNZ, BoC, ECB or BOJ, since JBlanked's credits are not bought.
-- **The GDP bug.** The server's history update ran at 12:47 New York. GDP's release days come from
-  FRED's release CALENDAR, so 29 Oct was already listed, and "GDP as of 29 Oct" was still Q2's final
-  2.2%. That was stored as Q3's advance (really 3.4%) and mailed: a miss reported where there was a
-  beat. The stored number then stopped the live poll, and the history never revisits a day.
+- **The GDP bug.** The server's history update ran at 08:47 New York (12:47 UTC), 17 min after
+  the release. GDP's release days come from FRED's release CALENDAR, so 29 Oct was already listed,
+  and "GDP as of 29 Oct" was still Q2's final 2.2%. That was stored as Q3's advance (really 3.4%)
+  and mailed: a miss reported where there was a beat. The stored number then stopped the live
+  poll, and the history never revisits a day.
   - Fix: a GDP day is read by the history only once it is over; the day itself is the live poll's,
     which checks that the quarter moved on.
   - Repair: a stored stage whose quarter did not move on is dropped and read again, which mends the

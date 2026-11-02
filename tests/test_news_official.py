@@ -521,12 +521,13 @@ def _advance(st):
 
 
 def test_a_gdp_release_day_is_left_to_the_live_poll_until_it_is_over(tmp_path, monkeypatch):
-    # 29 Oct 2026: the history ran at 12:47 New York, before FRED had the third quarter, read "GDP
-    # as of 29 Oct" -- the second quarter's FINAL 2.2% -- and stored it as Q3's advance (3.4%).
+    # 29 Oct 2026: the history ran at 08:47 New York (12:47 UTC), before FRED had the third
+    # quarter, read "GDP as of 29 Oct" -- the second quarter's FINAL 2.2% -- and stored it as
+    # Q3's advance (3.4%).
     # It went out as the result, the opposite of what happened
     st, fake = _gdp_store(tmp_path, monkeypatch, {"2026-07-30": {"2026-04-01": 1.5},
                                                   "2026-09-30": {"2026-04-01": 2.2}})
-    U.update_official(st, "k", ny("2026-10-29 12:47"), force=True)
+    U.update_official(st, "k", ny("2026-10-29 08:47"), force=True)
     assert _advance(st) == [("1.5%", ts("2026-04-01"))]          # 29 Oct not recorded yet
     fake.add(GDP, "2026-10-29", {"2026-07-01": 3.4})              # FRED posts the quarter
     U.update_official(st, "k", ny("2026-10-30 09:00"), force=True)

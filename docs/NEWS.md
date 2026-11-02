@@ -175,7 +175,7 @@ official sources; nothing is scraped from behind a bot check.
     records nothing that day, so the three stages are read on the release days from FRED's
     calendar instead of counted from FRED's revisions;
   - because those days come from a CALENDAR, a GDP day is read only once it is over. On 29 Oct
-    2026 the history ran at 12:47 New York, before FRED had the third quarter, and stored "GDP as
+    2026 the history ran at 08:47 New York, before FRED had the third quarter, and stored "GDP as
     of that day" -- the second quarter's final 2.2% -- as Q3's advance (3.4%), and the alerts
     mailed it. The day itself is the live poll's, which checks the quarter moved on. A stored
     estimate whose quarter did not move on is dropped and read again;
