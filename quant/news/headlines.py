@@ -241,6 +241,56 @@ def clean(text: str) -> str:
     return s.strip() or text.strip()
 
 
+# ── breaking news: critical lines that are NOT on the calendar ────────────────────────────────
+# STRICT on purpose. A looser list ("war", "embassy", "missile", "sanctions", "Hormuz") flagged 3
+# of FinancialJuice's 100 lines on 4 Nov 2026 and none was critical: a North Korean air-defence
+# missile TEST, routine sanctions on 13 Indian firms, the UAE "mulling" a pipeline around Hormuz.
+# So a missile must be fired AT something, an embassy must close / warn / evacuate, Hormuz must be
+# closed or attacked, and sanctions are left out. experiments/breaking_news_check.py replays every
+# rule on the 12 recorded days before any of it is wired into the alerts.
+_PLACES = (r"(?:iran\w*|israel\w*|saudi\w*|uae|qatar\w*|gulf|lebanon|syria\w*|iraq\w*|yemen\w*|"
+           r"tanker\w*|oil|base\w*|embass\w*|taiwan\w*|ukrain\w*|russia\w*|nato|us forces|"
+           r"american\w*)")
+BREAKING = {
+    "war": r"\b(?:air ?strikes?|drone strikes?|bombard\w*|invad\w*|invasion|declares? war|"
+           r"war (?:on|with|against)|missiles? (?:strike|attack|hit|fired at|launched at)|"
+           r"(?:fired|launched) (?:\w+ ){0,2}missiles? (?:at|on|toward|into)|"
+           r"military (?:action|operation|strikes?) (?:on|against|in)|"
+           r"(?:attacks?|attacked|strikes?|struck) (?:on|against) (?:\w+ ){0,3}" + _PLACES + r")",
+    "security": r"\b(?:ordered departure|evacuat\w*|"
+                r"embass(?:y|ies) (?:\w+ ){0,3}(?:clos\w*|attack\w*|alert|warn\w*|evacuat\w*|"
+                r"suspend\w*)|state of emergency|martial law|coup\b|assassinat\w*|"
+                r"nuclear (?:test|strike|attack|weapon)|"
+                r"hormuz\b.{0,40}\b(?:clos\w*|block\w*|attack\w*|mine[sd]?\b|seiz\w*)|"
+                r"(?:clos\w*|block\w*|attack\w*|mine[sd]?|seiz\w*)\b.{0,40}\bhormuz|blockade)",
+    "central bank": r"\b(?:emergency (?:rate|meeting|cut|hike|liquidity|lending|session)|"
+                    r"inter-?meeting|unscheduled (?:meeting|statement|announcement|press)|"
+                    r"rate check|intervened|intervening in|"
+                    r"(?:conducted|confirms?|carried out) (?:\w+ )?intervention)",
+    "policy": r"\b(?:(?:imposes?|announces?|slaps?|raises?|hikes?|doubles?) (?:[\w%$.]+ ){0,3}"
+              r"tariffs?|"
+              r"new tariffs?|tariffs? of \d+%|government shutdown|debt ceiling|defaults? on)",
+    "stress": r"\b(?:bank (?:failure|collapse|run)|fdic (?:seiz\w*|takes over)|circuit breakers?|"
+              r"trading (?:halt\w*|suspended)|flash crash)",
+    "crypto": r"\b(?:(?:bitcoin|btc|crypto)\b.{0,40}\b(?:ban(?:s|ned)?|strategic reserve|"
+              r"etf (?:approv\w*|reject\w*))|(?:exchange|binance|coinbase|tether)\b.{0,40}"
+              r"\b(?:hack\w*|exploit\w*|insolven\w*|halts? withdrawals))",
+}
+# a printed data result, or talk about what MIGHT happen, is not breaking news
+_NOT_BREAKING = re.compile(r"\bactual\b.*\bforecast\b|\b(?:analysts?|preview|explainer|opinion|"
+                          r"poll|survey|mulls?|considers?|could|might)\b", re.I)
+
+
+def breaking_rule(text: str) -> Optional[str]:
+    """The BREAKING rule a line meets ("war", "security", ...), or None."""
+    if _NOT_BREAKING.search(text):
+        return None
+    for name, rx in BREAKING.items():
+        if re.search(rx, text, re.I):
+            return name
+    return None
+
+
 # ── does a headline print the official number? ──────────────────────────────────────────────────
 _NUM = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:\s*%|[KMBT]\b)?", re.I)
 

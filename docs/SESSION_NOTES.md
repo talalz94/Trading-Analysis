@@ -3020,6 +3020,17 @@ instant").
   - A title is checked only against lines about it: core vs headline, m/m vs y/y, the GDP price
     index apart.
   - Any of those lines may carry the number.
+- **Breaking news (5 Nov):** the user had expected the headline results to cover breaking news.
+  They do not. They cover scheduled releases only; that was never said plainly enough.
+  - Unscheduled news is now measured first: experiments/breaking_news_check.py replays three ways
+    on the 12 recorded days.
+  - On 4 Nov's live 100 lines, the loose draft list flagged 3, none critical (a North Korean
+    air-defence missile TEST, routine sanctions, the UAE "mulling" a Hormuz pipeline). The strict
+    BREAKING list flagged 0.
+  - Sharp moves at the report's floor happen ~15 times a day (gold 0.25% in 5 min), and none
+    reached 1.5x the floor that day.
+  - So "a sharp move" alone is noise at that size. The replay's HOW BIG A MOVE table picks the
+    size.
 - **Running on the server, 2 Nov 11:40 UTC, at cd6d313.** Its 29 Oct GDP row now reads 3.4%: the
   stale-estimate repair (38ec778) dropped the 2.2% and read the day again by itself. The first
   live headline results to check: BoE Thu 5 Nov 12:00 UTC and US jobs Fri 6 Nov 13:30 UTC.
