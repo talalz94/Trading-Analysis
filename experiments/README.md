@@ -35,6 +35,9 @@ PYTHONPATH=. python experiments/headline_report.py   # what the probe recorded: 
 PYTHONPATH=. python experiments/headline_report.py --critical   # only who had each critical release first
 PYTHONPATH=. python experiments/telegram_check.py   # free Telegram channels judged on their HISTORY (server only:
                                                     #   Telegram does not open from Pakistan)
+PYTHONPATH=. python experiments/breaking_news_check.py   # breaking news NOT on the calendar: the
+                                                    #   strict word list, a sharp move, or both,
+                                                    #   replayed on the 12 recorded days (server)
 # any strategy file and its COMPARE arms, quarter by quarter: notebooks/evaluate.ipynb, or
 #   from experiments.evaluate import evaluate; evaluate(evaluate_config()).arms()
 ```
