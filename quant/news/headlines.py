@@ -242,53 +242,157 @@ def clean(text: str) -> str:
 
 
 # ── breaking news: critical lines that are NOT on the calendar ────────────────────────────────
-# STRICT on purpose. A looser list ("war", "embassy", "missile", "sanctions", "Hormuz") flagged 3
-# of FinancialJuice's 100 lines on 4 Nov 2026 and none was critical: a North Korean air-defence
-# missile TEST, routine sanctions on 13 Indian firms, the UAE "mulling" a pipeline around Hormuz.
-# So a missile must be fired AT something, an embassy must close / warn / evacuate, Hormuz must be
-# closed or attacked, and sanctions are left out. experiments/breaking_news_check.py replays every
-# rule on the 12 recorded days before any of it is wired into the alerts.
-_PLACES = (r"(?:iran\w*|israel\w*|saudi\w*|uae|qatar\w*|gulf|lebanon|syria\w*|iraq\w*|yemen\w*|"
-           r"tanker\w*|oil|base\w*|embass\w*|taiwan\w*|ukrain\w*|russia\w*|nato|us forces|"
-           r"american\w*)")
+# Measured before it was wired in (experiments/breaking_news_check.py, FinancialJuice's 2,880 posts
+# of 19 Oct - 2 Nov 2026, a fortnight of war around Iran and the Gulf):
+#   * a WORD LIST alone sent 4.6 a day, a third of them routine Russia/Ukraine strikes and
+#     politicians' statements -- a list cannot tell a new event from talk about an old one;
+#   * a SHARP MOVE alone sent 4.2 a day at the old floor, and at 1.5x the floor it missed the
+#     21 Oct Gulf story (gold fell steadily, not in one 5-minute lurch);
+#   * WORDS + MOVE sent 0.5 a day and caught it.
+# So TWO tiers. A TOP line goes at once: the few that are critical whatever the market does (an
+# ordered departure, an embassy closed, an emergency central-bank move, intervention, war declared).
+# A BREAKING line goes only with a sharp move on an alert market from 10 min before it to 15 min
+# after (sharp_moves). Talk ("could", "mulls", analysts), reposts (ICYMI) and printed results are
+# neither, and Russia/Ukraine strikes (daily; none moved Gold, USDJPY or BTC in the fortnight) are
+# not BREAKING -- a TOP line about them still goes.
+_PLACES = (r"(?:iran\w*|israel\w*|saudi\w*|uae|emirat\w*|qatar\w*|kuwait\w*|bahrain\w*|oman\w*|"
+           r"gulf|lebanon|hezbollah|syria\w*|iraq\w*|yemen\w*|houthi\w*|riyadh|tehran|tel aviv|"
+           r"jerusalem|dubai|abu dhabi|doha|(?:super)?tankers?|vessels?|ships?|oil ?fields?|"
+           r"refiner\w*|aramco|pipelines?|ports?|oil (?:terminal|facilit|platform|installation)\w*|"
+           r"bases?|embass\w*|consulates?|taiwan\w*|nato|us forces|us troops)")
+_HORMUZ_SHUT = r"(?:closed|closes|closing|closure|shut\w*|block\w*|attack\w*|mine[sd]?|seiz\w*)"
+_FIRE = r"(?:explo(?:d|sion)\w*|blasts?|caught fire|ablaze|ignites?)"
+TOP = {
+    "evacuation": r"\b(?:ordered departure|(?:evacuat\w*|withdraw\w*|pull\w* out) (?:\w+ ){0,4}"
+                  r"(?:us |american )?(?:embass\w*|diplomat\w*|personnel|citizens|nationals|"
+                  r"troops|forces|staff)|(?:troops|diplomats|personnel|citizens|nationals|staff)"
+                  r"\b.{0,30}\bevacuat\w*|embass(?:y|ies) (?:\w+ ){0,3}(?:clos\w*|attacked|"
+                  r"evacuat\w*|suspend\w*))",
+    "war declared": r"\b(?:declares? war|declaration of war|martial law|coup\b|nuclear (?:test|"
+                    r"strike|attack|explosion|detonation))",
+    "central bank": r"\b(?:(?:fed|fomc|ecb|boj|boe|snb|rba|boc|rbnz|central bank)\b.{0,40}"
+                    r"\bemergency\b|emergency (?:rate cut|rate hike|fomc|rate decision)|"
+                    r"inter-?meeting (?:rate )?(?:cut|hike|decision)|"
+                    r"intervened? in (?:the )?(?:fx|currency|yen|forex|foreign exchange)|"
+                    r"(?:conducted|confirms?|confirmed|carried out) (?:\w+ ){0,2}intervention|"
+                    r"rate check)",
+}
 BREAKING = {
-    "war": r"\b(?:air ?strikes?|drone strikes?|bombard\w*|invad\w*|invasion|declares? war|"
-           r"war (?:on|with|against)|missiles? (?:strike|attack|hit|fired at|launched at)|"
-           r"(?:fired|launched) (?:\w+ ){0,2}missiles? (?:at|on|toward|into)|"
-           r"military (?:action|operation|strikes?) (?:on|against|in)|"
-           r"(?:attacks?|attacked|strikes?|struck) (?:on|against) (?:\w+ ){0,3}" + _PLACES + r")",
-    "security": r"\b(?:ordered departure|evacuat\w*|"
-                r"embass(?:y|ies) (?:\w+ ){0,3}(?:clos\w*|attack\w*|alert|warn\w*|evacuat\w*|"
-                r"suspend\w*)|state of emergency|martial law|coup\b|assassinat\w*|"
-                r"nuclear (?:test|strike|attack|weapon)|"
-                r"hormuz\b.{0,40}\b(?:clos\w*|block\w*|attack\w*|mine[sd]?\b|seiz\w*)|"
-                r"(?:clos\w*|block\w*|attack\w*|mine[sd]?|seiz\w*)\b.{0,40}\bhormuz|blockade)",
-    "central bank": r"\b(?:emergency (?:rate|meeting|cut|hike|liquidity|lending|session)|"
-                    r"inter-?meeting|unscheduled (?:meeting|statement|announcement|press)|"
-                    r"rate check|intervened|intervening in|"
-                    r"(?:conducted|confirms?|carried out) (?:\w+ )?intervention)",
+    # "hit" alone is a price word ("gold hit a record high as Gulf investors bought"): a weapon
+    # must do the hitting
+    "attack": r"\b(?:(?:attacks?|attacked|targeted|targets|struck|strikes?|bombed|shelled|"
+              r"seized)\b(?: \S+){0,4} " + _PLACES + r"\b|"
+              r"(?:missiles?|drones?|rockets?|projectiles?)\b(?: \S+){0,2} hit\w*\b|"
+              r"missiles?\b.{0,40}\b(?:fired|launched)\b.{0,40}\b(?:at|on|toward|towards|into)\b|"
+              r"(?:fired|launched)\b.{0,20}\bmissiles?\b.{0,20}\b(?:at|on|toward|towards|into)\b|"
+              r"intercept\w*\b.{0,40}\b(?:missiles?|drones?)\b|"
+              + _FIRE + r"\b.{0,40}\b" + _PLACES + r"\b|"
+              + _PLACES + r"\b.{0,40}\b(?:" + _FIRE[3:-1] + r"|hit\w* (?:a |naval |sea )?mines?)|"
+              r"invad\w*|invasion|war (?:on|with|against)|"
+              r"military (?:action|operation|strikes?) (?:on|against|in))",
+    "hormuz": r"\b(?:hormuz\b.{0,40}\b" + _HORMUZ_SHUT + r"|" + _HORMUZ_SHUT + r"\b.{0,40}\bhormuz|"
+              r"(?:imposes?|declares?|begins?|announces?|starts?) (?:a |naval )?blockade|"
+              r"blockade of)",
+    "de-escalation": r"\b(?:ceasefire (?:agreed|reached|announced|deal|takes effect|begins|holds)|"
+                     r"peace (?:deal|agreement|proposal|plan)|truce|"
+                     r"(?:reopen\w*|opening) (?:\w+ ){0,3}(?:strait|hormuz)|"
+                     r"lift\w* (?:the )?blockade)",
     "policy": r"\b(?:(?:imposes?|announces?|slaps?|raises?|hikes?|doubles?) (?:[\w%$.]+ ){0,3}"
-              r"tariffs?|"
-              r"new tariffs?|tariffs? of \d+%|government shutdown|debt ceiling|defaults? on)",
+              r"tariffs?|new tariffs?|tariffs? of \d+%|government shutdown|debt ceiling|"
+              r"defaults? on)",
     "stress": r"\b(?:bank (?:failure|collapse|run)|fdic (?:seiz\w*|takes over)|circuit breakers?|"
               r"trading (?:halt\w*|suspended)|flash crash)",
     "crypto": r"\b(?:(?:bitcoin|btc|crypto)\b.{0,40}\b(?:ban(?:s|ned)?|strategic reserve|"
-              r"etf (?:approv\w*|reject\w*))|(?:exchange|binance|coinbase|tether)\b.{0,40}"
-              r"\b(?:hack\w*|exploit\w*|insolven\w*|halts? withdrawals))",
+              r"etf (?:approv\w*|reject\w*))|(?:exchange|binance|coinbase|tether|okx|bybit)\b"
+              r".{0,40}\b(?:hack\w*|exploit\w*|insolven\w*|halts? withdrawals))",
 }
-# a printed data result, or talk about what MIGHT happen, is not breaking news
-_NOT_BREAKING = re.compile(r"\bactual\b.*\bforecast\b|\b(?:analysts?|preview|explainer|opinion|"
-                          r"poll|survey|mulls?|considers?|could|might)\b", re.I)
+_RU_UA = re.compile(r"\b(?:ukrain\w*|russia\w*|kyiv|kiev|kremlin|zelensk\w*|putin|moscow|crimea|"
+                    r"donbas|kherson|zaporizh\w*|oleshky|kursk|belgorod|bryansk|voronezh|lipetsk|"
+                    r"sheremetyevo|kharkiv|odesa|odessa)\b", re.I)
+_NOT_BREAKING = re.compile(r"\bactual\b.*\bforecast\b|\b(?:icymi|analysts?|preview|explainer|"
+                          r"opinion|poll|survey|mulls?|considers?|could|might)\b", re.I)
 
 
-def breaking_rule(text: str) -> Optional[str]:
-    """The BREAKING rule a line meets ("war", "security", ...), or None."""
+def breaking_tier(text: str) -> Optional[Tuple[int, str]]:
+    """(1, rule) for a TOP line, sent at once; (2, rule) for a BREAKING line, sent only with a
+    sharp move; None for everything else."""
     if _NOT_BREAKING.search(text):
+        return None
+    for name, rx in TOP.items():
+        if re.search(rx, text, re.I):
+            return 1, name
+    if _RU_UA.search(text) and not re.search(r"\bnato\b", text, re.I):
         return None
     for name, rx in BREAKING.items():
         if re.search(rx, text, re.I):
-            return name
+            return 2, name
     return None
+
+
+def breaking_rule(text: str) -> Optional[str]:
+    """The rule a line meets in either tier ("evacuation", "attack", ...), or None."""
+    t = breaking_tier(text)
+    return None if t is None else t[1]
+
+
+# the market's own word: a sharp move is a 5-minute return of at least the market's floor AND
+# MOVE_K times the median 5-minute move of the day before (the headline report's definition)
+MOVE_FLOOR = {"XAU": 0.0025, "BTC": 0.005, "ETH": 0.008}   # by symbol; a 6-letter FX pair: 0.12%
+MOVE_FX_FLOOR = 0.0012
+MOVE_K = 6.0
+MOVE_BEFORE = pd.Timedelta(minutes=10)     # a sharp move this long before a BREAKING line confirms it
+MOVE_AFTER = pd.Timedelta(minutes=15)      # ... or this long after it
+MOVE_KNOWN = pd.Timedelta(minutes=5)       # a move is known 5 min after it starts
+STORY_GAP = pd.Timedelta(minutes=60)       # the same story again within this is not sent again
+BREAKING_PER_DAY = 8                       # whatever happens, no more than this a day
+
+
+def move_floor(symbol: str) -> Optional[float]:
+    """A market's sharp-move floor from its symbol (XAUUSD 0.25%, USDJPY 0.12%, BTCUSDT 0.5%), or
+    None for one this has no measured floor for -- it then confirms nothing."""
+    s = str(symbol).upper().replace("/", "")
+    for k, v in MOVE_FLOOR.items():
+        if s.startswith(k):
+            return v
+    return MOVE_FX_FLOOR if re.fullmatch(r"[A-Z]{6}", s) else None
+
+
+def sharp_moves(bars: pd.DataFrame, floor: float, k: float = MOVE_K) -> pd.DataFrame:
+    """Sharp moves in 1m candles [open_time, close]: start (the close the 5 minutes run from) and
+    move_pct. One move per 30 minutes (its first minute). A move is KNOWN 5 minutes after start."""
+    import numpy as np
+    b = bars.sort_values("open_time").reset_index(drop=True)
+    c = b["close"].to_numpy(float)
+    r5 = np.full(len(c), np.nan)
+    r5[:-5] = c[5:] / c[:-5] - 1                         # from this candle's close, 5 later
+    typical = pd.Series(np.abs(r5)).shift(1).rolling(1440, min_periods=240).median().to_numpy()
+    hit = np.abs(r5) >= np.maximum(floor, k * np.nan_to_num(typical, nan=np.inf))
+    out, until = [], None
+    for i in np.flatnonzero(hit):
+        t = b["open_time"].iat[i] + pd.Timedelta(minutes=1)    # the move starts at this close
+        if until is not None and t < until:
+            continue
+        out.append(dict(start=t, move_pct=round(100 * r5[i], 3)))
+        until = t + pd.Timedelta(minutes=30)
+    return pd.DataFrame(out, columns=["start", "move_pct"])
+
+
+_STOP = frozenset("""the and for with from that this have has had will said says say over after
+into about amid near than then they their there were been being also more most some such only
+says, said: says: reuters bloomberg statement source sources official officials report reports""".split())
+
+
+def story_words(text: str) -> frozenset:
+    """A line's content words, for telling one story from another."""
+    return frozenset(w for w in re.findall(r"[a-z0-9]+", text.lower())
+                     if len(w) >= 4 and w not in _STOP)
+
+
+def same_story(a: str, b: str) -> bool:
+    """Two lines about one story: 3+ content words shared AND half the shorter line's."""
+    x, y = story_words(a), story_words(b)
+    n = len(x & y)
+    return n >= 3 and n >= 0.5 * min(len(x), len(y))
 
 
 # ── does a headline print the official number? ──────────────────────────────────────────────────
