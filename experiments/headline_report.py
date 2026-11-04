@@ -215,21 +215,11 @@ def noise_table(d: pd.DataFrame, days: float) -> pd.DataFrame:
 
 def find_moves(bars: pd.DataFrame, market: str) -> pd.DataFrame:
     """Sharp moves in 1m candles: a 5-minute return at least MOVE_FLOOR and MOVE_K times the
-    median 5-minute move of the day before. One move per 30 minutes (its first minute)."""
-    b = bars.sort_values("open_time").reset_index(drop=True)
-    c = b["close"].to_numpy(float)
-    r5 = np.full(len(c), np.nan)
-    r5[:-5] = c[5:] / c[:-5] - 1                         # from this candle's close, 5 later
-    typical = pd.Series(np.abs(r5)).shift(1).rolling(1440, min_periods=240).median().to_numpy()
-    hit = np.abs(r5) >= np.maximum(MOVE_FLOOR[market], MOVE_K * np.nan_to_num(typical, nan=np.inf))
-    out, until = [], None
-    for i in np.flatnonzero(hit):
-        t = b["open_time"].iat[i] + pd.Timedelta(minutes=1)    # the move starts at this close
-        if until is not None and t < until:
-            continue
-        out.append(dict(market=market, start=t, move_pct=round(100 * r5[i], 3)))
-        until = t + pd.Timedelta(minutes=30)
-    return pd.DataFrame(out, columns=["market", "start", "move_pct"])
+    median 5-minute move of the day before. One move per 30 minutes (its first minute). The one
+    definition lives in quant/news/headlines.py, which the breaking-news alert uses too."""
+    from quant.news.headlines import sharp_moves
+    mv = sharp_moves(bars, MOVE_FLOOR[market], MOVE_K)
+    return mv.assign(market=market)[["market", "start", "move_pct"]]
 
 
 def _ns(times: pd.Series) -> np.ndarray:
