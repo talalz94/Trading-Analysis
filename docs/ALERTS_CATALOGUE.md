@@ -369,6 +369,7 @@ Economic-calendar notices, driven by the clock rather than by candles: the week 
 | `warn_alerts` | a candle alert within this many minutes of high news says so; 0 = off |
 | `headlines` | the result from news headlines, in order of trust: ('financialjuice', 'financialjuice_telegram', 'walterbloomberg') -- the next is asked when one fails or has nothing yet; None = off |
 | `instant` | True = reminders, results and moves go at once, not at the next email boundary |
+| `breaking` | critical news NOT on the calendar, from these sources in order of trust: ('financialjuice', 'financialjuice_telegram'); a TOP line goes at once, a BREAKING line only when an alert market moves sharply; None = off |
 
 ### Currencies
 

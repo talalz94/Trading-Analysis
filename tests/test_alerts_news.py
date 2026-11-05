@@ -122,6 +122,7 @@ class Rig:
     (dict(headlines=("reuters",)), "headlines"),
     (dict(headlines=("financialjuice", "financialjuice")), "headlines"),
     (dict(instant="yes"), "instant"),
+    (dict(breaking=("reuters",)), "breaking"),
 ])
 def test_a_news_setting_mistake_is_refused_by_name(bad, says):
     with pytest.raises(NewsConfigError, match=says):
@@ -665,6 +666,7 @@ def test_the_trendlines_config_takes_headline_results_instantly():
     from quant.news.headlines import DEFAULT_ORDER
     cfg = load_config(Path(__file__).resolve().parents[1] / "alerts" / "alerts_config_trendlines.py")
     assert cfg.news.headlines == DEFAULT_ORDER and cfg.news.instant is True
+    assert cfg.news.breaking == ("financialjuice", "financialjuice_telegram")
 
 
 def test_a_headline_subject_quotes_the_line_about_its_most_important_release(tmp_path):
@@ -681,3 +683,125 @@ def test_a_headline_subject_quotes_the_line_about_its_most_important_release(tmp
     (subject, text, _), = r.mail.sent
     assert "USD Advance GDP q/q: US GDP Advance Actual 3.4% (Forecast 3.2%)" in subject
     assert text.index("Jobless Claims") < text.index("US GDP Advance")    # lines keep their order
+
+
+# ── breaking news, not on the calendar (quant/news/headlines.py tiers) ─────────────────────
+BR = dict(remind_before={}, breaking=("financialjuice", "financialjuice_telegram"), instant=True)
+DEPARTURE = "FinancialJuice: US Officials: US State Dept is preparing to issue an ordered departure"
+EMBASSY = "FinancialJuice: US Embassy posts alert over Houthis attacks against Saudi Arabia"
+
+
+def _a_1m(r, end, jumps=None, start="2026-10-20 00:00"):
+    """Market A's 1m candles in the monitor's own store up to `end`: calm, but for `jumps`."""
+    t = pd.date_range(at(start), at(end), freq="1min", tz="UTC", inclusive="left")
+    ret = np.random.default_rng(1).normal(0, 0.0001, len(t))
+    for when, x in (jumps or {}).items():
+        ret[t.get_indexer([at(when)])] = x
+    c = 4000 * np.exp(np.cumsum(ret))
+    r.state.save_bars("A", pd.DataFrame({TIME_COL: t, "open": c, "high": c, "low": c, "close": c,
+                                         "volume": 1.0}), base="1m")
+
+
+def test_a_top_breaking_line_goes_at_once_and_once(tmp_path):
+    r = Rig(tmp_path, news_cfg=BR, delivery=dict(every_minutes=5))
+    r.tick("2026-10-21 18:40:20")
+    r.news.lines = {"financialjuice": [hl("2026-10-21 18:47:50", DEPARTURE)]}
+    r.tick("2026-10-21 18:48:20")                             # off the clock: instant
+    (subject, text, _), = r.mail.sent
+    assert subject.startswith("[Alerts]") and "BREAKING: US Officials: US State Dept" in subject
+    assert "FinancialJuice:" in text and "ordered departure" in text
+    r.tick("2026-10-21 18:49:20")
+    assert len(r.mail.sent) == 1                              # once
+    (row,) = r.rows(tf="breaking")
+    from quant.alerts.compose import tier
+    assert row["priority"] == "instant" and tier(row) == 1
+
+
+def test_a_breaking_line_waits_for_a_sharp_move_and_goes_with_it(tmp_path):
+    r = Rig(tmp_path, news_cfg=BR, lines={"financialjuice": [hl("2026-10-21 18:34:15", EMBASSY)]})
+    _a_1m(r, "2026-10-21 18:35")
+    r.tick("2026-10-21 18:35:20")
+    assert r.subjects() == []                                 # no move yet: it waits
+    _a_1m(r, "2026-10-21 18:50", {"2026-10-21 18:44": -0.008})
+    r.tick("2026-10-21 18:50:20")
+    (subject, text, _), = r.mail.sent
+    assert "BREAKING: US Embassy posts alert" in subject and "· A -0.7" in subject
+    assert "in 5 min from" in text
+
+
+def test_a_breaking_line_whose_move_never_comes_is_dropped(tmp_path):
+    r = Rig(tmp_path, news_cfg=BR, lines={"financialjuice": [hl("2026-10-21 18:34:15", EMBASSY)]})
+    for t in ("18:35", "18:51", "18:55"):
+        _a_1m(r, f"2026-10-21 {t}")
+        r.tick(f"2026-10-21 {t}:20")
+    assert json.loads(r.state.get("news_breaking_waiting")) == []     # given up at 18:54
+    _a_1m(r, "2026-10-21 19:06", {"2026-10-21 19:00": -0.008})       # a move, too late
+    r.tick("2026-10-21 19:06:20")
+    assert r.subjects() == []
+
+
+def test_an_old_line_a_repeat_and_talk_are_not_sent(tmp_path):
+    r = Rig(tmp_path, news_cfg=BR, lines={"financialjuice": [
+        hl("2026-10-21 18:20", DEPARTURE),                    # 28 min old at first sight
+        hl("2026-10-21 18:47", "FinancialJuice: Iran could close the Strait of Hormuz"),
+        hl("2026-10-21 18:47:30", "FinancialJuice: Fed announces emergency rate cut")]})
+    r.tick("2026-10-21 18:48:20")
+    assert [s for s in r.subjects() if "BREAKING" in s] == [
+        r.subjects()[0]] and "emergency rate cut" in r.subjects()[0]
+    r.news.lines["financialjuice"].append(hl("2026-10-21 18:55", "FinancialJuice: Fed announces "
+                                                                  "an emergency rate cut of 50 bp"))
+    r.tick("2026-10-21 18:55:20")
+    assert len(r.mail.sent) == 1                              # the same story within the hour
+
+
+def test_a_failing_source_hands_breaking_news_to_the_next(tmp_path):
+    r = Rig(tmp_path, news_cfg=BR, lines={"financialjuice": IOError("FinancialJuice: HTTP 429"),
+                                          "financialjuice_telegram": [hl("2026-10-21 18:48:14",
+                                                                         DEPARTURE + "|FJ")]})
+    rep = r.tick("2026-10-21 18:48:20")
+    assert r.news.asked == ["financialjuice", "financialjuice_telegram"]
+    assert "HTTP 429" in rep.errors["news breaking financialjuice"]
+    assert "FinancialJuice (Telegram):" in r.mail.sent[0][1]
+
+
+def test_no_more_than_eight_breaking_alerts_a_day_and_none_when_off(tmp_path):
+    tops = ["Fed announces emergency rate cut", "Japan MOF: intervened in the FX market",
+            "US troops and diplomats evacuating Middle East posts", "Martial law declared in Seoul",
+            "Coup attempt under way in Ankara", "ECB holds emergency meeting on markets",
+            "Nuclear test detected near Punggye-ri", "Ordered departure for embassy staff in Doha",
+            "Embassy in Tel Aviv closed until further notice"]
+    r = Rig(tmp_path, news_cfg=BR, lines={"financialjuice": [
+        hl(f"2026-10-21 18:{40 + i}:00", s) for i, s in enumerate(tops)]})
+    r.tick("2026-10-21 18:49:20")
+    st = [x["status"] for x in r.rows(tf="breaking")]
+    assert st.count("sent") == 8 and st.count("skipped") == 1
+    off = Rig(tmp_path / "off", news_cfg=dict(remind_before={}),
+              lines={"financialjuice": [hl("2026-10-21 18:47:50", DEPARTURE)]})
+    off.tick("2026-10-21 18:48:20")
+    assert off.news.asked == [] and off.subjects() == []
+
+
+def test_the_results_and_the_breaking_news_share_one_download_a_tick(tmp_path, monkeypatch):
+    from quant.alerts import feeds
+    from quant.alerts.news import LiveNews
+    calls = []
+
+    class Resp:
+        status_code = 200
+        content = (b"<rss><channel><item><title>US CPI MoM Actual 0.5%</title><guid>9</guid>"
+                   b"<pubDate>Wed, 14 Oct 2026 12:30:04 GMT</pubDate></item></channel></rss>")
+
+    class Session:
+        def get(self, url, headers=None, timeout=None):
+            calls.append(url)
+            return Resp()
+    monkeypatch.setattr(feeds, "session", lambda: Session())
+    monkeypatch.setattr("quant.news.update.update_feed", lambda *a, **k: "fresh")
+    n = LiveNews(tmp_path / "news")
+    n.refresh(at("2026-10-14 12:30:20"))
+    n.headlines("financialjuice")
+    n.headlines("financialjuice")
+    assert len(calls) == 1                                    # FinancialJuice: 429 on a second
+    n.refresh(at("2026-10-14 12:31:20"))
+    n.headlines("financialjuice")
+    assert len(calls) == 2                                    # the next tick asks again

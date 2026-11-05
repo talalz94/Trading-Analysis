@@ -3031,6 +3031,18 @@ instant").
     reached 1.5x the floor that day.
   - So "a sharp move" alone is noise at that size. The replay's HOW BIG A MOVE table picks the
     size.
+- **The fortnight replayed** (5 Nov): 2,880 FinancialJuice posts of 19 Oct to 2 Nov, a war
+  around Iran and the Gulf.
+  - Words alone: 4.6 alerts a day, a third of them Russia/Ukraine strikes and statements.
+  - A sharp move alone: 4.2 a day at the floor. At 1.5x the floor it missed the Gulf story: gold
+    fell steadily, and only 1x showed it.
+  - Words + move: 0.5 a day, Gulf story caught.
+  - The first strict list also MISSED events: "Houthis attacked Saudi Arabia's Ras Tanura
+    refinery" (no "on"), and a missile "fired ... toward Riyadh" (word order).
+  - So, two tiers: TOP lines at once; BREAKING lines only with a move from 10 min before the line
+    to 15 min after.
+  - Built live in the alerts. One FinancialJuice download a tick is shared with the results,
+    because a second download within the minute gets HTTP 429.
 - **Running on the server, 2 Nov 11:40 UTC, at cd6d313.** Its 29 Oct GDP row now reads 3.4%: the
   stale-estimate repair (38ec778) dropped the 2.2% and read the day again by itself. The first
   live headline results to check: BoE Thu 5 Nov 12:00 UTC and US jobs Fri 6 Nov 13:30 UTC.

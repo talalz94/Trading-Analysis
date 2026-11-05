@@ -549,6 +549,13 @@ NEWS = dict(
   [NEWS.md](NEWS.md), "Headline results".
 - **`instant=True`**: reminders, results and moves go the moment they are found, not with the
   next 5-minute email.
+- **Breaking news** (`breaking=(...)`) is critical news that is NOT on the calendar.
+  - Sent at once: an evacuation of US personnel, an embassy closed, an emergency central-bank
+    move, intervention, or war declared.
+  - Sent only when Gold, USDJPY or BTC moves sharply with it: an attack, Hormuz shut, new
+    tariffs, or an exchange hack.
+  - About one every one or two days in the fortnight of war measured. Measurements:
+    [NEWS.md](NEWS.md), "Breaking news".
 - **A late result goes only if it was awaited.** A number is asked for for 3 hours. One that lands
   more than an hour after its release is mailed only if the monitor was already waiting for it,
   never after the PC was off.
