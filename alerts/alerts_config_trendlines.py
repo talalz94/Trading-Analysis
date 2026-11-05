@@ -257,5 +257,10 @@ NEWS = dict(
     #   None = off (the official numbers only)
     instant=True,                      # reminders, results and moves go at once, not at the next
                                        #   5-minute email
+    breaking=("financialjuice", "financialjuice_telegram"),
+    #   critical news NOT on the calendar: an evacuation, an embassy closed, an emergency central-
+    #   bank move, intervention or war declared goes at once; an attack, Hormuz shut, new tariffs,
+    #   an exchange hack only when Gold, USDJPY or BTC moves sharply with it. ~0.5-1 a day in the
+    #   fortnight of war measured (docs/NEWS.md, "Breaking news"). None = off
     warn_alerts=30,                    # an alert within 30 min of high news says so
 )                                      #   (None turns week_ahead / day_ahead / results off)

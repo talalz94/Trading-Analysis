@@ -107,6 +107,8 @@ def tier(e) -> int:
     from quant.news.catalog import RANK
     from .news import is_news, notice_of
     if is_news(e):
+        if e["what"] == "breaking":
+            return 1                      # critical by construction (quant/news/headlines.py)
         items = notice_of(e).get("items") or []
         lv = max((RANK.get(i.get("level"), 0) for i in items), default=0)
         usd = any(i.get("currency") == "USD" for i in items)

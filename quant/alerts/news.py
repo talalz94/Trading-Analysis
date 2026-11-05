@@ -18,6 +18,13 @@ What it sends (each switchable in the NEWS block of alerts/alerts_config.py):
                 word for word with their source. Asked every tick inside the release's window
                 (10 min; 2 h for the BOJ), once per release. A US number from the agencies that
                 the headline already printed is not mailed again; one that differs is.
+  breaking      critical news that is NOT on the calendar (quant/news/headlines.py): a TOP line
+                (an ordered departure, an embassy closed, an emergency central-bank move,
+                intervention, war declared) goes at once; a BREAKING line (attacks on Gulf
+                targets, Hormuz shut, new tariffs, an exchange hack...) only when Gold, USDJPY or
+                BTC moves sharply from 10 min before it to 15 min after, read off the monitor's
+                own 1m candles. One per story an hour, at most 8 a day. Measured first:
+                experiments/breaking_news_check.py.
   instant       reminders, results and moves go the moment they are due, not at the next
                 DELIVERY boundary.
   moved         a covered high/critical release that changed its time or left the calendar.
@@ -64,6 +71,9 @@ RESULT_WINDOW = pd.Timedelta(hours=3)   # how long a missing number is asked for
 RESULT_FRESH = pd.Timedelta(minutes=60)  # a number older than this goes out only if THIS monitor
                                          # was already waiting for it -- never after an outage
 RESULT_SETTLE = pd.Timedelta(minutes=20)  # send a partial result after this if the rest never come
+BREAKING_LOOKBACK = pd.Timedelta(minutes=15)   # a line older than this when first seen is not
+                                               # news any more (a first poll's backlog, an outage)
+BREAKING_SEEN = pd.Timedelta(hours=3)          # how long a line's id is remembered
 HEADLINE_LINES = 3                       # lines quoted per release: the first is not always THE
                                          # number (on GDP day FinancialJuice led with PCE)
 
@@ -81,6 +91,7 @@ class NewsConfig:
     warn_alerts: int = 30
     headlines: Tuple[str, ...] = ()                # quant.news.headlines sources, first = main
     instant: bool = False
+    breaking: Tuple[str, ...] = ()                 # the same sources, for unscheduled news
 
 
 SETTINGS = {
@@ -97,6 +108,9 @@ SETTINGS = {
                  "'financialjuice_telegram', 'walterbloomberg') -- the next is asked when one "
                  "fails or has nothing yet; None = off",
     "instant": "True = reminders, results and moves go at once, not at the next email boundary",
+    "breaking": "critical news NOT on the calendar, from these sources in order of trust: "
+                "('financialjuice', 'financialjuice_telegram'); a TOP line goes at once, a BREAKING "
+                "line only when an alert market moves sharply; None = off",
 }
 
 
@@ -161,9 +175,14 @@ def parse_news(d: Optional[dict]) -> NewsConfig:
     inst = d.get("instant", False)
     if not isinstance(inst, bool):
         raise NewsConfigError(f"NEWS instant: True or False, got {inst!r}")
+    br = d.get("breaking") or ()
+    br = (br,) if isinstance(br, str) else tuple(br)
+    if [b for b in br if b not in SOURCES] or len(set(br)) != len(br):
+        raise NewsConfigError(f"NEWS breaking: each of {sorted(SOURCES)} at most once, in order of "
+                              f"trust, or None; got {d.get('breaking')!r}")
     return NewsConfig(on=bool(d.get("on", True)), currencies=cov, timezone=tz, week_ahead=wa,
                       day_ahead=da, remind_before=rem, results=res, warn_alerts=warn,
-                      headlines=hl, instant=inst)
+                      headlines=hl, instant=inst, breaking=br)
 
 
 # ══ THE CALENDAR THE MONITOR READS ═══════════════════════════════════════════════════════════
@@ -181,10 +200,12 @@ class LiveNews:
         from quant.news.calendar import NewsStore
         self.store = NewsStore(root)
         self.fresh = False                 # did THIS tick bring a new full fetch of the feed?
+        self._lines: Dict[str, object] = {}    # this tick's headlines per source (or its error)
 
     def refresh(self, now) -> Dict[str, str]:
         from quant.news import update
         errors, self.fresh = {}, False
+        self._lines = {}                   # a new tick: each source may be asked once again
         before = self.store.meta().get("feed_ok")
         try:
             update.update_feed(self.store, now)
@@ -241,7 +262,17 @@ class LiveNews:
         def get(url, headers, timeout):
             r = session().get(url, headers=headers, timeout=timeout)
             return r.status_code, r.content
-        return H.fetch(name, get)
+        # ONE download per source per tick, shared by the results and the breaking news:
+        # FinancialJuice answers a second request within a minute with HTTP 429
+        if name not in self._lines:
+            try:
+                self._lines[name] = H.fetch(name, get)
+            except Exception as e:
+                self._lines[name] = e
+        got = self._lines[name]
+        if isinstance(got, Exception):
+            raise got
+        return got
 
     def results_available(self) -> bool:
         """US numbers need the FRED key (it holds the history the live numbers are checked
@@ -410,6 +441,17 @@ def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
         subject = (f"{cur} {first['title']}: {first.get('actual') or '?'} vs "
                    f"{first.get('forecast') or '?'}"
                    + (f" ({moods.pop()})" if len(moods) == 1 else ""))
+    elif kind == "breaking":
+        c, mv = kw["line"], kw.get("move")
+        t = pd.Timestamp(c["t"])
+        lines = [f"BREAKING {_local(t, tz)} {zone} -- {c['source']}:", f"    {c['text']}"]
+        if mv:
+            lines.append(f"    {mv['market']} {mv['move_pct']:+.2f}% in 5 min from "
+                         f"{pd.Timestamp(mv['start']).tz_convert(tz):%H:%M}")
+        lines.append("    (as the source typed it -- news that is not on the calendar)")
+        subject = f"BREAKING: {c['text']}" + (f" · {mv['market']} {mv['move_pct']:+.2f}%"
+                                              if mv else "")
+        subject = subject if len(subject) <= 150 else subject[:147] + "..."
     elif kind == "headline":
         t = pd.Timestamp(first["t"])
         lines = [f"{cur} released {_local(t, tz)} {zone} -- the first headlines:"]
@@ -452,7 +494,8 @@ def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
         subject = "the news calendar is not updating"
         lines = [kw["message"]]
     body = "<br>".join(esc(x).replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;") for x in lines)
-    colour = LEVEL_COLOUR.get(first["level"] if first else "none", "#111827")
+    colour = (LEVEL_COLOUR["critical"] if kind == "breaking" else
+              LEVEL_COLOUR.get(first["level"] if first else "none", "#111827"))
     html = f'<div style="border-left:3px solid {colour};padding:2px 8px;margin:4px 0;">{body}</div>'
     out = dict(kind=kind, subject=subject, text=lines, html=html, items=items)
     if kind == "headline":
@@ -535,6 +578,91 @@ def _headline_results(nc, state, news, now, report, timed, pri):
     report.after.append(ask_then_send)
 
 
+def _recent_moves(cfg, state, now) -> List[dict]:
+    """The sharp moves of the alert markets whose 5 minutes are complete, started within the last
+    half hour, from the monitor's own 1m candles (a market with no 1m candles or no measured floor
+    confirms nothing). The usual move is the day before's, so a day and a half is read."""
+    from quant.data.base import TIME_COL
+    from quant.news import headlines as H
+    out = []
+    for name, m in cfg.markets.items():
+        floor = H.move_floor(m.symbol)
+        b = state.bars(name, "1m") if floor else None
+        if b is None or not len(b):
+            continue
+        t = pd.to_datetime(b[TIME_COL], utc=True)
+        b = b[(t >= now - pd.Timedelta(hours=36)) & (t + pd.Timedelta(minutes=1) <= now)]
+        mv = H.sharp_moves(b.rename(columns={TIME_COL: "open_time"}), floor)
+        for r in mv.itertuples():
+            s = pd.Timestamp(r.start)
+            if s >= now - pd.Timedelta(minutes=30) and s + H.MOVE_KNOWN <= now:
+                out.append(dict(market=name, start=s, move_pct=float(r.move_pct)))
+    return sorted(out, key=lambda x: x["start"])
+
+
+def _breaking_news(cfg, state, news, now, report, pri):
+    """Queue the breaking-news check (quant/news/headlines.py tiers) for after this tick's candle
+    emails. The first source that answers is read -- the next only when it fails. A TOP line goes
+    at once; a BREAKING line waits, at most 15 min + 5, for a sharp move from 10 min before it to
+    15 min after; one per story an hour, at most BREAKING_PER_DAY a day (the rest are recorded,
+    status 'skipped'). A line already older than BREAKING_LOOKBACK when first seen is not sent."""
+    from quant.news import headlines as H
+    nc = cfg.news
+
+    def check():
+        got = label = None
+        for name in nc.breaking:
+            try:
+                got, label = news.headlines(name), H.SOURCES[name].label
+                break
+            except Exception as e:                  # the next source is asked instead
+                report.errors[f"news breaking {name}"] = f"{type(e).__name__}: {e}"
+        if got is None:
+            return
+        seen = json.loads(state.get("news_breaking_seen") or "{}")       # line id -> printed
+        waiting = json.loads(state.get("news_breaking_waiting") or "[]")
+        sent = json.loads(state.get("news_breaking_sent") or "[]")       # [{at, text}]
+        for x in got:
+            if not x.get("published") or x["id"] in seen:
+                continue
+            t = pd.Timestamp(x["published"])
+            seen[x["id"]] = t.isoformat()
+            text = H.clean(x["title"])
+            tier = H.breaking_tier(text)
+            if tier and t >= now - BREAKING_LOOKBACK:
+                waiting.append(dict(t=t.isoformat(), text=text[:240], tier=tier[0], rule=tier[1],
+                                    source=label))
+        moves = _recent_moves(cfg, state, now) if any(w["tier"] == 2 for w in waiting) else []
+        still = []
+        for w in sorted(waiting, key=lambda w: w["t"]):
+            t, move = pd.Timestamp(w["t"]), None
+            if w["tier"] == 2:
+                ok = [m for m in moves if t - H.MOVE_BEFORE <= m["start"] <= t + H.MOVE_AFTER]
+                if not ok:
+                    if now <= t + H.MOVE_AFTER + H.MOVE_KNOWN:
+                        still.append(w)             # its move may still come
+                    continue
+                move = ok[0]
+            if any(H.same_story(w["text"], s["text"]) and now - pd.Timestamp(s["at"]) <= H.STORY_GAP
+                   for s in sent):
+                continue                            # the same story went within the hour
+            today = sum(pd.Timestamp(s["at"]).floor("D") == now.floor("D") for s in sent)
+            status = "new" if today < H.BREAKING_PER_DAY else "skipped"
+            report.events += _add(state, tf="breaking", market=w["source"], bar_time=t,
+                                  what="breaking", priority=pri, now=now, status=status,
+                                  notice=_render("breaking", [], cfg.news.timezone, now, line=w,
+                                                 move=move))
+            if status == "new":
+                sent.append(dict(at=now.isoformat(), text=w["text"]))
+        keep = now - BREAKING_SEEN
+        state.put("news_breaking_seen", json.dumps({k: v for k, v in seen.items()
+                                                    if pd.Timestamp(v) >= keep}))
+        state.put("news_breaking_waiting", json.dumps(still))
+        state.put("news_breaking_sent", json.dumps([s for s in sent if pd.Timestamp(s["at"])
+                                                    >= now - pd.Timedelta(days=1)]))
+    report.after.append(check)
+
+
 def _against_headline(state, cur, t, items) -> Tuple[str, Optional[str]]:
     """(status, note) for the official result of a release whose headline result already went:
     skipped when the headline printed every number, else sent with a word on why."""
@@ -591,6 +719,10 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
     # ── results from headlines ────────────────────────────────────────────────────────────
     if nc.results and nc.headlines and len(timed):
         _headline_results(nc, state, news, now, report, timed, pri)
+
+    # ── breaking news, not on the calendar ─────────────────────────────────────────────────
+    if nc.breaking:
+        _breaking_news(cfg, state, news, now, report, pri)
 
     # ── results ───────────────────────────────────────────────────────────────────────────
     if nc.results and len(timed) and news.results_available():

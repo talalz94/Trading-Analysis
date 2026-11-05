@@ -323,6 +323,41 @@ How it works:
   within 8 s goes at ~:21 with `instant=True`; one typed later goes a minute after.
 - **These are lines people typed, not official numbers.** The email says so.
 
+### Breaking news
+
+`breaking=("financialjuice", "financialjuice_telegram")`: critical news that is NOT on the
+calendar, in two tiers (`quant/news/headlines.py`).
+
+| tier | what | sent |
+|---|---|---|
+| TOP | an ordered departure or evacuation of US personnel, an embassy closed, an emergency central-bank move, intervention, war declared, a nuclear test | at once |
+| BREAKING | attacks on Gulf targets, missiles fired at or toward a place, Hormuz shut or reopened, a ceasefire, new tariffs, a bank or crypto-exchange collapse | only when Gold, USDJPY or BTC moves sharply from 10 min before the line to 15 min after |
+
+**Why two tiers.** The replay of 19 Oct to 2 Nov 2026 (`experiments/breaking_news_check.py`) used
+2,880 FinancialJuice posts from a fortnight of war around Iran and the Gulf:
+- **A word list alone:** 4.6 alerts a day, a third of them routine Russia/Ukraine strikes and
+  politicians' statements. A list cannot tell a new event from talk about an old one.
+- **A sharp move alone:** 4.2 a day at the old floor (gold 0.25% in 5 minutes). At 1.5x the
+  floor it missed the 21 Oct Gulf story, because gold fell steadily, not in one lurch.
+- **Words + move:** 0.5 a day, and it caught the Gulf story.
+
+How it behaves:
+- **Sources:** one FinancialJuice download per tick, shared with the headline results
+  (FinancialJuice answers 429 to a second request within a minute). Its Telegram channel is asked
+  when the feed fails.
+- **No backlog:** a line older than 15 minutes when first seen (a first look, an outage) is not
+  sent.
+- **Limits:** one alert per story an hour, and at most 8 a day; the rest are recorded as skipped.
+- **The sharp move** is read off the monitor's own 1m candles: a 5-minute return of at least the
+  market's floor (gold 0.25%, USDJPY 0.12%, BTC 0.5%) and 6x the day before's usual. It is known
+  5 minutes after it starts.
+- **Left out:** Russia/Ukraine strikes (daily; none moved Gold, USDJPY or BTC in the fortnight),
+  talk ("could", "mulls", analysts), reposts (ICYMI), printed data results, and a price "hit"
+  ("gold hit a record high").
+- **The limit of free feeds:** they report after the market starts moving. On 21 Oct gold fell
+  from 18:44 UTC and FinancialJuice had "ordered departure" at 18:47:50. The alert tells you
+  something big is happening and why; it does not beat the first move.
+
 How it behaves:
 - **Each notice goes once**, even across a restart. Its id is a hash of what it is about.
 - **A reminder is never sent after its release.** After an outage, only the latest one still
