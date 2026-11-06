@@ -180,6 +180,60 @@ def fetch(name: str, get: Callable) -> List[dict]:
     return lines
 
 
+# ── the archive: every line the alerts read, kept for later study ─────────────────────────────
+# In the headline probe's own format (experiments/headline_probe.py imports this schema), so
+# `experiments/headline_report.py --db <archive>` reads it as is. ~250 FinancialJuice lines a day
+# and a row per download in `polls` (whether it worked, how long it took, why not): ~0.25 MB a day.
+ARCHIVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS items (
+    source TEXT, item_id TEXT, title TEXT, link TEXT,
+    published TEXT,                  -- the source's own time (UTC ISO), NULL when it gives none
+    first_seen TEXT,                 -- when this probe first saw it (UTC ISO)
+    backlog INTEGER,                 -- 1 = already there on the source's first poll: no timing
+    PRIMARY KEY (source, item_id));
+CREATE TABLE IF NOT EXISTS polls (
+    source TEXT, at TEXT, ok INTEGER, status INTEGER, n INTEGER, new INTEGER, ms INTEGER,
+    error TEXT);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+"""
+
+
+def archive(db_path, source: str, lines: Optional[List[dict]], seen, ms: int,
+            status: Optional[int] = None, error: Optional[str] = None) -> Optional[int]:
+    """Record one download of `source` in the archive at `db_path`: its lines (only the new ones;
+    a source's FIRST lines are its backlog, kept but not timed) and the download itself, failed
+    (`lines` None, with `error`) or not; `status` = the HTTP answer, 0 = none came. -> how many
+    lines were new, or None when the archive could not be written. Never raises: a full disk
+    must not cost an alert."""
+    import sqlite3
+    from pathlib import Path
+    try:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            db.executescript(ARCHIVE_SCHEMA)
+            db.execute("INSERT OR IGNORE INTO meta VALUES ('start', ?)", (iso(seen),))
+            first = db.execute("SELECT 1 FROM polls WHERE source = ? AND ok = 1 LIMIT 1",
+                               (source,)).fetchone() is None
+            new = 0
+            for it in lines or []:
+                new += db.execute("INSERT OR IGNORE INTO items VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                  (source, it["id"], it["title"], it.get("link", ""),
+                                   it.get("published"), iso(seen), int(first))).rowcount
+            ok = lines is not None
+            if status is None:
+                status = 200 if ok else 0
+            db.execute("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                       (source, iso(seen), int(ok), int(status), len(lines or []), new,
+                        int(ms), None if ok else str(error)[:300]))
+            db.commit()
+            return new
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
 # ── which lines are about a release ─────────────────────────────────────────────────────────────
 def release_words(currency: str, title: str) -> tuple:
     """(the headline words for a release, how many minutes after its scheduled time a headline

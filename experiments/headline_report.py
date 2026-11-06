@@ -618,16 +618,20 @@ def report(db_path=DB, prices: bool = True, out=OUT, critical_only: bool = False
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--db", default=str(DB))
+    ap.add_argument("--db", default=str(DB),
+                    help="the probe's database, or the alerts' archive: "
+                         "alerts/state/news/headlines.sqlite (same format)")
+    ap.add_argument("--out", default=str(OUT),
+                    help="where the report is written (default: the probe's report.txt)")
     ap.add_argument("--no-prices", action="store_true", help="skip the sharp-move coverage")
     ap.add_argument("--critical", action="store_true",
                     help="only the critical releases (who had each one first, and the price)")
     ap.add_argument("--levels", default="critical",
                     help="calendar levels to include, e.g. critical,high (default critical)")
     a = ap.parse_args(argv)
-    print(report(a.db, prices=not a.no_prices, critical_only=a.critical,
+    print(report(a.db, prices=not a.no_prices, out=a.out, critical_only=a.critical,
                  levels=tuple(x.strip() for x in a.levels.split(","))))
-    print(f"\n(also written to {OUT})")
+    print(f"\n(also written to {a.out})")
 
 
 if __name__ == "__main__":

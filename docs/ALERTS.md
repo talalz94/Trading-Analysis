@@ -441,7 +441,8 @@ see. That is also why `mtf_trendline` is left out of the setups.
 ```
 alerts/alerts_config.py        WHAT to watch -- yours
 alerts/state/                  git-ignored: alerts.db (SQLite), bars/*.parquet, alerts.log,
-                               alerts.lock, preview.html
+                               alerts.lock, preview.html, news/ (the calendar, and
+                               headlines.sqlite: every headline the monitor read)
 quant/alerts/config.py         reads and checks the config (fresh each tick)
             feeds.py           closed 5m bars from Binance / Dukascopy, with timeouts
             detectors.py       the 16 alert kinds (REGISTRY); add more here
@@ -561,6 +562,8 @@ NEWS = dict(
   never after the PC was off.
 - **Where the calendar lives:** the monitor keeps its own small copy in `alerts/state/news/`, and
   refreshes Forex Factory's weekly feed every 30 minutes.
+- **Every headline it reads is kept** in `alerts/state/news/headlines.sqlite` for later study
+  ([NEWS.md](NEWS.md), "The headline archive").
 - **Dry run:** `python -m quant.alerts news` shows what is covered and when each reminder will go.
 
 The sources, criticality levels and sentiment rules are explained in [NEWS.md](NEWS.md).
