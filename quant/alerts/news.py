@@ -201,6 +201,8 @@ class LiveNews:
         self.store = NewsStore(root)
         self.fresh = False                 # did THIS tick bring a new full fetch of the feed?
         self._lines: Dict[str, object] = {}    # this tick's headlines per source (or its error)
+        self.archive = self.store.root / "headlines.sqlite"   # every line read, for later study
+        self._archive_warned = False
 
     def refresh(self, now) -> Dict[str, str]:
         from quant.news import update
@@ -259,16 +261,32 @@ class LiveNews:
         from quant.news import headlines as H
         from .feeds import session
 
+        answer = {"status": 0}                  # 0 = no HTTP answer at all (a timeout)
+
         def get(url, headers, timeout):
             r = session().get(url, headers=headers, timeout=timeout)
+            answer["status"] = r.status_code
             return r.status_code, r.content
         # ONE download per source per tick, shared by the results and the breaking news:
-        # FinancialJuice answers a second request within a minute with HTTP 429
+        # FinancialJuice answers a second request within a minute with HTTP 429. Each download
+        # is kept in the archive (alerts/state/news/headlines.sqlite) for later study
         if name not in self._lines:
+            import time
+            t0, seen = time.monotonic(), pd.Timestamp.now(tz="UTC")
             try:
                 self._lines[name] = H.fetch(name, get)
             except Exception as e:
                 self._lines[name] = e
+            got = self._lines[name]
+            failed = isinstance(got, Exception)
+            kept = H.archive(self.archive, name, None if failed else got, seen,
+                             int((time.monotonic() - t0) * 1000), answer["status"],
+                             redact(f"{type(got).__name__}: {got}") if failed else None)
+            if kept is None and not self._archive_warned:
+                import logging
+                self._archive_warned = True        # once a run: the alerts go on regardless
+                logging.getLogger("quant.alerts").warning(
+                    "headline archive %s could not be written; alerts unaffected", self.archive)
         got = self._lines[name]
         if isinstance(got, Exception):
             raise got

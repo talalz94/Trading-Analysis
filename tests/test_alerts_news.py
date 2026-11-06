@@ -805,3 +805,50 @@ def test_the_results_and_the_breaking_news_share_one_download_a_tick(tmp_path, m
     n.refresh(at("2026-10-14 12:31:20"))
     n.headlines("financialjuice")
     assert len(calls) == 2                                    # the next tick asks again
+
+
+def test_every_headline_download_the_monitor_makes_is_kept_in_its_archive(tmp_path, monkeypatch,
+                                                                          caplog):
+    import sqlite3
+    from quant.alerts import feeds
+    from quant.alerts.news import LiveNews
+    answers = [(200, b"<rss><channel><item><title>US CPI MoM Actual 0.5%</title><guid>9</guid>"
+                     b"<pubDate>Wed, 14 Oct 2026 12:30:04 GMT</pubDate></item></channel></rss>"),
+               (429, b""),
+               (200, b"<rss><channel><item><title>US CPI MoM Actual 0.5%</title><guid>9</guid>"
+                     b"<pubDate>Wed, 14 Oct 2026 12:30:04 GMT</pubDate></item><item><title>"
+                     b"Iran says talks are over</title><guid>10</guid><pubDate>Wed, 14 Oct 2026 "
+                     b"12:31:50 GMT</pubDate></item></channel></rss>")]
+
+    class Session:
+        def get(self, url, headers=None, timeout=None):
+            status, body = answers.pop(0)
+            return type("R", (), dict(status_code=status, content=body))()
+    monkeypatch.setattr(feeds, "session", lambda: Session())
+    monkeypatch.setattr("quant.news.update.update_feed", lambda *a, **k: "fresh")
+    n = LiveNews(tmp_path / "news")
+    for tick in ("12:30:20", "12:31:20", "12:32:20"):
+        n.refresh(at(f"2026-10-14 {tick}"))
+        try:
+            n.headlines("financialjuice")
+            n.headlines("financialjuice")                       # the tick's cached copy: no row
+        except OSError:
+            pass
+    assert n.archive == tmp_path / "news" / "headlines.sqlite"
+    db = sqlite3.connect(str(n.archive))
+    assert db.execute("SELECT ok, status, n, new, error FROM polls ORDER BY rowid").fetchall() == [
+        (1, 200, 1, 1, None), (0, 429, 0, 0, "OSError: FinancialJuice: HTTP 429"),
+        (1, 200, 2, 1, None)]
+    assert db.execute("SELECT item_id, title, backlog FROM items ORDER BY rowid").fetchall() == [
+        ("9", "US CPI MoM Actual 0.5%", 1), ("10", "Iran says talks are over", 0)]
+    db.close()
+    # an archive that cannot be written costs nothing but one line in the log
+    n2 = LiveNews(tmp_path / "news2")
+    n2.archive = tmp_path / "news" / "headlines.sqlite" / "not-a-folder" / "x.sqlite"
+    answers[:] = [(200, b"<rss><channel><item><title>A</title><guid>1</guid></item></channel>"
+                        b"</rss>")] * 2
+    with caplog.at_level("WARNING", logger="quant.alerts"):
+        assert [x["title"] for x in n2.headlines("financialjuice")] == ["A"]
+        n2.refresh(at("2026-10-14 12:33:20"))
+        assert [x["title"] for x in n2.headlines("financialjuice")] == ["A"]
+    assert sum("headline archive" in r.getMessage() for r in caplog.records) == 1

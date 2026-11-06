@@ -3046,3 +3046,14 @@ instant").
 - **Running on the server, 2 Nov 11:40 UTC, at cd6d313.** Its 29 Oct GDP row now reads 3.4%: the
   stale-estimate repair (38ec778) dropped the 2.2% and read the day again by itself. The first
   live headline results to check: BoE Thu 5 Nov 12:00 UTC and US jobs Fri 6 Nov 13:30 UTC.
+- **Headline archive (6 Nov):** the user asked whether the headlines are saved for later
+  analysis. They were not: the monitor read ~250 FinancialJuice lines a day and kept only what it
+  sent.
+  - Now every real download goes to alerts/state/news/headlines.sqlite, in the headline probe's
+    format (ARCHIVE_SCHEMA, one copy), so headline_report reads it with `--db`. `--out` was added
+    so that report does not overwrite the probe's own report.txt.
+  - Size, measured on a made-up day (1,440 downloads, 411 lines): ~0.3 MB. The user was first
+    told ~40 KB a day; that counted the lines' text only.
+  - Source names are the alerts' own (financialjuice / financialjuice_telegram /
+    walterbloomberg); the probe called them fj_rss / fj_telegram / walter_telegram.
+  - It never raises: a failed write logs one warning a run. 9 rules mutation-checked.

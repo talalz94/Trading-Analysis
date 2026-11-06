@@ -358,6 +358,32 @@ How it behaves:
   from 18:44 UTC and FinancialJuice had "ordered departure" at 18:47:50. The alert tells you
   something big is happening and why; it does not beat the first move.
 
+### The headline archive
+
+Every headline the monitor downloads is kept in `alerts/state/news/headlines.sqlite`, so the
+lines can be studied later: which words came before a move, how fast each source was, what the
+breaking-news rules would have sent with other settings.
+- **What is kept:**
+  - every line, once, with the source's own time and the minute the monitor first saw it;
+  - one row per download: whether it worked, the HTTP answer, how long it took, and the error if
+    it failed.
+- **Which sources:** FinancialJuice's feed every minute, because the breaking news reads it every
+  tick. Its Telegram channel and Walter Bloomberg only when they were asked, which is when the
+  source before them failed.
+- **A source's first download** holds its backlog, the ~10 hours already on the page. Those lines
+  are kept but marked `backlog = 1`: the minute they were first seen says nothing about how fast
+  they came.
+- **Size:** about a quarter of a megabyte a day, under 100 MB a year.
+- **It never costs an alert:** if the file cannot be written, the log says so once and the alerts
+  go on.
+- **Reading it:** it is the October headline test's format, so that test's report reads it:
+  `python experiments/headline_report.py --db alerts/state/news/headlines.sqlite --out
+  alerts/state/news/headline_report.txt --no-prices`. Without `--no-prices` it also checks the
+  lines against sharp moves, downloading the candles for the whole span first. (The October test
+  called the same sources `fj_rss`, `fj_telegram` and `walter_telegram`.)
+
+### Every notice
+
 How it behaves:
 - **Each notice goes once**, even across a restart. Its id is a hash of what it is about.
 - **A reminder is never sent after its release.** After an outage, only the latest one still

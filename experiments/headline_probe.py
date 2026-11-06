@@ -74,18 +74,8 @@ SOURCES = [
     Source("whitehouse", "rss", "https://www.whitehouse.gov/news/feed/", 600, "official"),
 ]
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS items (
-    source TEXT, item_id TEXT, title TEXT, link TEXT,
-    published TEXT,                  -- the source's own time (UTC ISO), NULL when it gives none
-    first_seen TEXT,                 -- when this probe first saw it (UTC ISO)
-    backlog INTEGER,                 -- 1 = already there on the source's first poll: no timing
-    PRIMARY KEY (source, item_id));
-CREATE TABLE IF NOT EXISTS polls (
-    source TEXT, at TEXT, ok INTEGER, status INTEGER, n INTEGER, new INTEGER, ms INTEGER,
-    error TEXT);
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-"""
+# the format lives in quant/news/headlines.py: the alerts keep every line they read in it too
+from quant.news.headlines import ARCHIVE_SCHEMA as SCHEMA  # noqa: E402
 
 
 # the readers live in quant/news/headlines.py -- the alerts quote a release's first headlines
