@@ -3057,3 +3057,7 @@ instant").
   - Source names are the alerts' own (financialjuice / financialjuice_telegram /
     walterbloomberg); the probe called them fj_rss / fj_telegram / walter_telegram.
   - It never raises: a failed write logs one warning a run. 9 rules mutation-checked.
+- **Running on the server, 6 Nov 11:00 UTC, at 2011173:** breaking news plus the headline
+  archive. The server had been at 8c21f7d since the replay pull. The archive filled from the first
+  tick: 103 FinancialJuice lines by 11:23 (100 of them the backlog), every download answered in
+  ~60 ms.
