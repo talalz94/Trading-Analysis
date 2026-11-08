@@ -296,3 +296,54 @@ def test_a_sharp_move_is_a_releases_from_five_minutes_after_it_to_fifteen_before
     assert got.tolist() == [True, True, False, True, False, False]
     assert H.release_moves(starts, []).tolist() == [False] * 6
     assert H.release_moves([], [at("2026-11-06 13:30")]).tolist() == []
+
+
+# ── one line per release (pick_lines) ───────────────────────────────────────────────────────────
+LEAD_JOBS = ["Non-Farm Employment Change", "Unemployment Rate", "Average Hourly Earnings m/m"]
+CPI_DAY = [  # FinancialJuice's format, core typed first and the headline monthly number last
+    line("2026-11-10 13:30:01", "FinancialJuice: US Core CPI MoM Actual 0.3% (Forecast 0.3%, "
+                                "Previous 0.2%)", "c1"),
+    line("2026-11-10 13:30:01", "FinancialJuice: US Core CPI YoY Actual 3.0% (Forecast 3.0%, "
+                                "Previous 3.1%)", "c2"),
+    line("2026-11-10 13:30:02", "FinancialJuice: US CPI YoY Actual 2.9% (Forecast 2.8%, "
+                                "Previous 2.9%)", "c3"),
+    line("2026-11-10 13:30:02", "FinancialJuice: US CPI MoM Actual 0.4% (Forecast 0.3%, "
+                                "Previous 0.2%)", "c4"),
+]
+CPI = ["CPI m/m", "CPI y/y", "Core CPI m/m", "Core CPI y/y"]
+
+
+def _names(lines):
+    return [H.clean(x["title"]).split(" Actual")[0] for x in lines]
+
+
+def test_a_headline_quotes_one_line_per_release_most_important_first():
+    # 6 Nov 2026, the real lines: the first three by time had YEARLY earnings, not monthly
+    m = H.matching(fj_2026_11_06(), at("2026-11-06 13:30"), *H.window("USD", JOBS), currency="USD")
+    assert _names(m[:3])[2] == "US Average Earnings YoY"
+    picked = H.pick_lines(m, "USD", LEAD_JOBS)
+    assert _names(picked) == ["US Unemployment Rate", "US Nonfarm Payrolls",
+                              "US Average Earnings MoM"]                    # in the order typed
+    assert all(H.agrees(a, "USD", ti, picked) is True              # the official email adds nothing
+               for ti, a in zip(LEAD_JOBS, ("165K", "4.1%", "0.4%")))
+
+
+def test_on_cpi_day_every_number_gets_its_own_line_and_none_twice():
+    m = H.matching(CPI_DAY, at("2026-11-10 13:30"), *H.window("USD", CPI), currency="USD")
+    assert "c4" not in [x["id"] for x in m[:3]]           # the first three left out CPI m/m
+    assert [x["id"] for x in H.pick_lines(m, "USD", CPI)] == ["c1", "c2", "c3", "c4"]
+    assert [x["id"] for x in H.pick_lines(m, "USD", CPI, least=1, most=2)] == ["c3", "c4"]
+
+
+def test_releases_sharing_words_get_different_lines_and_the_rest_fill_to_three():
+    fomc = [line("2026-10-28 18:00:04", "FinancialJuice: FED LEAVES RATES UNCHANGED AT 3.75%-4.00%",
+                 "f1"),
+            line("2026-10-28 18:00:30", "FinancialJuice: FED: VOTE 10-2", "f2"),
+            line("2026-10-28 18:00:40", "FinancialJuice: Fed statement: inflation remains elevated",
+                 "f3"),
+            line("2026-10-28 18:01:10", "FinancialJuice: Powell: Policy is well positioned", "f4")]
+    titles = ["Federal Funds Rate", "FOMC Statement"]
+    m = H.matching(fomc, at("2026-10-28 18:00"), *H.window("USD", titles), currency="USD")
+    assert [x["id"] for x in H.pick_lines(m, "USD", titles)] == ["f1", "f2", "f3"]
+    gdp = H.matching(GDP_DAY, at("2026-10-29 12:30"), *H.window("USD", ["Advance GDP q/q"]))
+    assert H.pick_lines(gdp, "USD", ["Advance GDP q/q"]) == gdp[:3]   # one release: as before

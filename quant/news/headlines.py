@@ -315,6 +315,35 @@ def matching(lines: List[dict], t, words: str, since: pd.Timedelta,
     return sorted(out, key=rank)
 
 
+def pick_lines(lines: List[dict], currency: str, titles, least: int = 3,
+               most: int = 5) -> List[dict]:
+    """The lines a headline email quotes for one release moment, from `lines` (matching's order).
+    ONE LINE PER RELEASE first: for each of `titles`, most important first, the best line about
+    it -- its words and its own cues (core vs headline, m/m vs y/y: _about), each line once.
+    Then the next lines, until there are `least`; never more than `most`. Returned in `lines`'
+    order. On 6 Nov 2026 the first three lines by time were the jobless rate, payrolls and YEARLY
+    earnings: the monthly figure, one of the jobs report's three numbers, came only in the
+    official email three minutes later."""
+    out = []
+    for title in titles:
+        if len(out) >= most:
+            break
+        words, _ = release_words(currency, title)
+        if words is None:
+            continue
+        x = next((x for x in lines if not any(x is y for y in out)
+                  and re.search(words, x["title"], re.I) and _about(title, x["title"])), None)
+        if x is not None:
+            out.append(x)
+    for x in lines:
+        if len(out) >= least:
+            break
+        if not any(x is y for y in out):
+            out.append(x)
+    keep = {id(x) for x in out}
+    return [x for x in lines if id(x) in keep]
+
+
 _JUNK_HEAD = re.compile(r"^(?:financialjuice\s*:\s*|[^\w(]*breaking\s*:\s*|[*\s]+|[^\w\s(]+\s*)+",
                         re.I)
 _JUNK_TAIL = re.compile(r"(?:\s*\|\s*fj|\s*\$[A-Z]+|\s*\(@\w+\))+\s*$", re.I)

@@ -306,10 +306,19 @@ How it works:
 - **Which source:** asked after the candle emails are out, in order. The next source is asked only
   for the releases the last one could not answer -- it failed, returned nothing, or has no line
   about them yet.
-- **What is sent:** the first three matching lines, a printed result ("Actual 2.5% (Forecast
-  2.4%...)") first, each with its seconds after the release and its source, plus the calendar's
-  forecast. Three, because the first is not always the number asked for: on 29 Oct FinancialJuice
-  led with the PCE line, and the GDP line came two seconds later.
+- **What is sent:** one line per release first, most important first: payrolls, the jobless
+  rate, then earnings; on inflation day CPI m/m, CPI y/y, core m/m, core y/y. Each is the first
+  printed result ("Actual 2.5% (Forecast 2.4%...)") about THAT release: core kept apart from
+  headline, monthly from yearly, and no line used twice. Then the next lines until there are at
+  least three, never more than five. Each line shows its seconds after the release and its
+  source, in the order typed, plus the calendar's forecast.
+  - Why per release: on 6 Nov 2026 the first three lines by time were the jobless rate, payrolls
+    and YEARLY earnings, so the monthly figure came only in the official email three minutes
+    later.
+  - Why at least three: the first line is not always the number asked for. On 29 Oct
+    FinancialJuice led with the PCE line, and the GDP line came two seconds later.
+- **The subject quotes the most important release's own line**, its cues included: "CPI m/m"
+  never quotes a "Core CPI MoM" line typed a second before it.
 - **Once per release.** A later line about it is not mailed.
 - **Only lines about that economy.** A line naming another country or its central bank, and not
   the release's own, is left out ("US" counts in capitals only: "surprised us" is not the US).

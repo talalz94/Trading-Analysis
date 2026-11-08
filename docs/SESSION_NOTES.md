@@ -3080,3 +3080,10 @@ instant").
   Canada's jobless rate, Canada's earnings and the US jobless rate. The fixed one quotes the US
   jobless rate, payrolls (165k vs 70k) and earnings y/y, and every official number agrees with a
   line. Those lines are now the tests' fixture (tests/data/financialjuice_2026-11-06.tsv).
+- **One line per release (8 Nov, the user: "yes do it before Tuesday").** The headline email
+  quoted the first three lines by time. On 6 Nov those were the jobless rate, payrolls and YEARLY
+  earnings, so the monthly figure came three minutes later in the official email. It now quotes
+  one line per release first (pick_lines: lead order, words + cues, no line twice), then fills
+  to three, at most five. Replayed on the real lines, all three jobs numbers go in the first
+  email and the official one is skipped. The subject's line also obeys the cues now: on CPI day
+  "CPI m/m" could have quoted a "Core CPI MoM" line typed first.

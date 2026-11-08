@@ -912,3 +912,35 @@ def test_a_scheduled_releases_own_move_confirms_no_breaking_news(tmp_path, relea
     _a_1m(r, "2026-11-06 13:32", {"2026-11-06 13:30": -0.008}, start="2026-11-05 00:00")
     r.tick("2026-11-06 13:32:20")
     assert len([s for s in r.subjects() if "BREAKING" in s]) == sent
+
+
+def test_on_jobs_day_all_three_numbers_go_in_the_first_email_and_none_twice(tmp_path):
+    # 6 Nov 2026, the real lines: the monthly earnings line is quoted (it was the yearly one),
+    # so the agencies' numbers three minutes later add nothing and are not mailed again
+    r = Rig(tmp_path, events=calendar(*_jobs_day()), news_cfg=HL, delivery=dict(every_minutes=5),
+            lines={"financialjuice": fj_2026_11_06()})
+    r.tick("2026-11-06 13:00")
+    r.tick("2026-11-06 13:30:20")
+    (_, text, _), = r.mail.sent
+    assert "US Average Earnings MoM Actual 0.4%" in text and "YoY" not in text
+    r.news.ev = calendar(*[dict(e, actual=a) for e, a in zip(_jobs_day(), ("0.4%", "165K", "4.1%"))])
+    r.tick("2026-11-06 13:33:20")
+    (official,) = r.rows(tf="result")
+    assert official["status"] == "skipped" and len(r.mail.sent) == 1
+
+
+def test_on_cpi_day_the_subject_quotes_the_headline_monthly_line_not_core(tmp_path):
+    # Forex Factory lists core first, and so may the desk type it: "CPI m/m" leads the email and
+    # must quote its own line, not "Core CPI MoM" typed a second earlier
+    ev = calendar(*[rel("2026-11-10 13:30", ti, forecast=f) for ti, f in (
+        ("Core CPI m/m", "0.3%"), ("Core CPI y/y", "3.0%"), ("CPI m/m", "0.3%"), ("CPI y/y", "2.8%"))])
+    lines = [hl("2026-11-10 13:30:01", "FinancialJuice: US Core CPI MoM Actual 0.3% (Forecast 0.3%)"),
+             hl("2026-11-10 13:30:01", "FinancialJuice: US Core CPI YoY Actual 3.0% (Forecast 3.0%)"),
+             hl("2026-11-10 13:30:02", "FinancialJuice: US CPI YoY Actual 2.9% (Forecast 2.8%)"),
+             hl("2026-11-10 13:30:02", "FinancialJuice: US CPI MoM Actual 0.4% (Forecast 0.3%)")]
+    r = Rig(tmp_path, events=ev, news_cfg=HL, lines={"financialjuice": lines})
+    r.tick("2026-11-10 13:00")
+    r.tick("2026-11-10 13:30:20")
+    (subject, text, _), = r.mail.sent
+    assert "USD CPI m/m: US CPI MoM Actual 0.4% (Forecast 0.3%)" in subject
+    assert all(x["title"].replace("FinancialJuice: ", "") in text for x in lines)   # all four

@@ -74,8 +74,9 @@ RESULT_SETTLE = pd.Timedelta(minutes=20)  # send a partial result after this if 
 BREAKING_LOOKBACK = pd.Timedelta(minutes=15)   # a line older than this when first seen is not
                                                # news any more (a first poll's backlog, an outage)
 BREAKING_SEEN = pd.Timedelta(hours=3)          # how long a line's id is remembered
-HEADLINE_LINES = 3                       # lines quoted per release: the first is not always THE
-                                         # number (on GDP day FinancialJuice led with PCE)
+HEADLINE_LINES = 3                       # lines quoted per release moment, at least: one per
+HEADLINE_MAX = 5                         # release first, then the next (on GDP day FinancialJuice
+                                         # led with PCE); at most 5 (H.pick_lines)
 
 
 # ══ CONFIG ═══════════════════════════════════════════════════════════════════════════════════
@@ -479,11 +480,13 @@ def _render(kind: str, items: List[dict], tz: str, now, **kw) -> dict:
             lines.append("    calendar forecast: " + ", ".join(fc))
         lines.append("    (as the source typed it -- not the official number)")
         # the subject names the group's FIRST title (its most important), so it quotes the line
-        # about THAT one: on 29 Oct the first line was PCE's and GDP's came 2 s later
-        from quant.news.headlines import release_words
+        # about THAT one: on 29 Oct the first line was PCE's and GDP's came 2 s later. Its words
+        # AND its cues -- on CPI day "CPI m/m" must not quote the core line typed before it
+        from quant.news.headlines import _about, release_words
         words, _ = release_words(cur, first["title"])
-        top = next((x for x in kw["lines"] if words and re.search(words, x["text"], re.I)),
-                   kw["lines"][0])
+        said = [x for x in kw["lines"] if words and re.search(words, x["text"], re.I)]
+        top = next((x for x in said if _about(first["title"], x["text"])),
+                   said[0] if said else kw["lines"][0])
         subject = f"{cur} {first['title']}: {top['text']}"
         subject = subject if len(subject) <= 140 else subject[:137] + "..."
     elif kind in ("day", "week"):
@@ -588,8 +591,9 @@ def _headline_results(nc, state, news, now, report, timed, pri):
                 if not m:
                     rest.append((t, cur, g, (words, since, until)))
                     continue
+                picked = H.pick_lines(m, cur, list(g["title"]), HEADLINE_LINES, HEADLINE_MAX)
                 quoted = [dict(source=label, text=H.clean(x["title"])[:240], id=x["id"],
-                               after_s=(x["at"] - t).total_seconds()) for x in m[:HEADLINE_LINES]]
+                               after_s=(x["at"] - t).total_seconds()) for x in picked]
                 items = [_item(e) for e in g.to_dict("records")]
                 report.events += _add(state, tf="headline", market=cur, bar_time=t,
                                       what="result", priority=pri, now=now,
