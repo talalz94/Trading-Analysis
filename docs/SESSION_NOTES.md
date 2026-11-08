@@ -3087,3 +3087,8 @@ instant").
   to three, at most five. Replayed on the real lines, all three jobs numbers go in the first
   email and the official one is skipped. The subject's line also obeys the cues now: on CPI day
   "CPI m/m" could have quoted a "Core CPI MoM" line typed first.
+- **Running on the server, 8 Nov 02:38 UTC, at 2e38a85.** Replayed from the archive on the
+  server, the jobs report's lines come out as US jobless rate, payrolls and MONTHLY earnings. A
+  restart can draw ONE FinancialJuice 429: the old process fetched at 02:37:20 and the new one at
+  02:38:21. The Telegram backup answered that minute. First live check: US CPI, Tue 10 Nov
+  13:30 UTC.
