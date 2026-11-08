@@ -852,3 +852,59 @@ def test_every_headline_download_the_monitor_makes_is_kept_in_its_archive(tmp_pa
         n2.refresh(at("2026-10-14 12:33:20"))
         assert [x["title"] for x in n2.headlines("financialjuice")] == ["A"]
     assert sum("headline archive" in r.getMessage() for r in caplog.records) == 1
+
+
+# ── 6 Nov 2026: the US jobs report, Canada's beside it, and a release's own move ───────────────
+JOBS_LINES = [
+    hl("2026-11-06 13:30:01", "FinancialJuice: Canadian Average Hourly Earnings YoY Actual 2% "
+                              "(Forecast 2.05%, Previous 2.1%)"),
+    hl("2026-11-06 13:30:02", "FinancialJuice: Canadian Unemployment Rate Actual 6.9% "
+                              "(Forecast 7%)"),
+    hl("2026-11-06 13:30:03", "FinancialJuice: US Non-Farm Payrolls Actual 130K (Forecast 110K)"),
+    hl("2026-11-06 13:30:04", "FinancialJuice: US Unemployment Rate Actual 4.2% (Forecast 4.3%)"),
+    hl("2026-11-06 13:30:05", "FinancialJuice: US Average Hourly Earnings MoM Actual 0.4% "
+                              "(Forecast 0.3%)")]
+
+
+def _jobs_day(cur="USD"):   # Forex Factory's own order: earnings, payrolls, the jobless rate
+    return [rel("2026-11-06 13:30", "Average Hourly Earnings m/m", cur=cur),
+            rel("2026-11-06 13:30", "Non-Farm Employment Change", cur=cur, forecast="110K"),
+            rel("2026-11-06 13:30", "Unemployment Rate", cur=cur, forecast="4.3%")]
+
+
+def test_releases_sharing_a_level_lead_with_the_most_important():
+    from quant.alerts.news import _groups
+    from quant.news.catalog import CRITICAL, lead_rank
+    ev = calendar(*_jobs_day(), rel("2026-11-05 12:00", "Monetary Policy Summary", cur="GBP"),
+                  rel("2026-11-05 12:00", "Official Bank Rate", cur="GBP", forecast="4%"),
+                  rel("2026-11-06 13:30", "Building Permits", impact="medium"))
+    assert [list(g["title"]) for _, _, g in _groups(ev)] == [
+        ["Official Bank Rate", "Monetary Policy Summary"],
+        ["Non-Farm Employment Change", "Unemployment Rate", "Average Hourly Earnings m/m",
+         "Building Permits"]]
+    assert lead_rank("USD", "Building Permits") == len(CRITICAL["USD"])
+
+
+def test_on_jobs_day_the_headline_quotes_the_us_lines_and_leads_with_payrolls(tmp_path):
+    r = Rig(tmp_path, events=calendar(*_jobs_day()), news_cfg=HL,
+            lines={"financialjuice": JOBS_LINES})
+    r.tick("2026-11-06 13:00")
+    r.tick("2026-11-06 13:30:20")
+    (subject, text, _), = r.mail.sent
+    assert "USD Non-Farm Employment Change: US Non-Farm Payrolls Actual 130K" in subject
+    assert "Canadian" not in text and "US Average Hourly Earnings MoM" in text
+
+
+@pytest.mark.parametrize("release, sent", [("high", 0), ("medium", 0), ("low", 1), (None, 1)])
+def test_a_scheduled_releases_own_move_confirms_no_breaking_news(tmp_path, release, sent):
+    # 6 Nov 2026: a 13:22 BREAKING line (a tanker explosion) went out at 13:31:20 on the jobs
+    # report's own move. A medium+ release at 13:30 makes that move its result, not news
+    ev = (calendar(rel("2026-11-06 13:30", "Non-Farm Employment Change", impact=release))
+          if release else calendar())
+    r = Rig(tmp_path, news_cfg=BR, events=ev,
+            lines={"financialjuice": [hl("2026-11-06 13:22:00", EMBASSY)]})
+    _a_1m(r, "2026-11-06 13:23", start="2026-11-05 00:00")
+    r.tick("2026-11-06 13:23:20")
+    _a_1m(r, "2026-11-06 13:32", {"2026-11-06 13:30": -0.008}, start="2026-11-05 00:00")
+    r.tick("2026-11-06 13:32:20")
+    assert len([s for s in r.subjects() if "BREAKING" in s]) == sent

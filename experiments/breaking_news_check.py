@@ -41,7 +41,7 @@ HERE = Path(__file__).resolve().parent
 LINES = HERE / "results" / "telegram_check" / "FinancialJuice.csv"
 OUT = HERE / "results" / "breaking_news_check" / "report.txt"
 NEAR = (pd.Timedelta(minutes=-15), pd.Timedelta(minutes=10))   # lines shown beside a move
-RELEASE_AFTER = pd.Timedelta(minutes=15)   # a move this soon after a scheduled release is its result
+RELEASE_AFTER = H.RELEASE_AFTER   # the live alert's own rule (quant/news/headlines.release_moves)
 GULF = pd.Timestamp("2026-10-21 18:44", tz="UTC")
 GULF_WINDOW = (pd.Timedelta(minutes=-30), pd.Timedelta(minutes=60))
 WAYS = ("words", "move", "live")
@@ -70,12 +70,7 @@ def find_all_moves(bars: Dict[str, pd.DataFrame], releases) -> pd.DataFrame:
     parts = [hr.find_moves(b, m) for m, b in bars.items() if len(b)]
     mv = (pd.concat(parts, ignore_index=True) if parts
           else pd.DataFrame(columns=["market", "start", "move_pct"]))
-    releases = list(releases)
-    rel = np.sort(hr._ns(pd.Series(releases))) if releases else np.array([], dtype="int64")
-    st = hr._ns(mv["start"]) if len(mv) else np.array([], dtype="int64")
-    lo = np.searchsorted(rel, st - H.MOVE_KNOWN.value, side="left")
-    mv["release"] = ((lo < len(rel)) & (rel[np.minimum(lo, len(rel) - 1)]
-                                        <= st + RELEASE_AFTER.value)) if len(rel) else False
+    mv["release"] = H.release_moves(mv["start"], releases)       # the live alert's own rule
     return mv.sort_values("start").reset_index(drop=True)
 
 

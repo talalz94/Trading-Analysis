@@ -540,11 +540,14 @@ def reminder_offsets(nc, level: str) -> Tuple[int, ...]:
 
 
 def _groups(ev: pd.DataFrame):
-    """Releases at the same minute in the same currency, most important first inside."""
+    """Releases at the same minute in the same currency, most important first inside: by level,
+    then by catalog.lead_rank (payrolls before the jobless rate and earnings), then as listed."""
     if ev.empty:
         return []
-    ev = ev.assign(_rk=ev["level"].map(RANK)).sort_values(["t", "currency", "_rk"],
-                                                          ascending=[True, True, False])
+    from quant.news.catalog import lead_rank
+    ev = ev.assign(_rk=ev["level"].map(RANK),
+                   _ld=[lead_rank(c, ti) for c, ti in zip(ev["currency"], ev["title"])])
+    ev = ev.sort_values(["t", "currency", "_rk", "_ld"], ascending=[True, True, False, True])
     return [(t, cur, g) for (t, cur), g in ev.groupby(["t", "currency"], sort=True)]
 
 
@@ -581,7 +584,7 @@ def _headline_results(nc, state, news, now, report, timed, pri):
                 continue
             label, rest = H.SOURCES[name].label, []
             for t, cur, g, (words, since, until) in left:
-                m = H.matching(got, t, words, since, until)
+                m = H.matching(got, t, words, since, until, currency=cur)
                 if not m:
                     rest.append((t, cur, g, (words, since, until)))
                     continue
@@ -618,12 +621,14 @@ def _recent_moves(cfg, state, now) -> List[dict]:
     return sorted(out, key=lambda x: x["start"])
 
 
-def _breaking_news(cfg, state, news, now, report, pri):
+def _breaking_news(cfg, state, news, now, report, pri, releases=()):
     """Queue the breaking-news check (quant/news/headlines.py tiers) for after this tick's candle
     emails. The first source that answers is read -- the next only when it fails. A TOP line goes
     at once; a BREAKING line waits, at most 15 min + 5, for a sharp move from 10 min before it to
     15 min after; one per story an hour, at most BREAKING_PER_DAY a day (the rest are recorded,
-    status 'skipped'). A line already older than BREAKING_LOOKBACK when first seen is not sent."""
+    status 'skipped'). A line already older than BREAKING_LOOKBACK when first seen is not sent.
+    A move a scheduled release caused (`releases`: their times, H.release_moves) confirms
+    nothing -- that is the release's result, not news."""
     from quant.news import headlines as H
     nc = cfg.news
 
@@ -651,6 +656,9 @@ def _breaking_news(cfg, state, news, now, report, pri):
                 waiting.append(dict(t=t.isoformat(), text=text[:240], tier=tier[0], rule=tier[1],
                                     source=label))
         moves = _recent_moves(cfg, state, now) if any(w["tier"] == 2 for w in waiting) else []
+        if moves and len(releases):
+            caused = H.release_moves([m["start"] for m in moves], releases)
+            moves = [m for m, c in zip(moves, caused) if not c]
         still = []
         for w in sorted(waiting, key=lambda w: w["t"]):
             t, move = pd.Timestamp(w["t"]), None
@@ -740,7 +748,11 @@ def news_step(cfg, state, news, now, report) -> Optional[Callable]:
 
     # ── breaking news, not on the calendar ─────────────────────────────────────────────────
     if nc.breaking:
-        _breaking_news(cfg, state, news, now, report, pri)
+        # the moves scheduled releases cause confirm nothing: any currency, medium and up, timed
+        rel = (horizon.loc[horizon["time_q"].isin(["exact", "official", "typical"])
+                           & (horizon["level"].map(RANK) >= RANK["medium"]), "t"].tolist()
+               if len(horizon) else [])
+        _breaking_news(cfg, state, news, now, report, pri, releases=rel)
 
     # ── results ───────────────────────────────────────────────────────────────────────────
     if nc.results and len(timed) and news.results_available():

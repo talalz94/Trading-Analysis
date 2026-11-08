@@ -234,6 +234,36 @@ def archive(db_path, source: str, lines: Optional[List[dict]], seen, ms: int,
         return None
 
 
+# ── whose economy a line is about ───────────────────────────────────────────────────────────────
+# A line naming ANOTHER currency's country (or central bank), and not its own, is not about this
+# release. On 6 Nov 2026 the US jobs report and Canada's came out together at 13:30 UTC, and
+# "Canadian Average Hourly Earnings YoY Actual 2%" was quoted as the US earnings number: its
+# words were the US rule's. "US" counts in capitals only -- "surprised us" is not the US.
+COUNTRY = {
+    "USD": r"(?-i:\bUS\b|\bU\.S\.)|united states|\bfed\b|\bfomc\b|federal reserve|powell|warsh",
+    "CAD": r"\bcanad\w*|\bboc\b|bank of canada|macklem",
+    "GBP": r"\buk\b|\bu\.k\.|\bbrit\w*|\bengland\b|\bboe\b|bailey",
+    "EUR": r"euro ?zone|euro area|\bez\b|\becb\b|lagarde|\bgerman\w*|\bfrench\b|\bfrance\b|"
+           r"\bital\w*|\bspain\b|\bspanish\b",
+    "JPY": r"\bjapan\w*|\bboj\b|bank of japan|ueda",
+    "AUD": r"\baustralia\w*|\baussie\b|\brba\b|bullock",
+    "NZD": r"new zealand|\bnz\b|\brbnz\b",
+    "CHF": r"\bswiss\b|switzerland|\bsnb\b",
+    "CNY": r"\bchina\b|\bchinese\b|\bpboc\b",
+}
+_COUNTRY = {c: re.compile(p, re.I) for c, p in COUNTRY.items()}
+
+
+def foreign(currency: str, text: str) -> bool:
+    """Is a line about another economy than `currency`'s? It names another currency's country or
+    central bank, and not its own. A line naming none is not foreign, and neither is any line for
+    a currency this does not know (an unscheduled event's)."""
+    own = _COUNTRY.get(currency)
+    if own is None or own.search(text):
+        return False
+    return any(rx.search(text) for c, rx in _COUNTRY.items() if c != currency)
+
+
 # ── which lines are about a release ─────────────────────────────────────────────────────────────
 def release_words(currency: str, title: str) -> tuple:
     """(the headline words for a release, how many minutes after its scheduled time a headline
@@ -263,18 +293,20 @@ _ACTUAL = re.compile(r"\bactual\b", re.I)
 
 
 def matching(lines: List[dict], t, words: str, since: pd.Timedelta,
-             until: pd.Timedelta) -> List[dict]:
+             until: pd.Timedelta, currency: Optional[str] = None) -> List[dict]:
     """The lines printed inside [t + since, t + until] that use `words`, best first: a printed
     result ("... Actual 2.5% (Forecast ...)"), then any line with a number, then the rest -- each
     group in time order. Every line gains `at`, its printed time. A line with no time is left out:
-    it cannot be placed in the window."""
+    it cannot be placed in the window. With `currency`, a line about another economy is left out
+    too (foreign): Canada's jobs report comes out with the US one."""
     t = pd.Timestamp(t)
     out = []
     for x in lines:
         if not x.get("published"):
             continue
         at = pd.Timestamp(x["published"])
-        if t + since <= at <= t + until and re.search(words, x["title"], re.I):
+        if t + since <= at <= t + until and re.search(words, x["title"], re.I) \
+                and not (currency and foreign(currency, x["title"])):
             out.append(dict(x, at=at))
 
     def rank(x):
@@ -411,6 +443,28 @@ def move_floor(symbol: str) -> Optional[float]:
     return MOVE_FX_FLOOR if re.fullmatch(r"[A-Z]{6}", s) else None
 
 
+RELEASE_AFTER = pd.Timedelta(minutes=15)   # a release this long after a move's start caused it
+
+
+def release_moves(starts, releases):
+    """For each sharp move (its start): is it a scheduled release's own move? True when one of
+    `releases` (times: the calendar's medium and up, any currency) is from MOVE_KNOWN before the
+    move's start to RELEASE_AFTER after it -- a move is dated from the START of its 5 minutes,
+    which opens before the release that caused it. Such a move confirms no breaking news. The
+    replay always left them out; the live alert did not until 6 Nov 2026, when the US jobs
+    report's own move (dated 13:26) confirmed a 13:22 line about a tanker and sent it."""
+    import numpy as np
+
+    def ns(x):
+        s = pd.to_datetime(pd.Series(list(x), dtype=object), utc=True)
+        return s.dt.as_unit("ns").astype("int64").to_numpy() if len(s) else np.array([], "int64")
+    st, rel = ns(starts), np.sort(ns(releases))
+    if not len(st) or not len(rel):
+        return np.zeros(len(st), dtype=bool)
+    lo = np.searchsorted(rel, st - MOVE_KNOWN.value, side="left")
+    return (lo < len(rel)) & (rel[np.minimum(lo, len(rel) - 1)] <= st + RELEASE_AFTER.value)
+
+
 def sharp_moves(bars: pd.DataFrame, floor: float, k: float = MOVE_K) -> pd.DataFrame:
     """Sharp moves in 1m candles [open_time, close]: start (the close the 5 minutes run from) and
     move_pct. One move per 30 minutes (its first minute). A move is KNOWN 5 minutes after start."""
@@ -488,7 +542,8 @@ def agrees(actual, currency: str, title: str, lines: List[dict]) -> Optional[boo
     """Did a headline about THIS title print the official `actual`? True (one of the lines about it
     gives that number as its result); False (they give others); None (no line about it gives a
     number: on GDP day the PCE line says nothing about GDP). "About it" = its words, and its
-    neighbours' lines left out (_about) -- one release day prints several numbers in a row."""
+    neighbours' lines left out (_about) -- one release day prints several numbers in a row --
+    and so are lines about another economy (foreign)."""
     words, _ = release_words(currency, title)
     want = parse_value(actual) if actual is not None else float("nan")
     if words is None or want != want:
@@ -496,7 +551,7 @@ def agrees(actual, currency: str, title: str, lines: List[dict]) -> Optional[boo
     got = []
     for x in lines:
         text = x.get("text") or x.get("title") or ""
-        if re.search(words, text, re.I) and _about(title, text):
+        if re.search(words, text, re.I) and _about(title, text) and not foreign(currency, text):
             n = headline_number(text)
             if n is not None:
                 got.append(n)

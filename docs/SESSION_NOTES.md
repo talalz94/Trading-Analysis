@@ -3061,3 +3061,17 @@ instant").
   archive. The server had been at 8c21f7d since the replay pull. The archive filled from the first
   tick: 103 FinancialJuice lines by 11:23 (100 of them the backlog), every download answered in
   ~60 ms.
+- **The first live week, read 8 Nov from the server** (alerts.db + the archive):
+  - BoE Thu 5 Nov 12:00 UTC: headline at 12:00:20, the right line.
+  - US jobs Fri 6 Nov 13:30 UTC: headline at 13:30:20 quoted CANADA's earnings line, because
+    Canada's jobs report came out at the same minute and the US earnings words matched it. The
+    official US number went at 13:33:20 (0.4% vs 0.3%).
+  - A BREAKING line from 13:22 ("One seafarer dead in the November 5th explosion on a
+    Greek-operated oil products tanker...", the attack rule) went at 13:31:20. Its move was the
+    jobs report's own (dated 13:26): the replay left release moves out, and the live alert did not.
+  - Ueda Fri 16:00 UTC: the first line of his speech at 16:00:20, as designed.
+  - Archive: FinancialJuice 2,245 downloads, 99.9% answered, longest gap 2 min, ~70 ms; 285 new
+    lines in 37 h. The Telegram backup was asked twice, and answered once.
+  - Fixed (the next commit): foreign() drops lines about another economy; release_moves() is
+    shared by the replay and the live alert; equally critical releases lead in CRITICAL's order
+    (payrolls first).

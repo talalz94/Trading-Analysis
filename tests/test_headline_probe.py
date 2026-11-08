@@ -424,3 +424,15 @@ def test_a_broken_calendar_never_loses_the_rest_of_the_report(tmp_path, monkeypa
     monkeypatch.setattr(hr, "load_calendar", broken)
     text = hr.report(tmp_path / "p.sqlite", prices=False, out=tmp_path / "r.txt")
     assert "the calendar could not be read (OSError: disk)" in text and "RELIABILITY" in text
+
+
+def test_a_line_about_another_economy_does_not_carry_the_release():
+    # 6 Nov 2026: Canada's jobs report came out with the US one at 13:30 UTC
+    jobs = pd.DataFrame([dict(t=at("2026-11-06 13:30"), currency="USD", level="critical",
+                              title="Average Hourly Earnings m/m", actual="0.4%", forecast="0.3%")])
+    news = [("fj_rss", "FinancialJuice: Canadian Average Hourly Earnings YoY Actual 2% "
+                       "(Forecast 2.05%)", "2026-11-06 13:30:01", "2026-11-06 13:30:20"),
+            ("fj_rss", "FinancialJuice: US Average Hourly Earnings MoM Actual 0.4% "
+                       "(Forecast 0.3%)", "2026-11-06 13:30:05", "2026-11-06 13:30:20")]
+    r = hr.release_delivery(hr.release_groups(jobs), hr.timed(_items(news)), ["fj_rss"])
+    assert r["delay_s"].tolist() == [5] and "US Average" in r["headline"].iat[0]

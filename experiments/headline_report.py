@@ -90,7 +90,7 @@ CALENDARS = (HERE.parent / "alerts" / "state" / "news", HERE.parent / "data" / "
 from quant.news.headlines import WINDOW as CRIT_WINDOW  # noqa: E402
 CRIT_HORIZONS = (1, 5, 15, 60)             # minutes after the release
 # the words and the window live in quant/news/headlines.py, which the alerts use too
-from quant.news.headlines import RELEASE_WORDS, release_words  # noqa: E402,F401
+from quant.news.headlines import RELEASE_WORDS, foreign, release_words  # noqa: E402,F401
 
 
 def load(db_path=DB):
@@ -390,6 +390,14 @@ def _since(g) -> pd.Timedelta:
     return s if isinstance(s, pd.Timedelta) and not pd.isna(s) else CRIT_WINDOW[0]
 
 
+def _about_it(win: pd.DataFrame, g) -> pd.Series:
+    """Which lines of `win` are about release `g`: its words, and not another economy's (Canada's
+    jobs report comes out with the US one -- the alerts' own rule, quant/news/headlines.foreign)."""
+    words = win["title"].str.contains(g["words"], case=False, regex=True)
+    other = win["title"].map(lambda s: foreign(g["currency"], s)).astype(bool)
+    return words & ~other
+
+
 def release_delivery(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str]) -> pd.DataFrame:
     """Per release and source, its first matching headline inside CRIT_WINDOW: seconds after the
     scheduled time by the source's clock (`delay_s`) and by ours (`seen_s`), and the seconds to its
@@ -400,7 +408,7 @@ def release_delivery(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str]) 
             continue
         lo, hi = g["t"] + _since(g), g["t"] + g["until"]
         win = d[(d["t"] >= lo) & (d["t"] <= hi)]
-        win = win[win["title"].str.contains(g["words"], case=False, regex=True)].sort_values("t")
+        win = win[_about_it(win, g)].sort_values("t")
         for s in sources:
             w = win[win["source"] == s]
             if not len(w):
@@ -432,7 +440,7 @@ def release_chance(groups: pd.DataFrame, d: pd.DataFrame, sources: List[str], st
                     or at + g["until"] > end:
                 continue
             win = d[(d["t"] >= at + _since(g)) & (d["t"] <= at + g["until"])]
-            win = win[win["title"].str.contains(g["words"], case=False, regex=True)]
+            win = win[_about_it(win, g)]
             have = set(win["source"])
             for s in sources:
                 hits[s][0] += s in have

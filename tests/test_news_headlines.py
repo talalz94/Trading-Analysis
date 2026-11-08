@@ -236,3 +236,59 @@ def test_the_archives_report_is_written_where_asked_and_leaves_the_probes_alone(
     assert out.read_text(encoding="utf-8").startswith("HEADLINE PROBE")
     assert "3 timed headlines from 1 sources" in out.read_text(encoding="utf-8")
     assert not (tmp_path / "probe" / "report.txt").exists()
+
+
+# ── whose economy a line is about: 6 Nov 2026, the US and Canadian jobs reports at 13:30 UTC ────
+JOBS_DAY = [  # the Canadian earnings line as the 6 Nov email quoted it; the rest as FJ types them
+    line("2026-11-06 13:30:01", "FinancialJuice: Canadian Average Hourly Earnings YoY Actual 2% "
+                                "(Forecast 2.05%, Previous 2.1%)", "ca1"),
+    line("2026-11-06 13:30:02", "FinancialJuice: Canadian Unemployment Rate Actual 6.9% "
+                                "(Forecast 7%, Previous 7.1%)", "ca2"),
+    line("2026-11-06 13:30:03", "FinancialJuice: US Non-Farm Payrolls Actual 130K (Forecast 110K, "
+                                "Previous 22K)", "us1"),
+    line("2026-11-06 13:30:04", "FinancialJuice: US Unemployment Rate Actual 4.2% (Forecast 4.3%, "
+                                "Previous 4.3%)", "us2"),
+    line("2026-11-06 13:30:05", "FinancialJuice: US Average Hourly Earnings MoM Actual 0.4% "
+                                "(Forecast 0.3%, Previous 0.2%)", "us3"),
+]
+JOBS = ["Average Hourly Earnings m/m", "Non-Farm Employment Change", "Unemployment Rate"]
+
+
+def test_a_line_about_another_economy_is_never_this_releases():
+    t = at("2026-11-06 13:30")
+    us = H.matching(JOBS_DAY, t, *H.window("USD", JOBS), currency="USD")
+    assert [x["id"] for x in us] == ["us1", "us2", "us3"]               # Canada's left out
+    assert "ca1" in [x["id"] for x in H.matching(JOBS_DAY, t, *H.window("USD", JOBS))]
+    ca = H.matching(JOBS_DAY, t, *H.window("CAD", ["Employment Change", "Unemployment Rate"]),
+                    currency="CAD")
+    assert [x["id"] for x in ca] == ["ca1", "ca2"]
+    # Canada's jobless rate is not the US one: the official US number is still mailed
+    assert H.agrees("6.9%", "USD", "Unemployment Rate", JOBS_DAY[:2]) is None
+    assert H.agrees("4.2%", "USD", "Unemployment Rate", JOBS_DAY) is True
+    assert H.agrees("0.4%", "USD", "Average Hourly Earnings m/m", JOBS_DAY) is True
+
+
+@pytest.mark.parametrize("cur, text, other", [
+    ("USD", "FinancialJuice: Canadian Average Hourly Earnings YoY Actual 2%", True),
+    ("USD", "CANADA OCT. JOBS +20K; EST. +5K", True),                  # capitals too
+    ("USD", "Canadian jobs data surprised us", True),                  # "us" is not the US
+    ("USD", "FinancialJuice: US Average Hourly Earnings MoM Actual 0.4%", False),
+    ("USD", "Average Hourly Earnings MoM Actual 0.4%", False),         # no country: not foreign
+    ("USD", "Fed's Waller: tariffs on Canada are a risk", False),      # the Fed is the US
+    ("CAD", "FinancialJuice: Canadian Unemployment Rate Actual 6.9%", False),
+    ("GBP", "FinancialJuice: BoE Bank Rate Actual 4% (Forecast 4%, Previous 3.75%)", False),
+    ("JPY", "BoJ's Governor Ueda: Japan's current account underwent a striking shift", False),
+    ("JPY", "FinancialJuice: US Non-Farm Payrolls Actual 130K", True),
+    ("XXX", "US Officials: US State Dept is preparing to issue an ordered departure", False),
+])
+def test_a_line_is_foreign_when_it_names_another_economy_and_not_its_own(cur, text, other):
+    assert H.foreign(cur, text) is other
+
+
+def test_a_sharp_move_is_a_releases_from_five_minutes_after_it_to_fifteen_before():
+    # a move is dated from the START of its 5 minutes: the jobs report's (13:30) began 13:26
+    starts = [at(f"2026-11-06 13:{m}") for m in ("26", "35", "36", "15", "14", "00")]
+    got = H.release_moves(starts, [at("2026-11-06 13:30"), at("2026-11-06 20:00")])
+    assert got.tolist() == [True, True, False, True, False, False]
+    assert H.release_moves(starts, []).tolist() == [False] * 6
+    assert H.release_moves([], [at("2026-11-06 13:30")]).tolist() == []

@@ -311,6 +311,14 @@ How it works:
   forecast. Three, because the first is not always the number asked for: on 29 Oct FinancialJuice
   led with the PCE line, and the GDP line came two seconds later.
 - **Once per release.** A later line about it is not mailed.
+- **Only lines about that economy.** A line naming another country or its central bank, and not
+  the release's own, is left out ("US" counts in capitals only: "surprised us" is not the US).
+  On 6 Nov 2026 Canada's jobs report came out with the US one at 13:30 UTC, and the US email
+  quoted "Canadian Average Hourly Earnings YoY Actual 2%" as the US earnings number.
+- **The most important release leads.** When several releases at one minute are equally
+  critical, the email names the one listed first in `CRITICAL` (`quant/news/catalog.py`):
+  payrolls before the jobless rate and earnings, the Bank Rate before the BoE's summary. Forex
+  Factory's own order put earnings first.
 - **The official US number is a check.** It is not mailed when the headline already printed it,
   read in its units ("Actual 245K" = 245,000; "Q3" is not a number). Each official number is
   checked against the lines about ITS title only: a jobs report prints payrolls, the jobless rate
@@ -351,6 +359,10 @@ How it behaves:
 - **The sharp move** is read off the monitor's own 1m candles: a 5-minute return of at least the
   market's floor (gold 0.25%, USDJPY 0.12%, BTC 0.5%) and 6x the day before's usual. It is known
   5 minutes after it starts.
+- **A scheduled release's own move confirms nothing.** A move starting from 15 minutes before a
+  calendar release (medium and up, any currency) to 5 minutes after it is that release's result.
+  The replay always left these out. The live alert did not until 6 Nov 2026, when the US jobs
+  report's move (13:30) confirmed a 13:22 line about a tanker explosion and sent it.
 - **Left out:** Russia/Ukraine strikes (daily; none moved Gold, USDJPY or BTC in the fortnight),
   talk ("could", "mulls", analysts), reposts (ICYMI), printed data results, and a price "hit"
   ("gold hit a record high").

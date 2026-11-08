@@ -66,6 +66,18 @@ CRITICAL = {
     "CHF": ("SNB Policy Rate",),
 }
 _CRIT = {(c, t.lower()) for c, ts in CRITICAL.items() for t in ts}
+# CRITICAL is listed MOST IMPORTANT FIRST within each family: a notice whose releases share a
+# level leads with the one listed first (lead_rank). Forex Factory's own order put Average Hourly
+# Earnings before payrolls on 6 Nov 2026, and the BoE's summary before its Bank Rate.
+_LEAD = {c: tuple(t.lower() for t in ts) for c, ts in CRITICAL.items()}
+
+
+def lead_rank(currency: str, title: str) -> int:
+    """A release's place in its currency's CRITICAL list (payrolls 4, the jobless rate 5, earnings
+    6); a title not listed comes after them all."""
+    ts = _LEAD.get(currency, ())
+    t = str(title).strip().lower()
+    return ts.index(t) if t in ts else len(ts)
 
 
 def criticality(currency: str, title: str, impact: str) -> str:
