@@ -239,33 +239,37 @@ def test_the_archives_report_is_written_where_asked_and_leaves_the_probes_alone(
 
 
 # ── whose economy a line is about: 6 Nov 2026, the US and Canadian jobs reports at 13:30 UTC ────
-JOBS_DAY = [  # the Canadian earnings line as the 6 Nov email quoted it; the rest as FJ types them
-    line("2026-11-06 13:30:01", "FinancialJuice: Canadian Average Hourly Earnings YoY Actual 2% "
-                                "(Forecast 2.05%, Previous 2.1%)", "ca1"),
-    line("2026-11-06 13:30:02", "FinancialJuice: Canadian Unemployment Rate Actual 6.9% "
-                                "(Forecast 7%, Previous 7.1%)", "ca2"),
-    line("2026-11-06 13:30:03", "FinancialJuice: US Non-Farm Payrolls Actual 130K (Forecast 110K, "
-                                "Previous 22K)", "us1"),
-    line("2026-11-06 13:30:04", "FinancialJuice: US Unemployment Rate Actual 4.2% (Forecast 4.3%, "
-                                "Previous 4.3%)", "us2"),
-    line("2026-11-06 13:30:05", "FinancialJuice: US Average Hourly Earnings MoM Actual 0.4% "
-                                "(Forecast 0.3%, Previous 0.2%)", "us3"),
-]
+def fj_2026_11_06():
+    """FinancialJuice's real lines of 6 Nov 2026 13:20-13:36 UTC (tests/data), read back from the
+    server's headline archive: the US jobs report and Canada's, both at 13:30."""
+    from pathlib import Path
+    rows = (Path(__file__).parent / "data" / "financialjuice_2026-11-06.tsv").read_text(
+        encoding="utf-8").splitlines()
+    return [dict(id=f"fj{k}", title=s, link="", published=at(f"2026-11-06 {t}").isoformat())
+            for k, (t, s) in enumerate(r.split("\t", 1) for r in rows if not r.startswith("#"))]
+
+
 JOBS = ["Average Hourly Earnings m/m", "Non-Farm Employment Change", "Unemployment Rate"]
 
 
 def test_a_line_about_another_economy_is_never_this_releases():
-    t = at("2026-11-06 13:30")
-    us = H.matching(JOBS_DAY, t, *H.window("USD", JOBS), currency="USD")
-    assert [x["id"] for x in us] == ["us1", "us2", "us3"]               # Canada's left out
-    assert "ca1" in [x["id"] for x in H.matching(JOBS_DAY, t, *H.window("USD", JOBS))]
-    ca = H.matching(JOBS_DAY, t, *H.window("CAD", ["Employment Change", "Unemployment Rate"]),
+    day, t = fj_2026_11_06(), at("2026-11-06 13:30")
+    before = H.matching(day, t, *H.window("USD", JOBS))     # what the 6 Nov email quoted from
+    assert [H.clean(x["title"]).split(" Actual")[0] for x in before[:3]] == [
+        "Canadian Unemployment Rate", "Canadian Average Hourly Earnings YoY", "US Unemployment Rate"]
+    us = H.matching(day, t, *H.window("USD", JOBS), currency="USD")
+    assert [H.clean(x["title"]).split(" Actual")[0] for x in us[:3]] == [
+        "US Unemployment Rate", "US Nonfarm Payrolls", "US Average Earnings YoY"]
+    assert len(us) == 7 and not any("Canadian" in x["title"] for x in us)
+    ca = H.matching(day, t, *H.window("CAD", ["Employment Change", "Unemployment Rate"]),
                     currency="CAD")
-    assert [x["id"] for x in ca] == ["ca1", "ca2"]
-    # Canada's jobless rate is not the US one: the official US number is still mailed
-    assert H.agrees("6.9%", "USD", "Unemployment Rate", JOBS_DAY[:2]) is None
-    assert H.agrees("4.2%", "USD", "Unemployment Rate", JOBS_DAY) is True
-    assert H.agrees("0.4%", "USD", "Average Hourly Earnings m/m", JOBS_DAY) is True
+    assert len(ca) == 4 and all("Canadian" in x["title"] for x in ca)
+    # Canada's jobless rate is not the US one: the official US number would still be mailed
+    canada = [x for x in day if "Canadian" in x["title"]]
+    assert H.agrees("6.7%", "USD", "Unemployment Rate", canada) is None
+    assert H.agrees("4.1%", "USD", "Unemployment Rate", day) is True
+    assert H.agrees("165K", "USD", "Non-Farm Employment Change", day) is True
+    assert H.agrees("0.4%", "USD", "Average Hourly Earnings m/m", day) is True
 
 
 @pytest.mark.parametrize("cur, text, other", [

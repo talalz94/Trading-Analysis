@@ -3075,3 +3075,8 @@ instant").
   - Fixed (the next commit): foreign() drops lines about another economy; release_moves() is
     shared by the replay and the live alert; equally critical releases lead in CRITICAL's order
     (payrolls first).
+- **Deployed 8 Nov 01:15 UTC at 0b83de0, then checked on the real lines.** The archive gave
+  FinancialJuice's 19 lines of 6 Nov 13:20-13:36, its first use. On them, the old match quoted
+  Canada's jobless rate, Canada's earnings and the US jobless rate. The fixed one quotes the US
+  jobless rate, payrolls (165k vs 70k) and earnings y/y, and every official number agrees with a
+  line. Those lines are now the tests' fixture (tests/data/financialjuice_2026-11-06.tsv).

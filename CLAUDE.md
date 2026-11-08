@@ -1394,7 +1394,10 @@ alerts/alerts_config_trendlines.py  # a READY-TO-SWITCH copy (the user's spec, 2
                                   #   news NOT on the calendar (the user had expected it already)
                                   #   The monitor reads only alerts_config.py; `--config` previews it
 tests/data/                       # committed fixtures: gold_1m_2026-10-21.csv (the 1m line above),
-                                  #   usdjpy_5m_2026-10-22.csv (the 1h support of the early break)
+                                  #   usdjpy_5m_2026-10-22.csv (the 1h support of the early break),
+                                  #   financialjuice_2026-11-06.tsv (FinancialJuice's REAL lines of the
+                                  #   6 Nov jobs report with Canada's beside it, read back from the
+                                  #   server's headline archive)
 examples/gold_ema_demo.py · tests/ (34 files; real-candle fixtures in tests/data/) · docs/ · data/ (cache, git-ignored)
 ```
 
