@@ -3092,3 +3092,10 @@ instant").
   restart can draw ONE FinancialJuice 429: the old process fetched at 02:37:20 and the new one at
   02:38:21. The Telegram backup answered that minute. First live check: US CPI, Tue 10 Nov
   13:30 UTC.
+- **US CPI, Tue 10 Nov 13:30 UTC: the first live check of the 8 Nov changes, passed.**
+  - FinancialJuice typed CPI MoM 0.4% (forecast 0.3%) at 13:30:03 and core MoM 0.3% (0.2%) at
+    13:30:04; it typed no y/y lines.
+  - The headline email went at 13:30:20, subject "USD CPI m/m: US CPI MoM Actual 0.4% (Forecast
+    0.3%, Previous 0.6%)", with both lines.
+  - The agencies' numbers agreed, so the official email was recorded 'skipped' (no repeat).
+  - All seven reminders went on time (1 day to 15 min).
