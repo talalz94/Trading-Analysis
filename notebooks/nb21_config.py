@@ -16,9 +16,9 @@ import numpy as np, pandas as pd     # noqa: F401
 # ══ §1  MARKET & DATES ═══════════════════════════════════════════════════════════════════════
 SYMBOL, SOURCE = "BTCUSDT", "binance"
 TF             = "5m"                # chart and execution timeframe
-VIEW_START     = "2026-06-01"        # the chart starts here
-END            = "2026-07-15"        # ...and ends here
-WARMUP_START   = "2026-05-01"        # history for lines and gaps; never traded
+VIEW_START     = "2026-09-01"        # the chart starts here
+END            = "2026-10-19"        # ...and ends here
+WARMUP_START   = "2026-06-01"        # history for lines and gaps; never traded
 TF_WARMUP_BARS = 800                 # history per extra timeframe, in its own bars
 
 # ══ §2  ENTRY — a line breaks, the break is confirmed, the extra rules agree ═══════════════════
