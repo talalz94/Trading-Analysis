@@ -3099,3 +3099,13 @@ instant").
     0.3%, Previous 0.6%)", with both lines.
   - The agencies' numbers agreed, so the official email was recorded 'skipped' (no repeat).
   - All seven reminders went on time (1 day to 15 min).
+- **Ready for a new computer (11 Nov, the user: "make sure this project is updated with all the
+  docs and pushed ... so i can continue this project in any new laptop").**
+  - docs/NEW_MACHINE.md: what git does not carry (.env, data/, results), install, keys, data, the
+    check, the live pieces, what is open.
+  - requirements.txt installs everything; .env.example names all 13 keys.
+  - The user's notebooks 21/23 and nb21's dates are committed as they stood.
+  - `main` is fast-forwarded to the research branch.
+  - The proof: a fresh clone in a fresh venv, with no data/ and no .env, gave 1,330 passed and 27
+    skipped. It first caught `anywidget` missing (3 chart tests failed), which is now in
+    requirements.txt.

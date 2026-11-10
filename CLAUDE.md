@@ -1546,7 +1546,8 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
 - Python **3.13**, Windows (PowerShell primary; Bash available). Run from repo root with
   `PYTHONPATH=.` or `pip install -e .`. `pip install -r requirements.txt` installs EVERYTHING
   (research, notebooks, alerts, tests) at the versions verified here; `.env.example` names every
-  key the code reads. A fresh clone + fresh venv passed the whole suite (docs/NEW_MACHINE.md).
+  key the code reads. A fresh clone + fresh venv with no data/ (11 Nov 2026): 1,330 passed, 27
+  skipped, none failed -- that run caught anywidget missing (plotly 6's live charts need it).
 - **The Jupyter kernel IS the repo interpreter — keep it that way.** A user-level kernelspec at
   `~/AppData/Roaming/jupyter/kernels/python3` points `python3` at **C:\Python313\python.exe**,
   overriding the system one that shipped with Python 3.9. Re-register with

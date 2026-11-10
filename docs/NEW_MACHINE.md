@@ -80,9 +80,16 @@ python -m pytest tests/
 ```
 
 The first command makes the notebooks run on this project's Python (CLAUDE.md, section 9,
-explains why that matters). On a fresh clone without `data/`: **1,317 pass and 40 skip**, and
-nothing fails. The skipped ones say why: most need the cached BTC candles, a few need Telegram
-access. Once `data/` is copied over: 1,348 pass and 9 skip, as on the old computer.
+explains why that matters).
+
+**What the test run should show.** Measured on 11 Nov 2026, on a fresh clone in a fresh
+environment, with no `data/` and no `.env`: **1,330 pass, 27 skip, nothing fails.**
+- 9 skips happen on every computer: the Exness gap rows, which run in their own test file.
+- 18 skips say why: 16 need the cached BTC candles, and 2 need the imported calendar.
+- Once `data/` is copied over: 1,348 pass and 9 skip, as on the old computer.
+
+That run also caught the one package `requirements.txt` was missing (`anywidget`, which the live
+charts need), so a test failing here means a real problem to report, not noise.
 
 Start with `notebooks/lab.ipynb` (one strategy on one window) and `notebooks/evaluate.ipynb` (the
 same strategy over 19 quarters). [`NOTEBOOK_GUIDE.md`](NOTEBOOK_GUIDE.md) explains the layout.
