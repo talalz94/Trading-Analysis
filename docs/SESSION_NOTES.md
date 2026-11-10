@@ -611,7 +611,7 @@ set from `search_harness.make_windows`, which was 2/3 bear and produced a retrac
 
 `_dedupe` ranked every detection globally by how well-formed it was, so a pattern confirming at bar
 5,000 could delete one that had already fired at bar 2,997. **A past signal depended on future bars.**
-Fixed in `cd70932`; overlaps now resolve in confirmation order, which is also what a trader
+Fixed in `1bfd5a8`; overlaps now resolve in confirmation order, which is also what a trader
 experiences (the earlier signal is already taken and cannot be un-taken).
 
 The truncation test missed it for a year because it checked ONE boundary at default sparse settings,
@@ -1233,7 +1233,7 @@ test now pins it across every trade row. The reason none showed was that noteboo
 ### Settings moved OUT of notebook 18, because the generator kept overwriting them
 
 Notebook 18 is regenerated from a build script, and that script hardcoded every setting. So every
-time a new one was added, the rebuild re-imposed all the others. Commit **8a8b8de** did exactly that
+time a new one was added, the rebuild re-imposed all the others. Commit **47b252d** did exactly that
 while "making the notebook clean": `TF` went `1m` -> `5m`, `LINE_TFS` `("5m","15m","1h")` ->
 `("15m","1h")`, `WARMUP_START` `2026-05-25` -> `2026-05-01`. None of it was asked for, and none of
 it was mentioned.
@@ -1378,7 +1378,7 @@ later, and the notebook died on `NameError: name 'EMAS_ON' is not defined` — w
 edit to `ENTRY_RULES`, made in the same file, was present. An editor tab holding the pre-append
 version had saved its buffer back over the file, taking the tail with it.
 
-Appending is still right: it cannot touch a line the user has edited, which was the 8a8b8de failure.
+Appending is still right: it cannot touch a line the user has edited, which was the 47b252d failure.
 But it is not enough on its own, because the file the user is looking at may predate the append. So
 cell 2 now carries `SETTING_DEFAULTS`: any setting `nb18_config` does not define falls back and the
 notebook prints the line to paste in. `tests/test_notebook_config.py` checks each default names a
@@ -1450,7 +1450,7 @@ class, and the notebook is capped at 9 cells / 60 lines.
 `quant/research/` is the only package boundary here that is easy to get wrong, so its `__init__`
 docstring states it: it CALLS indicators, scenarios and viz; it holds no strategy logic, no
 indicator maths, no drawing, no sweeps — and **no default for any setting a config owns**, because
-a value stated in two places is precisely the 8a8b8de bug. Settings arrive as the config MODULE and
+a value stated in two places is precisely the 47b252d bug. Settings arrive as the config MODULE and
 are read through `_get(cfg, name, default)`, so a config predating a setting degrades rather than
 raising. `docs/NOTEBOOK_GUIDE.md` is the full version, for whoever touches a notebook next.
 
@@ -1833,7 +1833,7 @@ their files were not edited. Backups: `notebooks/backups/2026-09-27_pre_sr_tunin
 Asked whether `FVG_MAX_AGE_BARS` and `ZONE_LOOKBACK` were tested: they were not.
 `max_age_bars=500` was chosen when the FVG detector was built, to bound the per-gap mitigation scan
 (0 = no limit is exact but O(bars) per unfilled gap); `fvg_veto_search` varied only the VETO's age
-(20/60), never the detector's. `zone_lookback_bars=2000` (7543d20) fixed "1 of 40 zones near price" —
+(20/60), never the detector's. `zone_lookback_bars=2000` (e4b63fd) fixed "1 of 40 zones near price" —
 a symptom of the legacy least-touched eviction, which the S/R study later fixed at the root. Its
 reason is gone; the setting stayed because it is the user's.
 
@@ -1874,7 +1874,7 @@ THIS trade's target" depends on its own stop. Neither can be a global signal arr
 `FvgLab.retrade(**exit_settings)` re-runs only the sim (EXIT_KEYS), proved equal to a full rebuild;
 `run_arms(CFG)` uses it when every COMPARE arm touches exit settings only -- 4 arms in 6 s, not 24.
 
-**Found on the way: `run_grid` had been broken since e61d7ab.** It built the kernel's arguments by
+**Found on the way: `run_grid` had been broken since 8123542.** It built the kernel's arguments by
 hand and fell behind when the secondary-exit arguments were added: every sweep died on "expected 70
 arguments, got 59", and no test ran it. It now goes through `invoke_kernel` like `run_backtest`,
 and `test_the_sweep_runs_again` runs it.
@@ -2618,7 +2618,7 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
   back; exposed as the trendline alert setting `hold`. 1m, three markets, with prefer_newer:
   hold=0 19.3 breaks/day 31% holding; hold=1 17.9/day 42% holding; the user's lines alert at
   18:51 and 03:15. The 1m alerts now run prefer_newer=True, hold=1.
-- Deployed fcacfb2 on the server (22 Oct 13:2x UTC). The 1m bar files stayed at 4 days (from
+- Deployed b537a8b on the server (22 Oct 13:2x UTC). The 1m bar files stayed at 4 days (from
   18 Oct) though history_days(1m) went 4 -> 6: the one-time backfill fires only when the store is
   MORE than 3 days short (the weekend slack), and this was 2. Not a fault -- history_days already
   carries x7/5 + 3 days of margin over the 2,530 1m candles the 5m-line early breaks need (~5,000
@@ -2830,7 +2830,7 @@ layer -- and a 1m/5m signal reported once, after its quarter hour, however many 
 ### The headline test's final report: no source beats chance (2026-11-01)
 
 - 22 Oct 01:32 -> 30 Oct 13:32 UTC, 8.5 days, 20,593 timed headlines, 12 sources, run on the server
-  with the chance baseline (ff0670b).
+  with the chance baseline (2a34e59).
 - SPEED and RELIABILITY: FinancialJuice RSS is the source -- first on 93% of 1,372 shared stories,
   258 headlines a day, a median 43 s from its own time to ours, 99.1% of polls ok. Its Telegram copy
   is 24 s behind it; Walter Bloomberg's Telegram 19 s behind (first on 42% of the 158 it shared),
@@ -3011,7 +3011,7 @@ instant").
 - **`feed_error ... IndexError` in status** is dukascopy_python's `fetch()`: it reads
   `lastUpdates[0]` before checking the page is empty. It is harmless (one market skipped for one
   look); 4 times in 12 days.
-- **Deployed the same day** (f25bd2c): all three sources answered from the server (100 / 20 / 20
+- **Deployed the same day** (cc4d771): all three sources answered from the server (100 / 20 / 20
   lines) and no key was left in its log or state.
 - **Fixed after deploying**, before the first jobs report: the official-number check used the
   FIRST line with the release's words. On a jobs day payrolls, the jobless rate and earnings share
@@ -3043,8 +3043,8 @@ instant").
     to 15 min after.
   - Built live in the alerts. One FinancialJuice download a tick is shared with the results,
     because a second download within the minute gets HTTP 429.
-- **Running on the server, 2 Nov 11:40 UTC, at cd6d313.** Its 29 Oct GDP row now reads 3.4%: the
-  stale-estimate repair (38ec778) dropped the 2.2% and read the day again by itself. The first
+- **Running on the server, 2 Nov 11:40 UTC, at f7719e6.** Its 29 Oct GDP row now reads 3.4%: the
+  stale-estimate repair (c77e8d0) dropped the 2.2% and read the day again by itself. The first
   live headline results to check: BoE Thu 5 Nov 12:00 UTC and US jobs Fri 6 Nov 13:30 UTC.
 - **Headline archive (6 Nov):** the user asked whether the headlines are saved for later
   analysis. They were not: the monitor read ~250 FinancialJuice lines a day and kept only what it
@@ -3057,8 +3057,8 @@ instant").
   - Source names are the alerts' own (financialjuice / financialjuice_telegram /
     walterbloomberg); the probe called them fj_rss / fj_telegram / walter_telegram.
   - It never raises: a failed write logs one warning a run. 9 rules mutation-checked.
-- **Running on the server, 6 Nov 11:00 UTC, at 2011173:** breaking news plus the headline
-  archive. The server had been at 8c21f7d since the replay pull. The archive filled from the first
+- **Running on the server, 6 Nov 11:00 UTC, at 8ccb029:** breaking news plus the headline
+  archive. The server had been at d1eef2c since the replay pull. The archive filled from the first
   tick: 103 FinancialJuice lines by 11:23 (100 of them the backlog), every download answered in
   ~60 ms.
 - **The first live week, read 8 Nov from the server** (alerts.db + the archive):
@@ -3075,7 +3075,7 @@ instant").
   - Fixed (the next commit): foreign() drops lines about another economy; release_moves() is
     shared by the replay and the live alert; equally critical releases lead in CRITICAL's order
     (payrolls first).
-- **Deployed 8 Nov 01:15 UTC at 0b83de0, then checked on the real lines.** The archive gave
+- **Deployed 8 Nov 01:15 UTC at 8bdfef7, then checked on the real lines.** The archive gave
   FinancialJuice's 19 lines of 6 Nov 13:20-13:36, its first use. On them, the old match quoted
   Canada's jobless rate, Canada's earnings and the US jobless rate. The fixed one quotes the US
   jobless rate, payrolls (165k vs 70k) and earnings y/y, and every official number agrees with a
@@ -3087,7 +3087,7 @@ instant").
   to three, at most five. Replayed on the real lines, all three jobs numbers go in the first
   email and the official one is skipped. The subject's line also obeys the cues now: on CPI day
   "CPI m/m" could have quoted a "Core CPI MoM" line typed first.
-- **Running on the server, 8 Nov 02:38 UTC, at 2e38a85.** Replayed from the archive on the
+- **Running on the server, 8 Nov 02:38 UTC, at 1306fc3.** Replayed from the archive on the
   server, the jobs report's lines come out as US jobless rate, payrolls and MONTHLY earnings. A
   restart can draw ONE FinancialJuice 429: the old process fetched at 02:37:20 and the new one at
   02:38:21. The Telegram backup answered that minute. First live check: US CPI, Tue 10 Nov
@@ -3109,3 +3109,21 @@ instant").
   - The proof: a fresh clone in a fresh venv, with no data/ and no .env, gave 1,330 passed and 27
     skipped. It first caught `anywidget` missing (3 chart tests failed), which is now in
     requirements.txt.
+- **No keys, and the commits under the personal account (11 Nov).**
+  - The user: "just make sure there are no keys and fix the email ... my personal github repo
+    talalz94 that is linked with my personal gmail".
+  - Key scan of all 231 commits (AWS, GitHub, Google, Slack, Stripe and OpenAI/Anthropic keys,
+    JWTs, private keys, stand-alone 64-character keys, URLs with credentials, key = value): none.
+    The only hit is the redaction test's fake `abc123notarealkey`. No secret file was ever
+    committed.
+  - Every commit and the annotated tag `alerts-live-2026-10-20` went from the old work address to
+    talalz994@gmail.com (git filter-branch). The user typed talalz94@ and confirmed 994: GitHub's own
+    web commit carried it.
+  - 231 of 231 commits kept the same files, dates and messages. The old IDs the docs cited (25 of
+    them in 19 files) were swapped for the new ones, checked by message. nb18_config.py was left
+    alone (a settings file).
+  - Force-pushed with lease, branches and tags. The repo's own git config now commits as Talal
+    <talalz94@gmail.com>.
+  - The server re-syncs once with `git fetch` + `git reset --keep` (docs/ALERTS_CLOUD.md).
+  - What cannot be undone: copies taken before, by the 65 cloners of the last 14 days, still carry
+    the old address.

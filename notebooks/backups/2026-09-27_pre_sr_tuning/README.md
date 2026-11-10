@@ -23,7 +23,7 @@ The four notebook configs exactly as they stood. Their S/R settings at the time:
 | SR_MAX_ZONES | 40 |
 | ZONE_LOOKBACK | 2000 |
 
-Code state: commit `b1eb3088484451e8e541f7cf15886dae1502ad06`.
+Code state: commit `3c2a6e2a3f021ca954e5f24fc86f69be03cf0743`.
 
 ## How to get the old behaviour back
 

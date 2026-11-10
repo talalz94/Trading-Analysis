@@ -6,7 +6,7 @@
 > [`../experiments/search_harness.py`](../experiments/search_harness.py) (the evaluator).
 >
 > Backup before this search began: branch `research/scenario-framework-2026-07-30`, tag
-> **`backup-pre-search`** (commit `7f03e7f`).
+> **`backup-pre-search`** (commit `34ddeea`).
 
 ---
 

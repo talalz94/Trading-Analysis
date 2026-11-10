@@ -196,7 +196,7 @@ def test_off_adds_no_columns():
 
 
 def test_the_sweep_runs_again():
-    """run_grid built the kernel's argument list by hand and fell behind it (e61d7ab): every sweep
+    """run_grid built the kernel's argument list by hand and fell behind it (8123542): every sweep
     died with 'expected 70 arguments'. It now goes through invoke_kernel, like run_backtest."""
     from quant.optimize import run_grid
     from quant.strategies import EmaRibbon

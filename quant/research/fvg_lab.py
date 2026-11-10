@@ -213,7 +213,7 @@ class FvgLab:
             zone_lookback_bars=_get(c, "ZONE_LOOKBACK", 2000),
             # THE KNOB, plus only the S/R settings the config actually STATES -- None for the
             # rest, so they come from the tuned table rather than from a default written here
-            # (a default stated in two places is the 8a8b8de bug). A config that predates the
+            # (a default stated in two places is the 47b252d bug). A config that predates the
             # knob gets "normal"; SR_SENSITIVITY = None restores the legacy zones exactly.
             sr_sensitivity=_get(c, "SR_SENSITIVITY", "normal"),
             zones_left=_get(c, "ZONES_LEFT", None), zones_right=_get(c, "ZONES_RIGHT", None),

@@ -233,6 +233,11 @@ cp alerts/alerts_config_trendlines.py alerts/alerts_config.py      # only if you
 .venv/bin/python -m quant.alerts status | head -6
 ```
 
+**Once, after 11 Nov 2026:** every commit's email was rewritten that day, so all commit IDs
+changed and `git pull` refuses. The first update after it uses instead:
+`git fetch origin && git reset --keep origin/research/scenario-framework-2026-07-30`. It keeps
+your `alerts/alerts_config.py` as it is, and the monitor keeps running.
+
 `git pull` works with your edited `alerts/alerts_config.py` as long as the update does not change
 that file itself (it changes `alerts_config_trendlines.py`, which you copy over it). To go back:
 

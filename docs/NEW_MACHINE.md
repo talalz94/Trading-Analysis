@@ -32,7 +32,12 @@ The repo is **public**: anyone can read the code and the docs, never the secrets
 git clone https://github.com/talalz94/Trading-Analysis.git quant
 cd quant
 git checkout research/scenario-framework-2026-07-30
+git config user.name "Talal"
+git config user.email talalz994@gmail.com
 ```
+
+The last two lines make your commits show under your GitHub account (talalz94), whatever email
+the computer uses for other projects.
 
 All the work since July 2026 is on that branch, and the alerts server pulls it. `main` was
 brought level with it on 11 Nov 2026, so a plain clone is current too. Keep working on the

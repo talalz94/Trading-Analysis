@@ -46,7 +46,7 @@ their own settings. The layout separates what those files mixed.
 **1. A notebook cell may never ASSIGN a setting.**
 Settings live in `notebooks/nb<N>_config.py`. Notebooks are regenerated from build scripts, and a
 build script that states values re-imposes them on every rebuild — which is exactly how `TF`,
-`LINE_TFS` and `WARMUP_START` were silently changed in `8a8b8de`, none of them asked for.
+`LINE_TFS` and `WARMUP_START` were silently changed in `47b252d`, none of them asked for.
 `tests/test_notebook_config.py` fails if an assignment creeps back into a cell.
 
 **2. A notebook cell may never DEFINE a function or class.**

@@ -1,7 +1,7 @@
 """Notebook 18's settings must live in a file the notebook cannot overwrite.
 
 The notebook is regenerated from a script. That script used to hardcode every setting, so adding
-one quietly re-imposed all the others — commit 8a8b8de changed TF, LINE_TFS and WARMUP_START that
+one quietly re-imposed all the others — commit 47b252d changed TF, LINE_TFS and WARMUP_START that
 way, none of them asked for. These tests make that class of mistake impossible to reintroduce
 without failing the suite.
 """

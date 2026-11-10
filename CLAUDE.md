@@ -54,7 +54,11 @@ external backup). Everything lives in `quant/` + `experiments/`.
   **PUBLIC**: never put a secret or the server's details in it.
 - **Branch:** all work happens on **`research/scenario-framework-2026-07-30`**, and the alerts server
   pulls it. `main` was brought level with it on 11 Nov 2026. A new computer: docs/NEW_MACHINE.md.
-- Git user: Talal. Commit trailer used: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+- Git user: **Talal <talalz994@gmail.com>** (the personal GitHub account talalz94), set in this repo's
+  own config. On 11 Nov 2026 every commit's email was rewritten to it from an old work address, so
+  every commit ID changed; the IDs the docs cite were updated to match. A copy cloned before that
+  re-syncs once with `git fetch origin && git reset --keep origin/<branch>`, not `git pull`.
+  Commit trailer used: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - **Secrets:** only from `.env` (git-ignored). `config.py`/`quant/config.py` load it. History is
   clean of keys. The user was advised to **rotate the old Binance keys** (read-only market keys;
   not needed for data — the public API is used).
@@ -597,7 +601,7 @@ quant/
 │                        #   imported, tested and versioned. It CALLS indicators, scenarios
 │                        #   and viz; it holds no strategy logic, no indicator maths, no
 │                        #   drawing, and NO DEFAULT for any setting a config owns — a value
-│                        #   stated in two places is the 8a8b8de bug. Settings arrive as the
+│                        #   stated in two places is the 47b252d bug. Settings arrive as the
 │                        #   config MODULE, read through _get(cfg, name, default) so a config
 │                        #   predating a setting degrades instead of raising.
 │   └── fvg_lab.py       #   fvg_lab(CFG) -> FvgLab: loads, detects gaps on every timeframe,
@@ -707,7 +711,7 @@ quant/
 ├── optimize/
 │   ├── grid.py          #   run_grid (bounded-parallel sweep; fast array path; backend threading/loky).
 │   │                    #     Goes through invoke_kernel -- it used to hand-build the kernel's
-│   │                    #     arguments and was BROKEN from e61d7ab to 2026-09-27 without a test
+│   │                    #     arguments and was BROKEN from 8123542 to 2026-09-27 without a test
 │   │                    #     noticing; test_exit_rules.py now runs it
 │   └── search.py        #   optuna_search (optional; Bayesian)
 ├── reporting/report.py  #   summary / print_summary / to_html (standalone offline report)
@@ -1160,7 +1164,7 @@ notebooks/               # 23_break_confirmation_news + nb23_config.py (2026-10-
                          # nb18_config.py = notebook 18's SETTINGS, owned by the user. The
                          #   notebook is regenerated from a script; the script used to hardcode
                          #   every value, so adding one setting silently re-imposed the others
-                         #   (8a8b8de changed TF/LINE_TFS/WARMUP_START unasked). The notebook now
+                         #   (47b252d changed TF/LINE_TFS/WARMUP_START unasked). The notebook now
                          #   READS settings and states none — tests/test_notebook_config.py fails
                          #   if any assignment creeps back into a cell. NEVER regenerate that file.
                          #   A setting APPENDED there is invisible to an editor tab the user
@@ -1703,6 +1707,6 @@ stop-out; (if needed) per-strategy fused-numba signal generation for extreme swe
   to run after re-arranging one.
 - **Never change a setting the user did not ask you to change.** Notebooks here are regenerated from
   build scripts, and a build script that states values will re-impose them on every rebuild — which
-  is how `TF`, `LINE_TFS` and `WARMUP_START` were silently altered in 8a8b8de. Settings belong in a
+  is how `TF`, `LINE_TFS` and `WARMUP_START` were silently altered in 47b252d. Settings belong in a
   file the generator cannot write (`notebooks/nb18_config.py`); when adding a new one, APPEND it
   there and leave every existing line alone.

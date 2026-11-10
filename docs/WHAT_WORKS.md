@@ -12,7 +12,7 @@
 >
 > `_dedupe` in `quant/indicators/chart_patterns.py` ranked all detections globally by how well-formed
 > they were, so a pattern confirming at bar 5,000 could delete one that had already fired at bar
-> 2,997 — **a past signal depending on future bars**. Fixed in `cd70932`. Phases 12-15 were re-run on
+> 2,997 — **a past signal depending on future bars**. Fixed in `1bfd5a8`. Phases 12-15 were re-run on
 > the causal detector and the rows below now carry the corrected numbers.
 >
 > **Retracted:** `chart_short_rr8` (8 of 9 windows -> **5 of 9**, the same as the metronome) and the

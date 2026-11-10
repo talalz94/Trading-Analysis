@@ -89,7 +89,7 @@ def run_grid(
 
     # ONE PATH TO THE KERNEL. This used to hand-build the kernel's argument list to save a few
     # allocations per combo, and so it silently fell behind when the secondary-exit arguments were
-    # added (e61d7ab): every sweep died on "expected 70 arguments, got 59" and no test noticed.
+    # added (8123542): every sweep died on "expected 70 arguments, got 59" and no test noticed.
     # invoke_kernel is what run_backtest uses, so a kernel change can no longer break one of them.
 
     _log.info("sweep: %d combos | n_jobs=%d | bars=%d", len(combos), n_jobs, n)

@@ -20,7 +20,7 @@ WHAT DOES NOT
       out of the installed package on purpose (CLAUDE.md section 14).
     * SETTINGS. Every value comes from the caller's config object. Nothing here states a default
       for anything a notebook config owns, because a default stated in two places is the bug that
-      cost `TF`, `LINE_TFS` and `WARMUP_START` in commit 8a8b8de.
+      cost `TF`, `LINE_TFS` and `WARMUP_START` in commit 47b252d.
 
 THE CONTRACT WITH A CONFIG
     These helpers take the config MODULE (`import nb19_config as CFG`) and read attributes off it.
