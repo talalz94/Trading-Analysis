@@ -1,5 +1,10 @@
-# Pinned to the versions verified present in the dev environment (Python 3.13.1).
-# Runtime
+# Everything the research, the notebooks, the email alerts and the tests need, pinned to the
+# versions verified in the dev environment (Python 3.13.1). On a new computer:
+#     pip install -r requirements.txt
+#     pip install -e .
+# (docs/NEW_MACHINE.md). The alerts SERVER uses the smaller requirements-alerts.txt.
+
+# Core
 pandas==2.3.3
 numpy==2.3.3
 pyarrow==22.0.0
@@ -16,9 +21,24 @@ python-dotenv>=1.0
 pydantic>=2.7
 pyyaml>=6.0
 
-# Optional (parameter search) — install with: pip install -r requirements.txt optuna
-# optuna>=3.6
+# Data: Dukascopy -- true spot gold, FX and indices (source="dukascopy"); the alerts use it too
+dukascopy-python==4.0.1
 
-# Dev
-# pytest>=8.0
-# ruff>=0.5
+# Email alerts: the chart pictures in each email
+matplotlib==3.10.7
+
+# Notebooks (then register the kernel -- docs/NEW_MACHINE.md, step 5)
+jupyterlab==4.5.0
+ipykernel==7.1.0
+ipywidgets==8.1.7
+nbconvert==7.16.6
+
+# Experiments (experiments/regime_study.py)
+scikit-learn==1.7.2
+
+# Tests (python -m pytest tests/). mypy type-checks the Exness files; that test skips without it
+pytest==9.0.2
+mypy==2.4.1
+
+# Optional: Bayesian parameter search -- pip install optuna
+# optuna>=3.6

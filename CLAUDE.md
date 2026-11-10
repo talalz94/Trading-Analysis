@@ -15,7 +15,9 @@
 > (the economic calendar: sources and their faults, criticality, sentiment, alerts, the chart strip) ·
 > [`docs/CHART_GUIDE.md`](docs/CHART_GUIDE.md) (every chart layer, every chart and candlestick pattern
 > name, and the setting behind each) · [`docs/EXNESS.md`](docs/EXNESS.md) (the indicators ported to
-> the Exness web terminal: what each shows, paste order, how "safe" is guaranteed, Exness's limits).
+> the Exness web terminal: what each shows, paste order, how "safe" is guaranteed, Exness's limits) ·
+> **[`docs/NEW_MACHINE.md`](docs/NEW_MACHINE.md) (continuing on a new computer: clone, packages,
+> `.env`, data, the live pieces, what is open).**
 >
 > **Strategy search:** [`docs/WHAT_WORKS.md`](docs/WHAT_WORKS.md) is the short verdict — read it
 > before proposing any new strategy idea, because most of them have already been tested and killed.
@@ -48,7 +50,10 @@ external backup). Everything lives in `quant/` + `experiments/`.
 
 ## 2. Repo / project status
 
-- **GitHub:** https://github.com/talalz94/Trading-Analysis · default branch **`main`**.
+- **GitHub:** https://github.com/talalz94/Trading-Analysis · default branch **`main`**. The repo is
+  **PUBLIC**: never put a secret or the server's details in it.
+- **Branch:** all work happens on **`research/scenario-framework-2026-07-30`**, and the alerts server
+  pulls it. `main` was brought level with it on 11 Nov 2026. A new computer: docs/NEW_MACHINE.md.
 - Git user: Talal. Commit trailer used: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - **Secrets:** only from `.env` (git-ignored). `config.py`/`quant/config.py` load it. History is
   clean of keys. The user was advised to **rotate the old Binance keys** (read-only market keys;
@@ -1539,7 +1544,9 @@ True absolute multi-zone partials (`zone_partials`) would need a per-trade TP-re
 ## 9. Environment
 
 - Python **3.13**, Windows (PowerShell primary; Bash available). Run from repo root with
-  `PYTHONPATH=.` or `pip install -e .`.
+  `PYTHONPATH=.` or `pip install -e .`. `pip install -r requirements.txt` installs EVERYTHING
+  (research, notebooks, alerts, tests) at the versions verified here; `.env.example` names every
+  key the code reads. A fresh clone + fresh venv passed the whole suite (docs/NEW_MACHINE.md).
 - **The Jupyter kernel IS the repo interpreter — keep it that way.** A user-level kernelspec at
   `~/AppData/Roaming/jupyter/kernels/python3` points `python3` at **C:\Python313\python.exe**,
   overriding the system one that shipped with Python 3.9. Re-register with
@@ -1669,6 +1676,16 @@ stop-out; (if needed) per-strategy fused-numba signal generation for extreme swe
 ## 14. Working agreements for AI sessions
 
 - Never commit/print secrets; secrets come only from `.env`. If exposed, advise rotation (user's action).
+- **Explain plainly:** step by step, on one real trade, bar or release, with no jargon. Keep config
+  files short (settings + one-line comments); the reasoning goes in docs or beside the code.
+- **Server updates** (the email alerts run on the Google Cloud VM, not on a laptop): push FIRST, then
+  give the steps -- back up the version + config, `git pull` + `bash scripts/install_alerts_linux.sh`,
+  copy `alerts/alerts_config_trendlines.py` over `alerts/alerts_config.py` and check it loads, check
+  the status and log, and the rollback line (docs/ALERTS_CLOUD.md "Updating, with a way back"). Say
+  whether the alerts are affected. Never run the alerts monitor on a second machine while the server
+  runs: every alert would arrive twice.
+- **Exness files:** use only constructs that have COMPILED on Exness (tests/test_exness_indie_rules.py);
+  a new construct is proven there first. A broken paste costs the user far more than a slow fix.
 - Keep `tests/` green; keep golden parity (zero-cost/non-margin paths byte-identical); add
   parity/golden tests when extending the kernel.
 - Preserve anti-lookahead + the incremental cache.

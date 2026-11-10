@@ -82,43 +82,29 @@ experiments/  examples/  notebooks/  tests/ (+ tests/data fixtures)  docs/  data
 
 ## Installation
 
-**Requirements:** Python **3.11+** (developed on 3.13). Works on Windows, macOS, Linux.
+**On a new computer, follow [docs/NEW_MACHINE.md](docs/NEW_MACHINE.md).** It also covers the
+secrets (`.env`), the data cache, Jupyter and the live pieces (the alerts server, Exness). In short:
 
 ```bash
-# 1. clone
-git clone <your-repo-url> quant && cd quant
-
-# 2. create & activate a virtual environment
+git clone https://github.com/talalz94/Trading-Analysis.git quant && cd quant
+git checkout research/scenario-framework-2026-07-30   # the working branch; the alerts server pulls it
 python -m venv .venv
-# Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-# macOS/Linux:
-source .venv/bin/activate
-
-# 3. install
-pip install -e .            # installs the package + dependencies from pyproject.toml
-# or: pip install -r requirements.txt
-
-# 4. (optional) extras
-pip install "quant[data]"   # Dukascopy provider (free spot XAU/USD + FX)
-pip install "quant[optimize]"   # Optuna Bayesian parameter search
+.venv\Scripts\Activate.ps1           # Windows PowerShell;  macOS / Linux: source .venv/bin/activate
+pip install -r requirements.txt      # research, notebooks, alerts, tests
+pip install -e .                     # the quant package itself
+copy .env.example .env               # macOS / Linux: cp -- then fill in the keys you use
+python -m ipykernel install --user --name python3 --display-name "Python 3 (3.13 - quant)"
 ```
 
-**Secrets (optional).** Historical data uses Binance's *public* API — no keys needed. If you later
-add authenticated endpoints, copy `.env.example` to `.env` and set `BINANCE_API_KEY` /
-`BINANCE_API_SECRET`. `.env` is git-ignored; never commit keys.
+**Requirements:** Python **3.11+** (developed on 3.13). Works on Windows, macOS and Linux.
 
-**Jupyter.** To use the notebook with the right interpreter, register your venv as a kernel:
-```bash
-pip install jupyterlab ipykernel
-python -m ipykernel install --user --name quant --display-name "Python (quant)"
-jupyter lab      # then open notebooks/01_research_template.ipynb and pick the "Python (quant)" kernel
-```
-> Charts need a live kernel + `ipywidgets` (installed automatically). Requires pandas ≥ 2.2.
+**Secrets.** Market data uses Binance's *public* API and needs no key. `.env.example` names every
+key the code reads (the calendar's FRED key, the alert email and push settings) and says what
+each is for. `.env` is git-ignored and this repository is public, so never commit keys.
 
 ### Verify the install
 ```bash
-python -m pytest tests/     # 40 tests: engine parity/golden, strategies, costs, leverage, dukascopy, viz, analytics
+python -m pytest tests/     # about 1,350 tests; without data/ the ones that need cached candles skip
 python examples/gold_ema_demo.py
 ```
 
