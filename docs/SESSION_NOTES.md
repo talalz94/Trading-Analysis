@@ -3140,3 +3140,15 @@ instant").
     research had none live then either.
   - Strict lines are live 10/3% (5m res/sup), 1/6% (15m), 6/18% (1h) and 6/9% (4h) of the time.
     A day of 1m chart often has none: that is the rule, not a fault.
+- **Exness 1m BTC, 11 Nov: "15m R" tag showing, no 15m line.**
+  - Rebuilt on the stand-in from Binance 1m candles to 02:13 UTC (1,700 1m candles, 1,000 of each
+    other timeframe). The same live 15m resistance appears, its tag at 74,869 at 02:30 (the
+    user's ~74,750). The segment is drawn from the chart's first candle, 09 Nov 21:54 @ 75,493.
+  - Every 1-wide line in the screenshot matched a stand-in line (16:20-20:48, 18:22-23:01,
+    21:34-01:30...). The only line missing was the only one wider than 1: the live 15m line,
+    3 wide. Same colour and style as the visible 1m lines, its tag drawn in the same update, no
+    error.
+  - Fix: widths 1 (the chart's own) and 2 (higher TFs, tagged): the widths Exness has drawn. The
+    rules test now refuses any other width. The 1 Nov fix (draw from the chart's first candle)
+    was likely the wrong cause.
+  - NOT YET CONFIRMED on Exness: the user re-pastes trendlines_mtf.py.

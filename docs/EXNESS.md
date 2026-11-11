@@ -118,13 +118,17 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
 - **Timeframes:** the chart's own, 5m, 15m, 1h and 4h, each with its own on/off setting. 5m was
   added on 1 Nov 2026. Unticking a timeframe stops its work entirely, so it also lightens the
   indicator; before, it only hid the lines. On a 5m chart, `5m lines` also covers the chart's own.
-- **Colour** is the direction: red for resistance, green for support. **Thickness** is the
-  timeframe: the chart's own lines are thinnest, 4h thickest. A higher timeframe's live line has a
-  tag at its tip (`1h R`, `4h S`).
+- **Colour** is the direction: red for resistance, green for support. **Width:** the chart's own
+  lines are 1, every higher timeframe's live line is 2, and a tag at its tip names it (`1h R`,
+  `4h S`). 1 and 2 are the widths Exness has drawn. Until 11 Nov 2026 the width named the
+  timeframe (15m 3, 1h 4, 4h 5). On a 1m BTC chart the 15m line's tag then showed and its 3-wide
+  line never did: every 1-wide line on that chart matched the stand-in's, and only the 3-wide one
+  was missing.
 - **A line that starts before the chart's first candle** is drawn from that candle, on the line.
   Each timeframe arrives with ~1,000 of its own candles, so a 15m or 1h line can start days before
   the chart does, where there is no candle to stand on. On 1 Nov 2026 a 15m line's tag showed and
-  the line did not. A line that ended before the chart's first candle is not drawn at all.
+  the line did not; this was the first fix tried. The width was the more likely cause (see above).
+  A line that ended before the chart's first candle is not drawn at all.
   (A line can also simply be above or below the prices on screen: scroll the price scale.)
 - **Broken** lines stay, faded. **Dropped** lines stay, grey and dotted (`Old lines kept` per
   timeframe).

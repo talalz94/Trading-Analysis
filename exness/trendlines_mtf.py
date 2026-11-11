@@ -963,7 +963,10 @@ class Main(MainContext):
                     self._g_icpt.get()[k] = v[b + 7]
                     self._g_seen.get()[k] = v[b + 3] + m
                     self._done.get()[k] = False
-                    w = s + 1
+                    # 1 for the chart's own lines, 2 for every higher timeframe's: the widths
+                    # Exness has drawn. A 15m line 3 wide never appeared on a 1m chart while its
+                    # tag did (11 Nov 2026, and so on 1 Nov); trendlines.py's 2-wide lines show
+                    w = 2 if s > 0 else 1
                     self._seg.get()[k] = LineSegment(AbsolutePosition(0.0, 0.0),
                                                      AbsolutePosition(0.0, 0.0),
                                                      color=self._colors[side],

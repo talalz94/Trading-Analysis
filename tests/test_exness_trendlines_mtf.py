@@ -166,7 +166,9 @@ def test_early_marks_are_the_alerts_early_break_rule(runs, name):
         assert len(got) >= 5
 
 
-def test_thickness_names_the_timeframe_and_tags_the_higher_ones(runs, monkeypatch):
+def test_higher_timeframe_lines_are_two_wide_and_tagged_never_wider(runs, monkeypatch):
+    # widths Exness has drawn: 1 and 2. A 15m line 3 wide never showed on a 1m BTC chart while
+    # its tag did (11 Nov 2026); the tag at the tip names the timeframe
     bars, secs, ctx = runs["usdjpy_5m_2026-10-22.csv"]
     widths = set()
 
@@ -175,13 +177,13 @@ def test_thickness_names_the_timeframe_and_tags_the_higher_ones(runs, monkeypatc
             if c._cur.get()[k] >= 0:
                 widths.add((k // 2, c._seg.get()[k].line_width))
     rt.run(rt.load(MTF, monkeypatch), bars, bar_secs=secs, spy=spy)
-    assert all(w == s + 1 for s, w in widths)                # each timeframe its own width
+    assert all(w == (2 if s else 1) for s, w in widths)      # 1 the chart's own, 2 the rest
     assert {s for s, w in widths} >= {0, 2, 3}               # (a month holds no 4h line)
     for k in range(10):
         if ctx._cur.get()[k] >= 0:
             s, side = divmod(k, 2)
             seg = ctx._seg.get()[k]
-            assert seg.line_width == s + 1 and seg.line_style == "solid"
+            assert seg.line_width == (2 if s else 1) and seg.line_style == "solid"
             assert seg.color.name == ("red", "green")[side]
             if s:
                 tag = ctx._tag.get()[k]
@@ -192,6 +194,7 @@ def test_thickness_names_the_timeframe_and_tags_the_higher_ones(runs, monkeypatc
         assert o.line_width == 1 and o.line_style == ("dotted", "solid")[br]
     drawn = ctx.chart.items(rt.LabelAbs)
     assert {d.text for d in drawn} >= {"1h early down"}
+    assert max(d.line_width for d in ctx.chart.items(rt.LineSegment)) <= 2
 
 
 @pytest.mark.parametrize("variant", [dict(live_merge="forming", realtime_last=60),

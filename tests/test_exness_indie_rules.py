@@ -270,6 +270,44 @@ def test_no_variable_read_outside_its_block(path):
     assert not bad, f"{path.name}: read outside the block that created it: {bad}"
 
 
+DRAWN_WIDTHS = {1, 2}   # the line widths Exness has been SEEN drawing
+
+
+def _widths(src: str) -> list:
+    """Every line width a file asks for as a number: `line_width=3`, `middle_line_width=3` or
+    `seg.line_width = 3`, plus the two values of `w = 2 if s > 0 else 1`."""
+    out = []
+    for n in ast.walk(ast.parse(src)):
+        vals = []
+        if isinstance(n, ast.keyword) and n.arg in ("line_width", "middle_line_width"):
+            vals = [n.value]
+        elif isinstance(n, ast.Assign) and any(isinstance(t, ast.Attribute) and
+                                               t.attr == "line_width" for t in n.targets):
+            vals = [n.value]
+        elif (isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+              and n.targets[0].id == "w"):
+            vals = [n.value]
+        for v in vals:
+            for c in ([v.body, v.orelse] if isinstance(v, ast.IfExp) else [v]):
+                if isinstance(c, ast.Constant):
+                    out.append(c.value)
+    return out
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: p.stem)
+def test_line_widths_are_ones_exness_has_drawn(path):
+    # 11 Nov 2026: trendlines_mtf.py drew a 15m line 3 wide; on a 1m BTC chart its tag showed
+    # and the line never did (nor on 1 Nov). Widths 1 and 2 are the ones seen on Exness
+    bad = [w for w in _widths(path.read_text(encoding="utf-8")) if w not in DRAWN_WIDTHS]
+    assert not bad, f"{path.name}: line widths Exness has not drawn: {bad}"
+
+
+def test_the_width_check_sees_a_wide_line():
+    assert _widths("seg = LineSegment(a, b, line_width=3)") == [3]
+    assert _widths("w = 3 if s > 0 else 1") == [3, 1]
+    assert _widths("seg.line_width = 5") == [5]
+
+
 def test_the_checks_catch_what_exness_refuses():
     ok = ("from indie import MainContext\n"
           "class Main(MainContext):\n"
