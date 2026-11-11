@@ -818,9 +818,16 @@ class Main(MainContext):
 
     def _tf(self, s: str) -> TimeFrame:
         t = TimeFrame.from_str(s)
-        if t.to_minutes() < self._chart_m:
-            return self.time_frame                       # never below the chart; slot is off
-        return t
+        if t.to_minutes() > self._chart_m:
+            return t
+        # A slot at or below the chart is never drawn (self._on is off). On the chart's own
+        # timeframe its context ran the chart's work a second and third time: 3x on a 15m
+        # chart, 4x on 1h -- the 15m chart's "Execution timed out" (11 Nov 2026). Parked on
+        # the daily candles it costs one small context. calc_on cannot go below the chart, so
+        # from a daily chart up the slot stays on the chart's own timeframe.
+        if self._chart_m < 1440:
+            return TimeFrame.from_str('1D')
+        return self.time_frame
 
     def _vals(self, s: int) -> list[float]:
         if s == 0:

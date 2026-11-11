@@ -3127,3 +3127,16 @@ instant").
   - The server re-syncs once with `git fetch` + `git reset --keep` (docs/ALERTS_CLOUD.md).
   - What cannot be undone: copies taken before, by the 65 cloners of the last 14 days, still carry
     the old address.
+- **Exness, 11 Nov: "Execution timed out" for Trendlines MTF on BTCUSD 15m, and no higher-TF lines
+  on 1m.**
+  - The time-out: `_tf()` sent every slot at or below the chart to the chart's own timeframe, so
+    on 15m the chart's lines were fitted three times (slots 0, 5m, 15m; 520 fits each at 6,000
+    candles), on 1h four times. None of the copies was ever drawn.
+  - The fix: those slots are now parked on '1D', a timeframe already proven on Exness by bias.py.
+    Stand-in BTC 15m: 0.8 -> 0.3 s at 2,000 candles, 2.0 -> 1.0 s at 6,000, same lines.
+    structure.py had the same `_tf()` and got the same fix.
+  - On 1m: the stand-in with Exness-sized histories (1,700 1m candles, 1,000 of each other
+    timeframe) takes every timeframe's state, and still draws no 1h/4h line on 19-21 Oct. The
+    research had none live then either.
+  - Strict lines are live 10/3% (5m res/sup), 1/6% (15m), 6/18% (1h) and 6/9% (4h) of the time.
+    A day of 1m chart often has none: that is the rule, not a fault.

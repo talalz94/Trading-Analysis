@@ -136,11 +136,28 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
   candle's close is judged against. A candle closing beyond the drawn line is exactly what makes a
   mark. Between its own closes the line moves on in time, and across a shut market (a weekend) it
   holds, as in the alerts.
-- Timeframes at or below the chart's are skipped (on a 1h chart, only 4h is added).
+- **Timeframes at or below the chart's are not drawn** (on a 1h chart, only 4h is added). Their
+  slots now run on the daily candles: one small context each. Until 11 Nov 2026 they ran on the
+  chart's own candles, so the chart's lines were worked out 3 times on a 15m chart and 4 on a 1h
+  chart, and never drawn. That was the 15m chart's **"Execution timed out"**. On the stand-in, BTC
+  15m: 2,000 candles 0.8 -> 0.3 s, 6,000 candles 2.0 -> 1.0 s, with the same lines drawn.
 - **Higher-timeframe lines need history.** On 12 days of 1m Gold, the strict fitter finds 3 lines
   in 920 15m candles, none in 230 1h candles and none in 62 4h candles (BTC: 2, 0, 0). The alerts fit
   a 4h line on about 505 4h candles. So the 1h and 4h lines appear only if Exness gives the
   indicator months of those candles; the probe's report says how many it gets.
+- **A strict higher-timeframe line is live only part of the time.** BTC, the last 1,000 candles of
+  each timeframe (Oct 2026), share of the time with a live line:
+
+  | timeframe | resistance | support |
+  |---|---|---|
+  | 5m | 10% | 3% |
+  | 15m | 1% | 6% |
+  | 1h | 6% | 18% |
+  | 4h | 6% | 9% |
+
+  A 1m chart holding a day or two therefore often shows no 1h or 4h line at all (19-21 Oct 2026:
+  none). That is the rule, not a fault: the alerts would not have mailed one either. Scroll the
+  chart back to load more of it: the lines that were live then, broken or dropped since, show too.
 - **Cost, and the time-out of 1 Nov 2026** ("Execution timed out" on ETHUSD 1m). Each timeframe
   kept a copy of its state from before every candle, so that a candle computed twice counts once.
   Only the LAST candle can come twice, though. Since `list()` had to go, every copy was an
@@ -165,7 +182,9 @@ reload. No early mark is judged on a candle whose higher-timeframe state is late
   of the 1h candle that confirms it). It is **drawn** at the swing itself (for a 1h swing, at the
   chart candle that made that 1h candle's high or low). So it sits where the swing was but appears
   later, as it does in the alerts. It never moves or disappears afterwards.
-- **Timeframes:** the chart's own, 5m (added 1 Nov 2026), 15m, 1h and 4h.
+- **Timeframes:** the chart's own, 5m (added 1 Nov 2026), 15m, 1h and 4h. Those at or below the
+  chart run on the daily candles, the same fix as trendlines_mtf.py (11 Nov 2026): on a 15m chart
+  the 15m swings were found three times over.
 - **Telling them apart:** green for HH and HL, red for LH and LL. A higher timeframe's label names
   its timeframe (`1h HH`) and is a little larger.
 - **No pile-ups:** labels on the same candle stack outward. The first sits 0.8 ATR clear of the

@@ -400,3 +400,28 @@ def test_a_line_that_ended_before_the_charts_first_candle_is_not_drawn(monkeypat
         assert (len(ctx._old.get()) == old + 1) == kept
         assert (seg in ctx._trash.get()[trash:]) == (not kept)
         assert not ctx._seg_on.get()[k] and ctx._cur.get()[k] == -1
+
+
+# ── a slot at or below the chart is parked on daily candles (11 Nov 2026) ─────────────────────
+# "Execution timed out" on a BTC 15m chart: the 5m and 15m slots, never drawn there, ran the
+# chart's own lines a second and a third time (3x on 15m, 4x on 1h). Parked on the daily candles,
+# each is one small context; from a daily chart up calc_on cannot go below, so they stay put.
+PARKED = [(1, [1, 5, 15, 60, 240]), (5, [5, 1440, 15, 60, 240]), (15, [15, 1440, 1440, 60, 240]),
+          (60, [60, 1440, 1440, 1440, 240]), (240, [240, 1440, 1440, 1440, 1440]),
+          (1440, [1440, 1440, 1440, 1440, 1440])]
+
+
+def _walk(minutes, n=400, seed=3):
+    t = pd.date_range("2026-01-05", periods=n, freq=f"{minutes}min", tz="UTC")
+    c = 100 * np.exp(np.cumsum(np.random.default_rng(seed).normal(0, 0.004, n)))
+    o = np.r_[c[0], c[:-1]]
+    return pd.DataFrame({"open_time": t, "open": o, "high": np.maximum(o, c) * 1.001,
+                         "low": np.minimum(o, c) * 0.999, "close": c})
+
+
+@pytest.mark.parametrize("chart_m, want", PARKED)
+def test_a_slot_at_or_below_the_chart_is_parked_on_daily_candles(monkeypatch, chart_m, want):
+    mod = rt.load(MTF, monkeypatch)
+    ctx = rt.run(mod, _walk(chart_m), bar_secs=chart_m * 60)
+    assert [r.minutes for r in ctx._requests] == want
+    assert sum(r.minutes == chart_m for r in ctx._requests) == (5 if chart_m >= 1440 else 1)
